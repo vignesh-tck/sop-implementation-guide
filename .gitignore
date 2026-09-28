@@ -1,0 +1,35 @@
+# ── Large data files (exceed GitHub's 100MB file limit) ──────────────────────
+Final_Bowie_OrderedBlockwiseRecs_20240314 Overall.csv
+Final_Bowie_OrderedBlockwiseRecs_20240314_Extras.csv
+
+# ── PDFs (large binaries, not version-controlled) ─────────────────────────────
+*.pdf
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.local
+*/.env
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Claude internal ───────────────────────────────────────────────────────────
+.claude/
+
+# ── Node / frontend ───────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.next/
+frontend/build/

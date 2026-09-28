@@ -1,0 +1,28 @@
+One example project for the team could be a tool to parse Federal, State, or Local passed bills and cross reference them with certain kinds of economic GIS data.  "Energy Communities", "New Markets Tax Credits", USDA SBA Loan areas (all of these are on ArcGIS open datasets today), or census tract or defined city limits (e.g. local policy) or state limits (e.g. state policy)
+
+This is how a "funding GIS dataset" can match with a "policy dataset"
+
+One might be a NLP tool and agentic workflow for taking unstructured (or poorly structured) government data that updated every month or year, and one might be a MCP/data storage tool of those relevant policies/regulations.
+
+----
+
+Another way to think about a use case/tool, is to think about the kinds of recommendations we generate (based on the set of features I sent you/Bowie examples) and then think about the sets of barriers/incentives that would make it harder/easier to implement those recommendations. For example, if we recommend a park, we would want to understand any number of these things:
+
+Are there any zoning laws/ordinances that might make it harder to create one
+Are there any EPA policies that incentivize brownfield remediation (cleaning up polluted sites) that could be converted into a park
+Are there local ordinances/policies tied to improving public health - that could help you lobby for a park (due to its positive impact on health)
+Are there any local, regional, state, and/or federal grants that could be used to fund the park
+
+
+In writing this, you can start to see that the three "buckets" I identified may actually be a bit more fluid than how I presented them last week... we can discuss this today, as what may be more feasible is to choose a core area and then cross over into the other two buckets as needed to address your use case
+
+----
+
+But overall, I think the key is to define your "user story," considering the types of urban design changes we recommend, and then think through the three buckets, and then identify the types of factors that would impact the feasibility of implementing those recs, and then that helps you figure out what data sources you need to consider and what type of technologies/techniques are most appropriate to structure/make sense of that data.
+
+----
+
+Helpful Links:
+
+https://www.arcgis.com/home/item.html?id=37d43f0f030d4db99a05f468f46d9a1b#overview
+https://experience.arcgis.com/experience/e78fa7dabc604f36b8307e3e1cc13d52

@@ -1,0 +1,2832 @@
+<title>SoP Implementation Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Sans+3:ital,wght@0,300;0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+  /* ── Tokens ─────────────────────────────────────────────── */
+  :root {
+    --bg:           #F4F7FB;
+    --bg-2:         #EBF0F7;
+    --surface:      #FFFFFF;
+    --surface-2:    #F0F4FA;
+    --border:       #D2DCEB;
+    --text:         #1A2B3C;
+    --text-muted:   #5A7A96;
+    --text-faint:   #8FA8BF;
+    --accent:       #18B4A5;
+    --accent-dim:   #E0F5F3;
+    --bronze:       #C07A3A;
+    --bronze-dim:   #FDF0E5;
+    --silver:       #5A88AD;
+    --silver-dim:   #EBF2F8;
+    --gold:         #C99318;
+    --gold-dim:     #FDF6E0;
+    --app:          #6055C9;
+    --app-dim:      #EFEDFD;
+    --tag-bg:       #E8EFF7;
+    --shadow:       0 1px 3px rgba(20,40,70,.07), 0 4px 14px rgba(20,40,70,.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:           #090F1A;
+      --bg-2:         #0E1826;
+      --surface:      #131F30;
+      --surface-2:    #192A3E;
+      --border:       #1F3248;
+      --text:         #D8E8F4;
+      --text-muted:   #6A90B0;
+      --text-faint:   #3D5E7A;
+      --accent:       #20C5B5;
+      --accent-dim:   #0E2A28;
+      --bronze:       #D4924A;
+      --bronze-dim:   #2A1A0A;
+      --silver:       #7AAED4;
+      --silver-dim:   #0E1F2E;
+      --gold:         #DDA920;
+      --gold-dim:     #2A1F06;
+      --app:          #8B82E8;
+      --app-dim:      #1A1640;
+      --tag-bg:       #1A2B3C;
+      --shadow:       0 1px 3px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:           #090F1A;
+    --bg-2:         #0E1826;
+    --surface:      #131F30;
+    --surface-2:    #192A3E;
+    --border:       #1F3248;
+    --text:         #D8E8F4;
+    --text-muted:   #6A90B0;
+    --text-faint:   #3D5E7A;
+    --accent:       #20C5B5;
+    --accent-dim:   #0E2A28;
+    --bronze:       #D4924A;
+    --bronze-dim:   #2A1A0A;
+    --silver:       #7AAED4;
+    --silver-dim:   #0E1F2E;
+    --gold:         #DDA920;
+    --gold-dim:     #2A1F06;
+    --app:          #8B82E8;
+    --app-dim:      #1A1640;
+    --tag-bg:       #1A2B3C;
+    --shadow:       0 1px 3px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
+  }
+
+  /* ── Reset & Base ───────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Source Sans 3', 'Segoe UI', sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Layout ─────────────────────────────────────────────── */
+  .page-wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+
+  /* ── Top Nav ────────────────────────────────────────────── */
+  .top-nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+  }
+
+  .top-nav-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 48px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .top-nav-inner::-webkit-scrollbar { display: none; }
+
+  .nav-link {
+    white-space: nowrap;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    letter-spacing: .03em;
+    transition: color .15s, background .15s;
+  }
+  .nav-link:hover { color: var(--text); background: var(--surface-2); }
+  .nav-sep { color: var(--border); font-size: 13px; }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  .doc-header {
+    padding: 52px 0 44px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 52px;
+  }
+
+  .doc-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .doc-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 2.4rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.2;
+    text-wrap: balance;
+    margin-bottom: 16px;
+    letter-spacing: -.02em;
+  }
+
+  .doc-subtitle {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    max-width: 640px;
+    line-height: 1.6;
+    font-weight: 300;
+  }
+
+  .doc-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 24px;
+  }
+
+  .meta-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 4px;
+    letter-spacing: .03em;
+  }
+
+  /* ── Section ────────────────────────────────────────────── */
+  .section {
+    margin-bottom: 60px;
+    scroll-margin-top: 64px;
+  }
+
+  .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-faint);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .section-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 1.45rem;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.3;
+    text-wrap: balance;
+    margin-bottom: 16px;
+    letter-spacing: -.01em;
+  }
+
+  .section-body {
+    color: var(--text-muted);
+    font-weight: 400;
+    margin-bottom: 28px;
+    max-width: 700px;
+  }
+
+  /* ── Divider ─────────────────────────────────────────────── */
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 52px 0;
+  }
+
+  /* ── Layer Cards ─────────────────────────────────────────── */
+  .layer-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .layer-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    border-left-width: 4px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .layer-card.bronze { border-left-color: var(--bronze); }
+  .layer-card.silver { border-left-color: var(--silver); }
+  .layer-card.gold   { border-left-color: var(--gold); }
+  .layer-card.source { border-left-color: var(--accent); }
+  .layer-card.app    { border-left-color: var(--app); }
+
+  .layer-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid transparent;
+    transition: background .15s;
+  }
+  .layer-card-header:hover { background: var(--surface-2); }
+  .layer-card.open .layer-card-header { border-bottom-color: var(--border); }
+
+  .layer-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 3px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .bronze .layer-badge { background: var(--bronze-dim); color: var(--bronze); }
+  .silver .layer-badge { background: var(--silver-dim); color: var(--silver); }
+  .gold   .layer-badge { background: var(--gold-dim);   color: var(--gold); }
+  .source .layer-badge { background: var(--accent-dim); color: var(--accent); }
+  .app    .layer-badge { background: var(--app-dim);    color: var(--app); }
+
+  .layer-card-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+  }
+
+  .layer-card-desc {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+  }
+
+  .layer-chevron {
+    color: var(--text-faint);
+    font-size: 12px;
+    transition: transform .2s;
+  }
+  .layer-card.open .layer-chevron { transform: rotate(90deg); }
+
+  .layer-card-body {
+    display: none;
+    padding: 20px 20px 20px 24px;
+  }
+  .layer-card.open .layer-card-body { display: block; }
+
+  /* ── Tables inside layer cards ───────────────────────────── */
+  .table-wrap { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    vertical-align: top;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  td code, th code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: var(--tag-bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+
+  td.field-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  /* ── Source grid ─────────────────────────────────────────── */
+  .source-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    margin-top: 4px;
+  }
+
+  .source-item {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+  }
+
+  .source-bucket {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .source-bucket.funding { color: var(--gold); }
+  .source-bucket.zoning  { color: var(--silver); }
+  .source-bucket.policy  { color: var(--accent); }
+
+  .source-name {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .source-desc {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  /* ── Diagram area ────────────────────────────────────────── */
+  .diagram-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 28px 20px;
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+    margin: 24px 0;
+  }
+
+  .diagram-wrap .mermaid { min-width: 500px; }
+
+  /* ── Callout ─────────────────────────────────────────────── */
+  .callout {
+    background: var(--accent-dim);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 14px 18px;
+    margin: 24px 0;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .callout strong { color: var(--text); font-weight: 600; }
+
+  /* ── Scalability pillars ─────────────────────────────────── */
+  .pillars {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  .pillar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+  }
+
+  .pillar-icon {
+    font-size: 1.4rem;
+    margin-bottom: 10px;
+  }
+
+  .pillar-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .pillar-body {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    line-height: 1.55;
+  }
+
+  /* ── Gold score breakdown ────────────────────────────────── */
+  .score-formula {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 18px 20px;
+    background: var(--gold-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 20px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+  }
+
+  .score-term {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .score-value {
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: var(--gold);
+  }
+
+  .score-label {
+    font-size: 9px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+
+  .score-op {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+  }
+
+  /* ── App layer ───────────────────────────────────────────── */
+  .app-stack {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+  }
+
+  .app-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+  }
+
+  .app-block-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--app);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .app-block-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+
+  .app-block-body {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    line-height: 1.55;
+  }
+
+  .app-block ul {
+    padding-left: 16px;
+    margin-top: 6px;
+  }
+
+  .app-block li {
+    margin-bottom: 3px;
+  }
+
+  /* ── Agent cards ─────────────────────────────────────────── */
+  .agent-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 12px;
+    margin: 24px 0;
+  }
+
+  .agent-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+    border-top: 3px solid var(--border);
+  }
+  .agent-card.orchestrator { border-top-color: var(--accent); }
+  .agent-card.zoning       { border-top-color: var(--silver); }
+  .agent-card.funding      { border-top-color: var(--gold); }
+  .agent-card.policy       { border-top-color: #A78BFA; }
+  .agent-card.scorer       { border-top-color: var(--bronze); }
+
+  .agent-role {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .agent-card.orchestrator .agent-role { color: var(--accent); }
+  .agent-card.zoning       .agent-role { color: var(--silver); }
+  .agent-card.funding      .agent-role { color: var(--gold); }
+  .agent-card.policy       .agent-role { color: #A78BFA; }
+  .agent-card.scorer       .agent-role { color: var(--bronze); }
+
+  .agent-name {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 10px;
+  }
+
+  .tool-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .tool-item {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--text-muted);
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 3px 7px;
+  }
+
+  .interrupt-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    color: #F59E0B;
+    background: rgba(245,158,11,.1);
+    border: 1px solid rgba(245,158,11,.25);
+    border-radius: 3px;
+    padding: 2px 7px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    margin-top: 8px;
+  }
+
+  /* ── Workflow steps ───────────────────────────────────────── */
+  .workflow-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 24px 0;
+    position: relative;
+  }
+
+  .workflow-step {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    position: relative;
+  }
+
+  .step-spine {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+    width: 32px;
+  }
+
+  .step-dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    z-index: 1;
+  }
+  .step-dot.interrupt {
+    border-color: #F59E0B;
+    background: rgba(245,158,11,.1);
+    color: #F59E0B;
+  }
+  .step-dot.start { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+  .step-dot.end   { border-color: var(--gold); background: var(--gold-dim); color: var(--gold); }
+
+  .step-line {
+    width: 2px;
+    flex: 1;
+    min-height: 18px;
+    background: var(--border);
+    margin: 2px 0;
+  }
+  .step-line.interrupt { background: rgba(245,158,11,.3); }
+
+  .step-content {
+    padding: 4px 0 20px;
+    flex: 1;
+  }
+
+  .step-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .step-desc {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .step-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .step-tool {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-faint);
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 6px;
+  }
+
+  .framework-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 20px 0;
+  }
+
+  .framework-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+  }
+
+  .framework-card.recommended {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+
+  .framework-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 6px;
+  }
+  .framework-card.recommended .framework-tag { color: var(--accent); }
+
+  .framework-name {
+    font-family: 'Sora', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 10px;
+  }
+
+  .framework-pros, .framework-cons {
+    list-style: none;
+    padding: 0;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    line-height: 1.5;
+  }
+
+  .framework-pros li::before { content: '+ '; color: var(--accent); font-weight: 600; }
+  .framework-cons li::before { content: '− '; color: var(--text-faint); font-weight: 600; }
+
+  @media (max-width: 560px) {
+    .framework-compare { grid-template-columns: 1fr; }
+  }
+
+  /* ── Decision log ────────────────────────────────────────── */
+  .decision-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .decision-table thead tr {
+    background: var(--surface-2);
+  }
+
+  .decision-table th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .decision-table td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    font-size: 0.875rem;
+  }
+
+  .decision-table tr:last-child td { border-bottom: none; }
+  .decision-table tr:hover td { background: var(--surface-2); }
+
+  .decision-area {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+
+  .decision-choice {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .decision-rationale {
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .decision-cost {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  .cost-free  { color: var(--accent); }
+  .cost-low   { color: var(--gold); }
+  .cost-owned { color: var(--silver); }
+
+  .decision-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .04em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .status-locked   { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(32,197,181,.25); }
+  .status-open     { background: var(--gold-dim);   color: var(--gold);   border: 1px solid rgba(221,169,32,.25); }
+  .status-confirm  { background: var(--app-dim);    color: var(--app);    border: 1px solid rgba(139,130,232,.25); }
+
+  .open-q-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+  }
+
+  .open-q {
+    display: flex;
+    gap: 12px;
+    background: var(--gold-dim);
+    border: 1px solid rgba(221,169,32,.2);
+    border-radius: 6px;
+    padding: 12px 16px;
+    align-items: flex-start;
+  }
+
+  .open-q-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--gold);
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .open-q-text {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .open-q-text strong { color: var(--text); font-weight: 600; }
+
+  /* ── Code design ─────────────────────────────────────────── */
+  .layer-model {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 24px 0;
+  }
+
+  .layer-model-row {
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .layer-model-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    background: var(--surface);
+  }
+
+  .layer-model-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .layer-model-title {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+  }
+
+  .layer-model-desc {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  .layer-model-connector {
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-faint);
+    padding: 4px 0;
+    letter-spacing: .06em;
+  }
+
+  /* code blocks */
+  .code-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 20px 0;
+    box-shadow: var(--shadow);
+  }
+
+  .code-block-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .code-block-filename {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+
+  .code-block-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid rgba(32,197,181,.2);
+  }
+
+  pre.code {
+    margin: 0;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--text-muted);
+    tab-size: 4;
+  }
+
+  .c-kw   { color: #7AAED4; }  /* keyword */
+  .c-fn   { color: var(--accent); }  /* function/method */
+  .c-cl   { color: var(--gold); }    /* class */
+  .c-str  { color: #A8C8A0; }  /* string */
+  .c-cm   { color: var(--text-faint); font-style: italic; } /* comment */
+  .c-dec  { color: #C9A8F0; }  /* decorator */
+  .c-tp   { color: #E8A87C; }  /* type */
+
+  /* pattern cards */
+  .pattern-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+    margin: 20px 0;
+  }
+
+  .pattern-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: var(--shadow);
+  }
+
+  .pattern-name {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .pattern-applies {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: .04em;
+    margin-bottom: 8px;
+  }
+
+  .pattern-desc {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    line-height: 1.55;
+  }
+
+  /* folder tree */
+  .folder-tree {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.9;
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+
+  .tree-dir   { color: var(--text); font-weight: 500; }
+  .tree-file  { color: var(--text-muted); }
+  .tree-owner { color: var(--accent); font-size: 11px; margin-left: 8px; }
+  .tree-shared{ color: var(--gold);   font-size: 11px; margin-left: 8px; }
+  .tree-note  { color: var(--text-faint); font-size: 11px; margin-left: 8px; }
+
+  /* ── Evaluation strategy ─────────────────────────────────── */
+  .eval-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+  }
+
+  .eval-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .eval-card-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .eval-number {
+    font-family: 'Sora', sans-serif;
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .eval-card-titles { flex: 1; }
+
+  .eval-method {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+  }
+
+  .eval-name {
+    font-family: 'Sora', sans-serif;
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .eval-desc {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    line-height: 1.55;
+  }
+
+  .eval-tag {
+    display: inline-flex;
+    align-self: flex-start;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 3px;
+    letter-spacing: .04em;
+  }
+
+  .demo-checklist {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    margin: 20px 0;
+  }
+
+  .demo-checklist-header {
+    padding: 12px 18px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+
+  .demo-checklist-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .demo-checklist-item:last-child { border-bottom: none; }
+
+  .check-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    padding-top: 1px;
+  }
+
+  .check-text {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+    flex: 1;
+  }
+
+  .check-text strong { color: var(--text); font-weight: 600; }
+
+  .check-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* ── Responsive ──────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    .doc-title { font-size: 1.8rem; }
+    .top-nav { padding: 0 16px; }
+    .page-wrap { padding: 0 16px 60px; }
+  }
+</style>
+
+<!-- Sticky nav -->
+<nav class="top-nav">
+  <div class="top-nav-inner">
+    <a class="nav-link" href="#overview">overview</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#sources">sources</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#bronze">bronze</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#silver">silver</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#lookup">geo lookup</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#gold">gold</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#app">application</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#llm-roles">llm roles</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#scalability">scalability</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#agents">agents</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#decisions">decisions</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#codedesign">code design</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#evaluation">evaluation</a>
+  </div>
+</nav>
+
+<div class="page-wrap">
+
+  <!-- Header -->
+  <header class="doc-header">
+    <div class="doc-eyebrow">GA Tech OMSA Practicum · State of Place</div>
+    <h1 class="doc-title">Implementation Engine<br>Solution Architecture</h1>
+    <p class="doc-subtitle">A medallion data pipeline that takes block-level urban design recommendations and enriches them with real-world implementation signals — funding opportunities, zoning constraints, and policy context — to produce a feasibility score and actionable next steps for each block.</p>
+    <div class="doc-meta">
+      <span class="meta-tag">Geography: Bowie, MD</span>
+      <span class="meta-tag">Focus: Parks / Public Garden (anchor)</span>
+      <span class="meta-tag">Pattern: Bronze → Silver → Gold</span>
+      <span class="meta-tag">Version: 0.1 · Sep 2026</span>
+    </div>
+  </header>
+
+  <!-- Overview -->
+  <section class="section" id="overview">
+    <div class="section-label">01 · Architecture Overview</div>
+    <h2 class="section-title">End-to-End Pipeline</h2>
+    <p class="section-body">Public data from three focus areas is ingested raw, cleaned and geo-tagged, then spatially joined to SoP recommendation blocks. The gold layer assembles the final implementation profile per block — used by both the scoring engine and the natural-language front end.</p>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart TD
+    subgraph SRC["  SOURCE LAYER  "]
+        S1[SoP Recommendation Summaries]
+        S2[Public Funding Datasets]
+        S3[Zoning GIS Layers]
+        S4[Plans & Policy Documents]
+    end
+
+    subgraph BRZ["  BRONZE — Raw Ingestion  "]
+        B1[(recommendations_raw)]
+        B2[(funding_raw)]
+        B3[(zoning_raw)]
+        B4[(policies_raw)]
+    end
+
+    subgraph SLV["  SILVER — Cleaned & Geo-Tagged  "]
+        V1[(recommendations_clean)]
+        V2[(funding_signals)]
+        V3[(zoning_signals)]
+        V4[(policy_signals)]
+        VL[(geo_lookup)]
+    end
+
+    subgraph GLD["  GOLD — Implementation Profiles  "]
+        G1[(block_implementation_profile)]
+    end
+
+    subgraph APP["  APPLICATION LAYER  "]
+        A1[Vector Store]
+        A2[REST API]
+        A3[Frontend + NL Chat]
+    end
+
+    S1 --> B1
+    S2 --> B2
+    S3 --> B3
+    S4 --> B4
+
+    B1 --> V1
+    B2 --> V2
+    B3 --> V3
+    B4 --> V4
+
+    V1 --> VL
+    V2 --> VL
+    V3 --> VL
+    V4 --> VL
+    VL --> G1
+
+    G1 --> A1
+    A1 --> A2
+    A2 --> A3
+
+    style SRC fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
+    style BRZ fill:#2A1A0A,stroke:#D4924A,color:#E8C49A
+    style SLV fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
+    style GLD fill:#2A1F06,stroke:#DDA920,color:#EDD490
+    style APP fill:#1A1640,stroke:#8B82E8,color:#BDB8F4
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Design principle:</strong> Each layer is independently queryable and reusable. The geo_lookup table is the only join point between the SoP data and the public data — which means swapping in a different city or state only requires rebuilding that one table and re-running the silver transforms for the new geography.
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Source Layer -->
+  <section class="section" id="sources">
+    <div class="section-label">02 · Source Layer</div>
+    <h2 class="section-title">Data Sources</h2>
+    <p class="section-body">Two categories of source data: SoP's own outputs (already in structured form) and public datasets across three focus areas, gathered in raw form before any processing. Priority sources are chosen for quality, spatial precision, and relevance to the top recommendation types in Bowie (Public Garden, Sport Field, Arcades).</p>
+
+    <div class="source-grid">
+      <div class="source-item">
+        <div class="source-bucket" style="color:var(--accent)">SoP Data</div>
+        <div class="source-name">Recommendation Summaries</div>
+        <div class="source-desc">Block-level recs from Bowie CSV/XLSX — features to change, before/after SoP scores, block geometry.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket funding">Funding</div>
+        <div class="source-name">EPA Brownfields</div>
+        <div class="source-desc">Federal grants for contaminated site assessment/cleanup — often converted to parks. Spatial dataset available via ArcGIS.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket funding">Funding</div>
+        <div class="source-name">HUD CDBG Grants</div>
+        <div class="source-desc">Community Development Block Grants — flexible federal funding, frequently used for parks and green space. Searchable via HUD eGIS.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket funding">Funding</div>
+        <div class="source-name">MD Program Open Space</div>
+        <div class="source-desc">State-level park acquisition and development funding. Maryland DNR publishes funded projects spatially. Updated annually.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket funding">Funding</div>
+        <div class="source-name">New Markets Tax Credits</div>
+        <div class="source-desc">Census-tract-level federal tax credit designations. Available on ArcGIS Open Data. Relevant for mixed-use development recs.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket zoning">Zoning</div>
+        <div class="source-name">PG County Zoning GIS</div>
+        <div class="source-desc">Official parcel-level zoning designations for Prince George's County. Available as shapefile/GeoJSON on county open data portal.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket zoning">Zoning</div>
+        <div class="source-name">Maryland iMAP Parcels</div>
+        <div class="source-desc">Statewide parcel layer with land use codes. Useful for cross-validating PG County zoning and identifying vacant/underused land.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket policy">Plans & Policy</div>
+        <div class="source-name">PG County Master Plan</div>
+        <div class="source-desc">Official long-range land use plan. PDF — requires NLP extraction. Bowie Town Center is designated Mixed-Use Revitalization.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket policy">Plans & Policy</div>
+        <div class="source-name">EPA Brownfield Policy Docs</div>
+        <div class="source-desc">Federal policy documents on brownfield redevelopment incentives, eligible activities, and community benefit requirements.</div>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Bronze Layer -->
+  <section class="section" id="bronze">
+    <div class="section-label">03 · Bronze Layer</div>
+    <h2 class="section-title">Raw Ingestion</h2>
+    <p class="section-body">Data lands here in original form — no transforms, no cleaning. The goal is fast, complete ingestion with provenance tracking. Every row knows where it came from and when it was collected.</p>
+
+    <div class="layer-stack">
+
+      <div class="layer-card source open">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">SoP</span>
+          <span class="layer-card-title">recommendations_raw</span>
+          <span class="layer-card-desc">43 Bowie blocks · XLSX/CSV</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>sgmntid</code></td><td>integer</td><td>Block segment ID</td></tr>
+                <tr><td class="field-name"><code>neighborhood</code></td><td>string</td><td>e.g. Bowie Town Center</td></tr>
+                <tr><td class="field-name"><code>street_name</code></td><td>string</td><td>Street name</td></tr>
+                <tr><td class="field-name"><code>intersection_a / b</code></td><td>string</td><td>Block boundary intersections</td></tr>
+                <tr><td class="field-name"><code>features_to_change</code></td><td>string[]</td><td>Raw recommendation list (pipe-delimited)</td></tr>
+                <tr><td class="field-name"><code>score_before</code></td><td>float</td><td>Current SoP Index score</td></tr>
+                <tr><td class="field-name"><code>score_after</code></td><td>float</td><td>Projected SoP Index score</td></tr>
+                <tr><td class="field-name"><code>priority_tier</code></td><td>string</td><td>50pct / 75pct / 90pct threshold</td></tr>
+                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td>Load timestamp</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer-card bronze">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Bronze</span>
+          <span class="layer-card-title">funding_raw</span>
+          <span class="layer-card-desc">EPA, HUD CDBG, MD POS, NMTC · raw API/shapefile dumps</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>source_id</code></td><td>string</td><td>e.g. epa_brownfields, hud_cdbg</td></tr>
+                <tr><td class="field-name"><code>program_name</code></td><td>string</td><td>As-is from source</td></tr>
+                <tr><td class="field-name"><code>raw_json</code></td><td>JSON</td><td>Full raw API or shapefile record</td></tr>
+                <tr><td class="field-name"><code>geometry_raw</code></td><td>geometry</td><td>WKT/GeoJSON as received</td></tr>
+                <tr><td class="field-name"><code>source_url</code></td><td>string</td><td>Origin URL for provenance</td></tr>
+                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer-card bronze">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Bronze</span>
+          <span class="layer-card-title">zoning_raw</span>
+          <span class="layer-card-desc">PG County GIS · Maryland iMAP parcels · raw shapefiles</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>parcel_id</code></td><td>string</td><td>County parcel identifier</td></tr>
+                <tr><td class="field-name"><code>zoning_code_raw</code></td><td>string</td><td>Raw code e.g. C-S-C, R-80, M-U-TC</td></tr>
+                <tr><td class="field-name"><code>land_use_raw</code></td><td>string</td><td>Raw land use description</td></tr>
+                <tr><td class="field-name"><code>geometry_raw</code></td><td>geometry</td><td>Parcel polygon</td></tr>
+                <tr><td class="field-name"><code>source_id</code></td><td>string</td><td>pg_county_gis / md_imap</td></tr>
+                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer-card bronze">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Bronze</span>
+          <span class="layer-card-title">policies_raw</span>
+          <span class="layer-card-desc">PG Master Plan · EPA policy docs · MD health ordinances · PDFs</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>doc_id</code></td><td>string</td><td>Unique document identifier</td></tr>
+                <tr><td class="field-name"><code>doc_name</code></td><td>string</td><td>Document title</td></tr>
+                <tr><td class="field-name"><code>doc_type</code></td><td>string</td><td>master_plan / ordinance / federal_policy</td></tr>
+                <tr><td class="field-name"><code>raw_text</code></td><td>text</td><td>Full extracted text (PDF → text)</td></tr>
+                <tr><td class="field-name"><code>jurisdiction</code></td><td>string</td><td>federal / state / county / city</td></tr>
+                <tr><td class="field-name"><code>source_url</code></td><td>string</td><td></td></tr>
+                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Silver Layer -->
+  <section class="section" id="silver">
+    <div class="section-label">04 · Silver Layer</div>
+    <h2 class="section-title">Cleaned &amp; Geo-Tagged</h2>
+    <p class="section-body">Bronze data is cleaned, standardized, and spatially enriched. Unstructured documents are parsed with NLP/LLM to extract structured signals. Everything is projected into a common coordinate system (WGS84) and tagged with consistent vocabulary that works across geographies.</p>
+
+    <div class="layer-stack">
+
+      <div class="layer-card silver open">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Silver</span>
+          <span class="layer-card-title">recommendations_clean</span>
+          <span class="layer-card-desc">Geocoded block segments with parsed recommendation arrays</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>block_id</code></td><td>string</td><td>Stable identifier, carries through to gold</td></tr>
+                <tr><td class="field-name"><code>geometry</code></td><td>geometry</td><td>Line segment geocoded from street + intersections</td></tr>
+                <tr><td class="field-name"><code>rec_features</code></td><td>string[]</td><td>Parsed and normalized recommendation labels</td></tr>
+                <tr><td class="field-name"><code>rec_categories</code></td><td>string[]</td><td>Mapped to SoP dimension (Parks, Safety, Aesthetics…)</td></tr>
+                <tr><td class="field-name"><code>score_before</code></td><td>float</td><td></td></tr>
+                <tr><td class="field-name"><code>score_after</code></td><td>float</td><td></td></tr>
+                <tr><td class="field-name"><code>priority_tier</code></td><td>string</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer-card silver">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Silver</span>
+          <span class="layer-card-title">funding_signals</span>
+          <span class="layer-card-desc">Standardized funding opportunities with eligibility and geographic boundaries</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>funding_id</code></td><td>string</td><td></td></tr>
+                <tr><td class="field-name"><code>program_name</code></td><td>string</td><td>Cleaned, standardized name</td></tr>
+                <tr><td class="field-name"><code>funding_type</code></td><td>string</td><td>grant / tax_credit / loan / subsidy</td></tr>
+                <tr><td class="field-name"><code>jurisdiction</code></td><td>string</td><td>federal / state / county / city</td></tr>
+                <tr><td class="field-name"><code>applicable_features</code></td><td>string[]</td><td>Which recommendation types this applies to</td></tr>
+                <tr><td class="field-name"><code>max_amount</code></td><td>float</td><td>USD</td></tr>
+                <tr><td class="field-name"><code>eligibility_criteria</code></td><td>string</td><td>LLM-extracted eligibility summary</td></tr>
+                <tr><td class="field-name"><code>deadline</code></td><td>date</td><td>Next application deadline</td></tr>
+                <tr><td class="field-name"><code>geometry</code></td><td>geometry</td><td>Eligible zone boundary (census tract, county, etc.)</td></tr>
+                <tr><td class="field-name"><code>source_id</code></td><td>string</td><td>Back-reference to bronze</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer-card silver">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Silver</span>
+          <span class="layer-card-title">zoning_signals</span>
+          <span class="layer-card-desc">Parcel zoning normalized to standard categories with park/mixed-use flags</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>parcel_id</code></td><td>string</td><td></td></tr>
+                <tr><td class="field-name"><code>zoning_category</code></td><td>string</td><td>Normalized: commercial / residential / mixed_use / open_space</td></tr>
+                <tr><td class="field-name"><code>allows_park</code></td><td>boolean</td><td>Derived from zoning category</td></tr>
+                <tr><td class="field-name"><code>allows_mixed_use</code></td><td>boolean</td><td></td></tr>
+                <tr><td class="field-name"><code>variance_required</code></td><td>boolean</td><td>If rec type doesn't match current zone</td></tr>
+                <tr><td class="field-name"><code>geometry</code></td><td>geometry</td><td>Parcel polygon, reprojected to WGS84</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer-card silver">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Silver</span>
+          <span class="layer-card-title">policy_signals</span>
+          <span class="layer-card-desc">LLM-extracted structured signals from raw policy documents</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>policy_id</code></td><td>string</td><td></td></tr>
+                <tr><td class="field-name"><code>policy_name</code></td><td>string</td><td></td></tr>
+                <tr><td class="field-name"><code>signal_type</code></td><td>string</td><td>support / barrier / requirement / incentive</td></tr>
+                <tr><td class="field-name"><code>applicable_features</code></td><td>string[]</td><td>Which recommendation types this applies to</td></tr>
+                <tr><td class="field-name"><code>geographic_scope</code></td><td>string</td><td>federal / state / county / city / neighborhood</td></tr>
+                <tr><td class="field-name"><code>extracted_text</code></td><td>string</td><td>Relevant excerpt for provenance</td></tr>
+                <tr><td class="field-name"><code>confidence</code></td><td>float</td><td>LLM confidence 0–1</td></tr>
+                <tr><td class="field-name"><code>doc_id</code></td><td>string</td><td>Back-reference to bronze doc</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Geo Lookup -->
+  <section class="section" id="lookup">
+    <div class="section-label">05 · Geo Lookup</div>
+    <h2 class="section-title">Block ↔ Geography Mapping</h2>
+    <p class="section-body">The geo_lookup table is the critical junction dataset. It spatially joins each SoP block segment to all relevant geographic boundaries — census tracts, zoning districts, funding eligibility zones, and policy areas. This is what makes the gold layer possible, and what makes the system portable to new cities.</p>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart LR
+    B[("block_id\n(line segment\ngeometry)")]
+
+    B -->|ST_Intersects| CT["Census Tract\nfunding_signals"]
+    B -->|ST_Within| ZD["Zoning Parcel\nzoning_signals"]
+    B -->|ST_Intersects| FZ["Funding Zone\n(NMTC, Brownfield,\nEnergy Community)"]
+    B -->|Attribute match| PA["Policy Area\n(county, state, federal)"]
+
+    CT --> LK[("geo_lookup\nrow")]
+    ZD --> LK
+    FZ --> LK
+    PA --> LK
+
+    style B fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
+    style LK fill:#2A1F06,stroke:#DDA920,color:#EDD490
+      </div>
+    </div>
+
+    <div class="layer-stack">
+      <div class="layer-card silver open">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Silver</span>
+          <span class="layer-card-title">geo_lookup</span>
+          <span class="layer-card-desc">One row per block — all geographic identifiers resolved</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>block_id</code></td><td>string</td><td>PK — joins to recommendations_clean</td></tr>
+                <tr><td class="field-name"><code>census_tract</code></td><td>string</td><td>FIPS census tract</td></tr>
+                <tr><td class="field-name"><code>county_fips</code></td><td>string</td><td>e.g. 24033 for Prince George's County</td></tr>
+                <tr><td class="field-name"><code>state_fips</code></td><td>string</td><td>e.g. 24 for Maryland</td></tr>
+                <tr><td class="field-name"><code>zoning_parcel_ids</code></td><td>string[]</td><td>Overlapping parcels from zoning_signals</td></tr>
+                <tr><td class="field-name"><code>funding_signal_ids</code></td><td>string[]</td><td>Applicable funding programs by spatial match</td></tr>
+                <tr><td class="field-name"><code>policy_signal_ids</code></td><td>string[]</td><td>Applicable policy signals by jurisdiction scope</td></tr>
+                <tr><td class="field-name"><code>is_nmtc_eligible</code></td><td>boolean</td><td>New Markets Tax Credit zone flag</td></tr>
+                <tr><td class="field-name"><code>is_brownfield_site</code></td><td>boolean</td><td>EPA brownfield designation flag</td></tr>
+                <tr><td class="field-name"><code>is_energy_community</code></td><td>boolean</td><td>IRA Energy Community designation flag</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Gold Layer -->
+  <section class="section" id="gold">
+    <div class="section-label">06 · Gold Layer</div>
+    <h2 class="section-title">Implementation Profiles</h2>
+    <p class="section-body">The gold table is the final enriched output — one row per block, assembling everything needed to answer the question: <em>"Can this recommendation actually get done, and how?"</em> It includes a computed feasibility score and an LLM-generated action summary.</p>
+
+    <div class="score-formula">
+      <div class="score-term">
+        <span class="score-value">Feasibility</span>
+        <span class="score-label">score 0–100</span>
+      </div>
+      <span class="score-op">=</span>
+      <div class="score-term">
+        <span class="score-value">0.4 ×</span>
+        <span class="score-label">funding score</span>
+      </div>
+      <span class="score-op">+</span>
+      <div class="score-term">
+        <span class="score-value">0.35 ×</span>
+        <span class="score-label">zoning score</span>
+      </div>
+      <span class="score-op">+</span>
+      <div class="score-term">
+        <span class="score-value">0.25 ×</span>
+        <span class="score-label">policy score</span>
+      </div>
+    </div>
+
+    <div class="callout" style="background:var(--app-dim);border-left-color:var(--app)">
+      <strong>LLM boundary:</strong> The feasibility score (0–100) is computed <em>deterministically</em> from structured silver table data — never by an LLM. The LLM only generates the plain-English <code>summary_narrative</code> on top of that already-computed score. This keeps the gold layer auditable and the source of truth grounded in real data, not model inference.
+    </div>
+
+    <div class="callout">
+      <strong>Weights are configurable.</strong> The 0.4 / 0.35 / 0.25 split is a starting point — funding is weighted highest because it's the most binary constraint (either money exists or it doesn't). These weights can be tuned per recommendation type, city, or user preference.
+    </div>
+
+    <div class="layer-stack">
+      <div class="layer-card gold open">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Gold</span>
+          <span class="layer-card-title">block_implementation_profile</span>
+          <span class="layer-card-desc">One row per block per recommendation — the final deliverable dataset</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>block_id</code></td><td>string</td><td>PK</td></tr>
+                <tr><td class="field-name"><code>rec_features</code></td><td>string[]</td><td>The SoP recommendations for this block</td></tr>
+                <tr><td class="field-name"><code>score_lift</code></td><td>float</td><td>SoP projected score improvement</td></tr>
+                <tr><td class="field-name"><code>funding_opportunities</code></td><td>JSON[]</td><td>Matched programs: name, amount, deadline, eligibility</td></tr>
+                <tr><td class="field-name"><code>zoning_context</code></td><td>JSON</td><td>Current zone, allows_park, variance_required</td></tr>
+                <tr><td class="field-name"><code>policy_support</code></td><td>JSON[]</td><td>Supporting and blocking policies with excerpts</td></tr>
+                <tr><td class="field-name"><code>feasibility_score</code></td><td>float</td><td>0–100 composite score</td></tr>
+                <tr><td class="field-name"><code>funding_subscore</code></td><td>float</td><td>Component score 0–100</td></tr>
+                <tr><td class="field-name"><code>zoning_subscore</code></td><td>float</td><td>Component score 0–100</td></tr>
+                <tr><td class="field-name"><code>policy_subscore</code></td><td>float</td><td>Component score 0–100</td></tr>
+                <tr><td class="field-name"><code>top_actions</code></td><td>string[]</td><td>Ranked next steps (e.g. "Apply for EPA brownfield grant")</td></tr>
+                <tr><td class="field-name"><code>barriers</code></td><td>string[]</td><td>Key blockers (e.g. "Commercial zoning — variance required")</td></tr>
+                <tr><td class="field-name"><code>effort_estimate</code></td><td>JSON</td><td><code>{level: "Medium", factors: ["zoning variance", "community approval"], estimated_months: 6}</code></td></tr>
+                <tr><td class="field-name"><code>timing_context</code></td><td>JSON</td><td><code>{nearest_deadline: "2025-03-15", source: "EPA Brownfield Grant", actionable_within_12mo: true, seasonal_constraints: []}</code></td></tr>
+                <tr><td class="field-name"><code>summary_narrative</code></td><td>text</td><td>LLM-generated plain-English implementation summary</td></tr>
+                <tr><td class="field-name"><code>confidence</code></td><td>float</td><td>Overall confidence in signal quality</td></tr>
+                <tr><td class="field-name"><code>updated_at</code></td><td>timestamp</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Application Layer -->
+  <section class="section" id="app">
+    <div class="section-label">07 · Application Layer</div>
+    <h2 class="section-title">Vector Store, API &amp; Frontend</h2>
+    <p class="section-body">The gold layer feeds two parallel outputs: a vector store for semantic search and natural-language Q&amp;A, and a REST API that powers the map-based front end. Users can explore blocks spatially, drill into implementation profiles, and refine plans through a chat interface.</p>
+
+    <div class="app-stack">
+      <div class="app-block">
+        <div class="app-block-label">Vector Store</div>
+        <div class="app-block-title">Semantic Retrieval</div>
+        <div class="app-block-body">
+          Gold profiles + source document chunks embedded and stored (e.g. Chroma, Pinecone, pgvector). Enables RAG for Q&amp;A.
+          <ul>
+            <li>Gold profile embeddings (one per block)</li>
+            <li>Policy doc chunks with block metadata</li>
+            <li>Grant eligibility text chunks</li>
+            <li>Query: "What funding exists for parks near Harbour Way?"</li>
+          </ul>
+        </div>
+      </div>
+      <div class="app-block">
+        <div class="app-block-label">REST API</div>
+        <div class="app-block-title">Data Access Layer</div>
+        <div class="app-block-body">
+          Exposes gold layer and vector store to the frontend. Key endpoints:
+          <ul>
+            <li><code>/blocks</code> — list blocks with scores</li>
+            <li><code>/blocks/{id}</code> — full profile</li>
+            <li><code>/blocks/{id}/actions</code> — ranked next steps</li>
+            <li><code>/chat</code> — NL query → RAG response</li>
+          </ul>
+        </div>
+      </div>
+      <div class="app-block">
+        <div class="app-block-label">Frontend</div>
+        <div class="app-block-title">Map + Chat Interface</div>
+        <div class="app-block-body">
+          Map view of Bowie blocks color-coded by feasibility score. Click a block → implementation profile panel. Chat input for follow-up queries.
+          <ul>
+            <li>Map: blocks colored by feasibility score</li>
+            <li>Panel: funding opps, zoning flags, policy signals</li>
+            <li>Chat: "What can we build in 12 months?"</li>
+            <li>Provenance: every signal links to source</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- LLM Roles -->
+  <section class="section" id="llm-roles">
+    <div class="section-label">08 · LLM Roles</div>
+    <h2 class="section-title">Where LLMs Fit — and Where They Don't</h2>
+    <p class="section-body">From the sponsor kickoff: <em>"SoP Models + Structured Data = Source of Truth. LLMs = Extraction, Interpretation, and Interaction Layer."</em> This is a hard architectural constraint — LLMs are never the source of truth, only the layer that extracts, interprets, and surfaces it.</p>
+
+    <!-- Two-role split from slide -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:24px 0">
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:var(--shadow)">
+        <div style="background:var(--silver-dim);border-bottom:1px solid var(--border);padding:14px 18px">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--silver);margin-bottom:4px">Back-end</div>
+          <div style="font-family:'Sora',sans-serif;font-size:1rem;font-weight:700;color:var(--text)">Extract &amp; Structure</div>
+        </div>
+        <div style="padding:16px 18px">
+          <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:0.85rem;color:var(--text-muted);line-height:1.5">
+            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Find relevant information from public sources</li>
+            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Parse unstructured documents (grant PDFs, policy docs)</li>
+            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Extract rules, eligibility, opportunities, constraints, deadlines</li>
+            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Convert into structured implementation signals the gold layer can use</li>
+          </ul>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);margin-bottom:6px">In our architecture</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px">
+              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--accent);background:var(--accent-dim);border:1px solid rgba(32,197,181,.2);border-radius:3px;padding:2px 7px">PolicyAgent.extract_signals()</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(221,169,32,.2);border-radius:3px;padding:2px 7px">FundingAgent.extract_eligibility()</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--bronze);background:var(--bronze-dim);border:1px solid rgba(192,122,58,.2);border-radius:3px;padding:2px 7px">generate_narrative()</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:var(--shadow)">
+        <div style="background:var(--gold-dim);border-bottom:1px solid var(--border);padding:14px 18px">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:4px">Front-end</div>
+          <div style="font-family:'Sora',sans-serif;font-size:1rem;font-weight:700;color:var(--text)">Interact &amp; Query</div>
+        </div>
+        <div style="padding:16px 18px">
+          <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:0.85rem;color:var(--text-muted);line-height:1.5">
+            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span>Query the contextualized recommendation system</li>
+            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"What could we implement in the next year?"</em></li>
+            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"Which recommendations have funding available?"</em></li>
+            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"Why is this scenario now higher priority?"</em></li>
+            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"What should we do next?"</em></li>
+          </ul>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);margin-bottom:6px">In our architecture</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px">
+              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--app);background:var(--app-dim);border:1px solid rgba(139,130,232,.2);border-radius:3px;padding:2px 7px">ChatPanel (RAG)</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--app);background:var(--app-dim);border:1px solid rgba(139,130,232,.2);border-radius:3px;padding:2px 7px">POST /chat</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--app);background:var(--app-dim);border:1px solid rgba(139,130,232,.2);border-radius:3px;padding:2px 7px">pgvector similarity search</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Source of truth principle -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">The Source of Truth Principle</h3>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 22px;box-shadow:var(--shadow);margin-bottom:20px">
+      <div style="text-align:center;font-family:'Sora',sans-serif;font-size:0.95rem;font-weight:600;color:var(--text);margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+        SoP Models &nbsp;+&nbsp; Structured Gold Layer Data &nbsp;=&nbsp; <span style="color:var(--accent)">Source of Truth</span>
+      </div>
+      <div style="text-align:center;font-family:'Sora',sans-serif;font-size:0.95rem;font-weight:600;color:var(--text-muted)">
+        LLMs &nbsp;=&nbsp; <span style="color:var(--silver)">Extraction</span> &nbsp;+&nbsp; <span style="color:var(--bronze)">Interpretation</span> &nbsp;+&nbsp; <span style="color:var(--gold)">Interaction</span> &nbsp;&nbsp;layer only
+      </div>
+    </div>
+
+    <!-- Correct vs wrong -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 14px;letter-spacing:-.01em">Scoring: Deterministic vs LLM</h3>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">
+      <div class="code-block" style="margin:0;border-color:rgba(32,197,181,.3)">
+        <div class="code-block-label">
+          <span class="code-block-filename">✓ Correct</span>
+          <span class="code-block-tag">score is deterministic</span>
+        </div>
+        <pre class="code"><span class="c-cm"># Score computed from structured data</span>
+score = (
+  <span class="c-fn">score_funding</span>(funding_signals) * <span class="c-str">0.40</span> +
+  <span class="c-fn">score_zoning</span>(zoning_signals)  * <span class="c-str">0.35</span> +
+  <span class="c-fn">score_policy</span>(policy_signals)  * <span class="c-str">0.25</span>
+)
+
+<span class="c-cm"># LLM only writes the narrative on top</span>
+narrative = llm.<span class="c-fn">generate</span>(
+  prompt=<span class="c-str">"Summarise this profile"</span>,
+  context={score, signals, actions}
+)</pre>
+      </div>
+
+      <div class="code-block" style="margin:0;border-color:rgba(224,92,92,.3)">
+        <div class="code-block-label" style="background:rgba(224,92,92,.08)">
+          <span class="code-block-filename" style="color:#E05C5C">✗ Wrong</span>
+          <span class="code-block-tag" style="color:#E05C5C;background:rgba(224,92,92,.1);border-color:rgba(224,92,92,.3)">LLM as source of truth</span>
+        </div>
+        <pre class="code"><span class="c-cm"># Never do this</span>
+result = llm.<span class="c-fn">generate</span>(
+  prompt=<span class="c-str">"Given these signals, what is the
+  feasibility score for this block?"</span>
+)
+
+<span class="c-cm"># score = result["score"]  ← hallucination risk</span>
+<span class="c-cm"># LLM invented a number, not computed one</span></pre>
+      </div>
+    </div>
+
+    <!-- LLM usage map -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 14px;letter-spacing:-.01em">Where LLMs Are Used in This System</h3>
+
+    <div class="table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);overflow:hidden">
+      <table>
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Where</th>
+            <th>What the LLM does</th>
+            <th>Grounded in</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--silver)">Extraction</span></td>
+            <td><code>PolicyAgent</code> · <code>FundingAgent</code></td>
+            <td style="color:var(--text-muted)">Parses unstructured PDFs and grant docs into structured fields (eligibility, deadlines, constraints)</td>
+            <td style="color:var(--text-muted)">Raw document text from bronze layer</td>
+          </tr>
+          <tr>
+            <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--bronze)">Interpretation</span></td>
+            <td><code>generate_narrative()</code></td>
+            <td style="color:var(--text-muted)">Writes plain-English summary of the implementation profile — what the score means, what to do next</td>
+            <td style="color:var(--text-muted)">Deterministically computed score + structured signals from gold layer</td>
+          </tr>
+          <tr>
+            <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--gold)">Interaction</span></td>
+            <td><code>ChatPanel</code> · <code>POST /chat</code></td>
+            <td style="color:var(--text-muted)">Answers NL queries by retrieving relevant gold layer records via pgvector, then generating a grounded response</td>
+            <td style="color:var(--text-muted)">pgvector similarity search over gold layer embeddings — never free-form generation</td>
+          </tr>
+          <tr>
+            <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#E05C5C">Never</span></td>
+            <td>Feasibility score computation</td>
+            <td style="color:var(--text-muted)">LLMs do not produce the 0–100 score or its sub-components</td>
+            <td style="color:var(--text-muted)">N/A — score is deterministic formula only</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </section>
+
+  <hr>
+
+  <!-- Scalability -->
+  <section class="section" id="scalability">
+    <div class="section-label">09 · Scalability Design</div>
+    <h2 class="section-title">Built for Multiple Cities</h2>
+    <p class="section-body">The architecture is designed from the start to work across geographies. Bowie is the prototype — but adding Philadelphia, Baltimore, or any USDOT partner city should require configuration, not code rewrites.</p>
+
+    <div class="pillars">
+      <div class="pillar">
+        <div class="pillar-icon">⚙</div>
+        <div class="pillar-title">Config-Driven Geography</div>
+        <div class="pillar-body">State, county, and city are parameters, not hardcoded values. A geography config object drives which data sources to pull, which zoning schema to use, and which policy documents to ingest.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">⬡</div>
+        <div class="pillar-title">Pluggable Source Connectors</div>
+        <div class="pillar-body">Each data source implements a standard interface: <code>fetch() → bronze_row[]</code>. Adding a new funding program means writing one connector, not touching the pipeline. Sources are registered in a config catalog.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">⊞</div>
+        <div class="pillar-title">Standardized Silver Schemas</div>
+        <div class="pillar-body">funding_signals, zoning_signals, and policy_signals have fixed schemas regardless of source geography. A Maryland grant and a Pennsylvania grant map to the same fields — only the values differ.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">⊕</div>
+        <div class="pillar-title">Geo Lookup is Rebuilt per City</div>
+        <div class="pillar-body">The geo_lookup table is the only geography-specific artifact. Rebuilding it for Philadelphia means running the same spatial joins against Philadelphia block geometries — the gold layer logic is unchanged.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">◎</div>
+        <div class="pillar-title">Configurable Score Weights</div>
+        <div class="pillar-body">Feasibility score weights (funding / zoning / policy) are stored in config, not code. Different cities or recommendation types can use different weights without a pipeline change.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">↻</div>
+        <div class="pillar-title">Incremental Updates</div>
+        <div class="pillar-body">Bronze tables carry <code>ingested_at</code> timestamps. Silver and gold transforms are incremental — only reprocess rows where the source changed. Grant deadlines and policy updates propagate automatically.</div>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Agentic Architecture -->
+  <section class="section" id="agents">
+    <div class="section-label">10 · Agentic Architecture</div>
+    <h2 class="section-title">Multi-Agent Workflow Design</h2>
+    <p class="section-body">Each focus area is owned by a dedicated specialist agent with its own tools and scope. An Orchestrator agent coordinates them, aggregates signals, and manages the final gold-layer write. Every agent is a small, resumable LangGraph workflow with explicit human interrupt points — nothing writes to the database without user approval.</p>
+
+    <!-- Framework choice -->
+    <div class="framework-compare">
+      <div class="framework-card recommended">
+        <div class="framework-tag">Recommended</div>
+        <div class="framework-name">LangGraph</div>
+        <ul class="framework-pros">
+          <li>Built-in <code>interrupt_before/after</code> nodes</li>
+          <li>Checkpointing via <code>MemorySaver</code> — resume after human feedback</li>
+          <li>Explicit state graph — debuggable, observable</li>
+          <li>Parallel subgraph execution (fan-out to 3 agents)</li>
+          <li>LangSmith tracing out of the box</li>
+        </ul>
+        <ul class="framework-cons" style="margin-top:8px">
+          <li>More boilerplate than PydanticAI</li>
+        </ul>
+      </div>
+      <div class="framework-card">
+        <div class="framework-tag">Alternative</div>
+        <div class="framework-name">PydanticAI</div>
+        <ul class="framework-pros">
+          <li>Cleaner, more Pythonic API</li>
+          <li>Strong type safety throughout</li>
+          <li>Lower overhead for simple tool use</li>
+        </ul>
+        <ul class="framework-cons" style="margin-top:8px">
+          <li>Human-in-the-loop interrupts not native</li>
+          <li>Checkpointing / resume not built in</li>
+          <li>Harder to fan-out to parallel agents</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Verdict:</strong> Use LangGraph for the orchestrator and all agent graphs. The interrupt/checkpoint pattern is exactly what you need — a user approves signals mid-run, and the graph resumes from that exact point rather than restarting. PydanticAI shines for defining typed tool inputs/outputs within each agent node, so the two can coexist.
+    </div>
+
+    <!-- Agent topology -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 8px;letter-spacing:-.01em">Agent Topology</h3>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart TD
+    U([User / Frontend]) -->|block_id + rec_features| ORC
+
+    subgraph ORC["Orchestrator Agent"]
+        O1[Load Block Context] --> O2[Fan-out to Specialists]
+        O2 --> O5[Aggregate Signals]
+        O5 --> O6[Compute Feasibility Score]
+        O6 --> O7{{"⏸ Interrupt: Review Profile"}}
+        O7 -->|approved| O8[Write Gold Layer]
+    end
+
+    O2 --> ZA
+    O2 --> FA
+    O2 --> PA
+
+    subgraph ZA["Zoning Agent"]
+        Z1[Lookup Parcels GIS] --> Z2[Classify Barriers]
+        Z2 --> Z3{{"⏸ Interrupt: Confirm Zoning"}}
+        Z3 -->|approved| Z4[Write zoning_signals]
+    end
+
+    subgraph FA["Funding Agent"]
+        F1[Search Funding Programs] --> F2[Check Eligibility]
+        F2 --> F3[Check ArcGIS Zones]
+        F3 --> F4{{"⏸ Interrupt: Review Matches"}}
+        F4 -->|approved| F5[Write funding_signals]
+    end
+
+    subgraph PA["Policy Agent"]
+        P1[Search Policy Docs] --> P2[Fetch & Chunk PDFs]
+        P2 --> P3[LLM Extraction]
+        P3 --> P4{{"⏸ Interrupt: Review Signals"}}
+        P4 -->|approved| P5[Write policy_signals]
+    end
+
+    Z4 --> O5
+    F5 --> O5
+    P5 --> O5
+
+    style ORC fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
+    style ZA  fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
+    style FA  fill:#2A1F06,stroke:#DDA920,color:#EDD490
+    style PA  fill:#1A1040,stroke:#A78BFA,color:#C9C4F8
+      </div>
+    </div>
+
+    <!-- Agent cards -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 12px;letter-spacing:-.01em">Agent Definitions</h3>
+
+    <div class="agent-grid">
+
+      <div class="agent-card orchestrator">
+        <div class="agent-role">Orchestrator</div>
+        <div class="agent-name">CoordinatorAgent</div>
+        <ul class="tool-list">
+          <li class="tool-item">db_read(block_id)</li>
+          <li class="tool-item">dispatch_agents()</li>
+          <li class="tool-item">aggregate_signals()</li>
+          <li class="tool-item">score_feasibility()</li>
+          <li class="tool-item">generate_narrative(llm)</li>
+          <li class="tool-item">db_write(gold)</li>
+        </ul>
+        <div class="interrupt-label">⏸ final profile approval</div>
+      </div>
+
+      <div class="agent-card zoning">
+        <div class="agent-role">Specialist · Zoning</div>
+        <div class="agent-name">ZoningAgent</div>
+        <ul class="tool-list">
+          <li class="tool-item">gis_parcel_lookup(geometry)</li>
+          <li class="tool-item">classify_zoning(code, rec_type)</li>
+          <li class="tool-item">web_search(ordinance query)</li>
+          <li class="tool-item">db_read(zoning_raw)</li>
+          <li class="tool-item">db_write(zoning_signals)</li>
+        </ul>
+        <div class="interrupt-label">⏸ confirm parcel mapping</div>
+      </div>
+
+      <div class="agent-card funding">
+        <div class="agent-role">Specialist · Funding</div>
+        <div class="agent-name">FundingAgent</div>
+        <ul class="tool-list">
+          <li class="tool-item">web_search(grants query)</li>
+          <li class="tool-item">fetch_document(url)</li>
+          <li class="tool-item">arcgis_zone_check(geometry)</li>
+          <li class="tool-item">extract_eligibility(text, llm)</li>
+          <li class="tool-item">db_read(funding_raw)</li>
+          <li class="tool-item">db_write(funding_signals)</li>
+        </ul>
+        <div class="interrupt-label">⏸ review matched programs</div>
+      </div>
+
+      <div class="agent-card policy">
+        <div class="agent-role">Specialist · Policy</div>
+        <div class="agent-name">PolicyAgent</div>
+        <ul class="tool-list">
+          <li class="tool-item">web_search(policy query)</li>
+          <li class="tool-item">fetch_pdf(url)</li>
+          <li class="tool-item">chunk_and_embed(text)</li>
+          <li class="tool-item">extract_signals(chunks, llm)</li>
+          <li class="tool-item">db_read(policies_raw)</li>
+          <li class="tool-item">db_write(policy_signals)</li>
+        </ul>
+        <div class="interrupt-label">⏸ review signal confidence</div>
+      </div>
+
+      <div class="agent-card scorer">
+        <div class="agent-role">Scorer</div>
+        <div class="agent-name">FeasibilityScorer</div>
+        <ul class="tool-list">
+          <li class="tool-item">score_funding(signals)</li>
+          <li class="tool-item">score_zoning(signals)</li>
+          <li class="tool-item">score_policy(signals)</li>
+          <li class="tool-item">composite_score(weights)</li>
+          <li class="tool-item">rank_actions(signals)</li>
+        </ul>
+        <div class="interrupt-label" style="color:var(--bronze);background:rgba(192,122,58,.1);border-color:rgba(192,122,58,.3)">▸ no interrupt — pure compute</div>
+      </div>
+
+    </div>
+
+    <!-- Workflow walkthrough for Funding Agent -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:36px 0 8px;letter-spacing:-.01em">Example Workflow — Funding Agent</h3>
+    <p class="section-body" style="margin-bottom:20px">The same interrupt/approve/resume pattern applies to all three specialist agents. Here it is walked through for the Funding Agent as the reference implementation.</p>
+
+    <div class="workflow-steps">
+
+      <div class="workflow-step">
+        <div class="step-spine">
+          <div class="step-dot start">→</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Receive task</div>
+          <div class="step-desc">Orchestrator dispatches <code>block_id</code>, <code>rec_features</code>, and <code>geo_context</code> (census tract, county FIPS, spatial flags). Agent initialises LangGraph state.</div>
+          <div class="step-tools">
+            <span class="step-tool">StateGraph init</span>
+            <span class="step-tool">MemorySaver checkpoint</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-step">
+        <div class="step-spine">
+          <div class="step-dot">1</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Search funding programs</div>
+          <div class="step-desc">Web search + ArcGIS API calls for programs matching the recommendation type and geography. Pulls EPA Brownfields, HUD CDBG, MD Program Open Space, NMTC eligibility.</div>
+          <div class="step-tools">
+            <span class="step-tool">web_search()</span>
+            <span class="step-tool">arcgis_zone_check()</span>
+            <span class="step-tool">db_read(funding_raw)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-step">
+        <div class="step-spine">
+          <div class="step-dot">2</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Fetch &amp; extract eligibility</div>
+          <div class="step-desc">Downloads grant documents and policy pages. LLM extracts eligibility criteria, award amounts, deadlines, and geographic constraints into structured fields.</div>
+          <div class="step-tools">
+            <span class="step-tool">fetch_document()</span>
+            <span class="step-tool">extract_eligibility(llm)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-step">
+        <div class="step-spine">
+          <div class="step-dot interrupt">⏸</div>
+          <div class="step-line interrupt"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title" style="color:#F59E0B">Interrupt — User reviews matched programs</div>
+          <div class="step-desc">Graph pauses. Frontend shows the candidate funding matches with confidence scores and source links. User can approve, reject individual programs, or add a manual override. Graph state is checkpointed — resume picks up exactly here.</div>
+          <div class="step-tools">
+            <span class="step-tool" style="border-color:rgba(245,158,11,.4);color:#F59E0B">interrupt_before(review_node)</span>
+            <span class="step-tool" style="border-color:rgba(245,158,11,.4);color:#F59E0B">human_feedback: approve | reject | override</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-step">
+        <div class="step-spine">
+          <div class="step-dot">3</div>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Apply user feedback</div>
+          <div class="step-desc">Approved programs are retained. Rejected ones are flagged with reason. Manual overrides are merged in. Confidence scores are adjusted based on user signal.</div>
+          <div class="step-tools">
+            <span class="step-tool">merge_feedback(state)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-step">
+        <div class="step-spine">
+          <div class="step-dot end">✓</div>
+          <div class="step-line" style="opacity:0"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title">Write to silver table</div>
+          <div class="step-desc">Approved funding signals written to <code>funding_signals</code>. Agent emits completion event to orchestrator. Bronze raw records written first if not already present.</div>
+          <div class="step-tools">
+            <span class="step-tool">db_write(funding_signals)</span>
+            <span class="step-tool">emit: agent_complete</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- State schema -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 12px;letter-spacing:-.01em">LangGraph State Schema</h3>
+    <p class="section-body" style="margin-bottom:16px">Each agent carries its own typed state object. The orchestrator state wraps all three agent outputs.</p>
+
+    <div class="layer-stack">
+      <div class="layer-card app open">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge" style="background:var(--app-dim);color:var(--app)">State</span>
+          <span class="layer-card-title">OrchestratorState</span>
+          <span class="layer-card-desc">Top-level graph state — wraps all agent outputs</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>block_id</code></td><td>str</td><td>Input — stays immutable throughout</td></tr>
+                <tr><td class="field-name"><code>rec_features</code></td><td>list[str]</td><td>Recommendation labels for this block</td></tr>
+                <tr><td class="field-name"><code>geo_context</code></td><td>GeoContext</td><td>Census tract, county FIPS, spatial flags</td></tr>
+                <tr><td class="field-name"><code>zoning_result</code></td><td>ZoningResult | None</td><td>Set by ZoningAgent on completion</td></tr>
+                <tr><td class="field-name"><code>funding_result</code></td><td>FundingResult | None</td><td>Set by FundingAgent on completion</td></tr>
+                <tr><td class="field-name"><code>policy_result</code></td><td>PolicyResult | None</td><td>Set by PolicyAgent on completion</td></tr>
+                <tr><td class="field-name"><code>feasibility_score</code></td><td>float | None</td><td>Set by FeasibilityScorer</td></tr>
+                <tr><td class="field-name"><code>top_actions</code></td><td>list[str]</td><td>Ranked action list</td></tr>
+                <tr><td class="field-name"><code>user_approval</code></td><td>Approval | None</td><td>Final human sign-off</td></tr>
+                <tr><td class="field-name"><code>status</code></td><td>str</td><td>running | awaiting_human | approved | written</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="layer-card app">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge" style="background:var(--app-dim);color:var(--app)">State</span>
+          <span class="layer-card-title">FundingAgentState</span>
+          <span class="layer-card-desc">Internal state for FundingAgent subgraph</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>block_id</code></td><td>str</td><td></td></tr>
+                <tr><td class="field-name"><code>rec_features</code></td><td>list[str]</td><td></td></tr>
+                <tr><td class="field-name"><code>geo_context</code></td><td>GeoContext</td><td></td></tr>
+                <tr><td class="field-name"><code>candidate_programs</code></td><td>list[FundingProgram]</td><td>Raw search results before user review</td></tr>
+                <tr><td class="field-name"><code>approved_programs</code></td><td>list[FundingProgram]</td><td>Post-approval subset</td></tr>
+                <tr><td class="field-name"><code>rejected_ids</code></td><td>list[str]</td><td>User-rejected program IDs with reasons</td></tr>
+                <tr><td class="field-name"><code>manual_overrides</code></td><td>list[FundingProgram]</td><td>User-added programs not found by search</td></tr>
+                <tr><td class="field-name"><code>messages</code></td><td>list[AnyMessage]</td><td>LLM message history (LangGraph standard)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <hr>
+
+  <!-- Code Design -->
+  <section class="section" id="codedesign">
+    <div class="section-label">11 · Code Design</div>
+    <h2 class="section-title">Design Principles &amp; Patterns</h2>
+    <p class="section-body">LangGraph and the code design patterns are two separate layers — LangGraph controls how the workflow runs, the patterns control what lives inside each node. They don't compete; they stack. This layering is also what makes parallel development between two teammates clean.</p>
+
+    <!-- Two-layer mental model -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:0 0 14px;letter-spacing:-.01em">The Two-Layer Mental Model</h3>
+
+    <div class="layer-model">
+      <div class="layer-model-row" style="border-color:var(--accent)">
+        <div class="layer-model-header" style="background:var(--accent-dim)">
+          <span class="layer-model-badge" style="background:rgba(32,197,181,.15);color:var(--accent);border:1px solid rgba(32,197,181,.3)">LangGraph Layer</span>
+          <span class="layer-model-title">Workflow orchestration</span>
+          <span class="layer-model-desc">StateGraph · nodes · edges · checkpoints · interrupt/resume · parallel fan-out</span>
+        </div>
+      </div>
+
+      <div class="layer-model-connector">each node calls ↓</div>
+
+      <div class="layer-model-row" style="border-color:var(--gold)">
+        <div class="layer-model-header" style="background:var(--gold-dim)">
+          <span class="layer-model-badge" style="background:rgba(221,169,32,.15);color:var(--gold);border:1px solid rgba(221,169,32,.3)">Code Design Layer</span>
+          <span class="layer-model-title">What lives inside each node</span>
+          <span class="layer-model-desc">Repository · ABC · Pydantic models · Dependency injection</span>
+        </div>
+      </div>
+
+      <div class="layer-model-connector">reads and writes ↓</div>
+
+      <div class="layer-model-row" style="border-color:var(--silver)">
+        <div class="layer-model-header" style="background:var(--silver-dim)">
+          <span class="layer-model-badge" style="background:rgba(90,136,173,.15);color:var(--silver);border:1px solid rgba(90,136,173,.3)">Data Layer</span>
+          <span class="layer-model-title">Supabase (PostgreSQL + pgvector)</span>
+          <span class="layer-model-desc">Bronze · Silver · Gold tables · geo_lookup · vector embeddings</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Key insight:</strong> A LangGraph node is just a Python function. The design patterns govern what that function looks like inside — clean, testable, independently developable. LangGraph never cares about your repositories or ABCs. Your agent code never cares about graph state transitions.
+    </div>
+
+    <!-- Patterns -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">Patterns Applied</h3>
+
+    <div class="pattern-grid">
+      <div class="pattern-card">
+        <div class="pattern-name">Repository Pattern</div>
+        <div class="pattern-applies">agents → DB</div>
+        <div class="pattern-desc">Every table gets a Repository class. Agents never write SQL directly. Swap the real DB for a mock in tests without touching agent logic.</div>
+      </div>
+      <div class="pattern-card">
+        <div class="pattern-name">Abstract Base Class</div>
+        <div class="pattern-applies">agent contract</div>
+        <div class="pattern-desc">All specialist agents implement one ABC: <code>run()</code>, <code>get_pending_review()</code>, <code>apply_feedback()</code>. Orchestrator dispatches to any agent without knowing which one.</div>
+      </div>
+      <div class="pattern-card">
+        <div class="pattern-name">Dependency Injection</div>
+        <div class="pattern-applies">tools → agents</div>
+        <div class="pattern-desc">Tools (web search, GIS, LLM) are injected into agents, not hardcoded. FastAPI's <code>Depends()</code> wires everything at request time. Easy to swap in mocks for testing.</div>
+      </div>
+      <div class="pattern-card">
+        <div class="pattern-name">Pydantic Models</div>
+        <div class="pattern-applies">layer contracts</div>
+        <div class="pattern-desc">Every table has a corresponding Pydantic model. These are the shared contracts between agents and the DB. If the schema changes, both sides know at import time — not at runtime.</div>
+      </div>
+      <div class="pattern-card">
+        <div class="pattern-name">Upsert / Idempotency</div>
+        <div class="pattern-applies">DB writes</div>
+        <div class="pattern-desc">All agent writes use <code>INSERT ... ON CONFLICT DO UPDATE</code>. Safe to re-run any agent — no duplicate rows, no partial state. Agents are stateless between runs.</div>
+      </div>
+      <div class="pattern-card">
+        <div class="pattern-name">Read Model (Gold)</div>
+        <div class="pattern-applies">gold layer</div>
+        <div class="pattern-desc">Specialist agents write only to their own silver table. The gold layer is assembled exclusively by the Orchestrator. Gold is read-only from any agent's perspective.</div>
+      </div>
+    </div>
+
+    <!-- How it connects to LangGraph -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">How a LangGraph Node Uses These Patterns</h3>
+
+    <div class="code-block">
+      <div class="code-block-label">
+        <span class="code-block-filename">agents/funding.py</span>
+        <span class="code-block-tag">LangGraph node + Repository + DI</span>
+      </div>
+      <pre class="code"><span class="c-cm"># ── LangGraph node function ───────────────────────────────────</span>
+<span class="c-kw">async def</span> <span class="c-fn">search_funding_node</span>(state: <span class="c-tp">FundingAgentState</span>) -> <span class="c-tp">dict</span>:
+    <span class="c-cm"># agent injected via FastAPI Depends() — no hardcoded tools</span>
+    signals = <span class="c-kw">await</span> state.agent.<span class="c-fn">search</span>(
+        block_id = state.block_id,
+        features = state.rec_features,
+        geo      = state.geo_context,
+    )
+    <span class="c-kw">return</span> {<span class="c-str">"candidate_programs"</span>: signals}
+
+
+<span class="c-cm"># ── LangGraph wires nodes — knows nothing about repositories ──</span>
+graph = <span class="c-fn">StateGraph</span>(<span class="c-tp">FundingAgentState</span>)
+graph.<span class="c-fn">add_node</span>(<span class="c-str">"search"</span>,  search_funding_node)
+graph.<span class="c-fn">add_node</span>(<span class="c-str">"review"</span>,  review_node)         <span class="c-cm"># interrupt here</span>
+graph.<span class="c-fn">add_node</span>(<span class="c-str">"write"</span>,   write_signals_node)  <span class="c-cm"># repo.upsert()</span>
+graph.<span class="c-fn">add_edge</span>(<span class="c-str">"search"</span>,  <span class="c-str">"review"</span>)
+graph.<span class="c-fn">add_edge</span>(<span class="c-str">"review"</span>,  <span class="c-str">"write"</span>)
+graph.<span class="c-fn">compile</span>(interrupt_before=[<span class="c-str">"review"</span>], checkpointer=<span class="c-fn">MemorySaver</span>())</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-label">
+        <span class="code-block-filename">agents/base.py</span>
+        <span class="code-block-tag">ABC — shared contract for all specialist agents</span>
+      </div>
+      <pre class="code"><span class="c-kw">from</span> abc <span class="c-kw">import</span> ABC, abstractmethod
+
+<span class="c-kw">class</span> <span class="c-cl">SpecialistAgent</span>(ABC):
+
+    <span class="c-dec">@abstractmethod</span>
+    <span class="c-kw">async def</span> <span class="c-fn">run</span>(<span class="c-kw">self</span>, block_id: <span class="c-tp">str</span>, ctx: <span class="c-tp">BlockContext</span>) -> <span class="c-tp">AgentResult</span>: ...
+
+    <span class="c-dec">@abstractmethod</span>
+    <span class="c-kw">async def</span> <span class="c-fn">get_pending_review</span>(<span class="c-kw">self</span>, thread_id: <span class="c-tp">str</span>) -> <span class="c-tp">ReviewPayload</span>: ...
+
+    <span class="c-dec">@abstractmethod</span>
+    <span class="c-kw">async def</span> <span class="c-fn">apply_feedback</span>(<span class="c-kw">self</span>, thread_id: <span class="c-tp">str</span>, fb: <span class="c-tp">UserFeedback</span>) -> <span class="c-tp">None</span>: ...
+
+
+<span class="c-cm"># Orchestrator dispatches to any agent — never imports FundingAgent directly</span>
+<span class="c-kw">class</span> <span class="c-cl">OrchestratorAgent</span>:
+    <span class="c-kw">def</span> <span class="c-fn">__init__</span>(<span class="c-kw">self</span>, specialists: <span class="c-tp">list</span>[<span class="c-tp">SpecialistAgent</span>]):
+        <span class="c-kw">self</span>.specialists = specialists
+
+    <span class="c-kw">async def</span> <span class="c-fn">run_all</span>(<span class="c-kw">self</span>, block_id: <span class="c-tp">str</span>, ctx: <span class="c-tp">BlockContext</span>):
+        <span class="c-kw">return await</span> asyncio.<span class="c-fn">gather</span>(*[
+            agent.<span class="c-fn">run</span>(block_id, ctx) <span class="c-kw">for</span> agent <span class="c-kw">in</span> <span class="c-kw">self</span>.specialists
+        ])</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-label">
+        <span class="code-block-filename">repositories/funding.py</span>
+        <span class="code-block-tag">Repository — agents never write SQL directly</span>
+      </div>
+      <pre class="code"><span class="c-kw">class</span> <span class="c-cl">FundingRepository</span>(<span class="c-cl">BaseRepository</span>):
+
+    <span class="c-kw">async def</span> <span class="c-fn">upsert</span>(<span class="c-kw">self</span>, signal: <span class="c-tp">FundingSignal</span>) -> <span class="c-tp">None</span>:
+        <span class="c-cm"># INSERT INTO funding_signals ... ON CONFLICT (funding_id) DO UPDATE</span>
+        <span class="c-kw">await</span> <span class="c-kw">self</span>.session.<span class="c-fn">execute</span>(<span class="c-fn">insert</span>(<span class="c-tp">FundingSignalORM</span>)
+            .<span class="c-fn">values</span>(**signal.<span class="c-fn">model_dump</span>())
+            .<span class="c-fn">on_conflict_do_update</span>(
+                index_elements=[<span class="c-str">"funding_id"</span>],
+                set_=signal.<span class="c-fn">model_dump</span>(exclude={<span class="c-str">"funding_id"</span>})
+            ))
+
+    <span class="c-kw">async def</span> <span class="c-fn">get_by_block</span>(<span class="c-kw">self</span>, block_id: <span class="c-tp">str</span>) -> <span class="c-tp">list</span>[<span class="c-tp">FundingSignal</span>]:
+        rows = <span class="c-kw">await</span> <span class="c-kw">self</span>.session.<span class="c-fn">execute</span>(
+            <span class="c-fn">select</span>(<span class="c-tp">FundingSignalORM</span>).<span class="c-fn">where</span>(<span class="c-tp">FundingSignalORM</span>.block_id == block_id)
+        )
+        <span class="c-kw">return</span> [<span class="c-tp">FundingSignal</span>.<span class="c-fn">model_validate</span>(r) <span class="c-kw">for</span> r <span class="c-kw">in</span> rows.<span class="c-fn">scalars</span>()]</pre>
+    </div>
+
+    <!-- Folder structure -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">Project Structure &amp; Team Ownership</h3>
+    <p class="section-body" style="margin-bottom:16px">The folder boundaries map directly to who owns what. The only shared files that both teammates must agree on upfront are <code>agents/base.py</code> and everything in <code>models/</code> — these are the contracts.</p>
+
+    <div class="folder-tree">
+<span class="tree-dir">backend/</span>
+├── <span class="tree-dir">agents/</span>
+│   ├── <span class="tree-file">base.py</span>         <span class="tree-shared">← shared contract (ABC) — agree upfront</span>
+│   ├── <span class="tree-file">orchestrator.py</span> <span class="tree-owner">← person A</span>
+│   ├── <span class="tree-file">funding.py</span>      <span class="tree-owner">← person A</span>
+│   ├── <span class="tree-file">zoning.py</span>       <span class="tree-note">← person B</span>
+│   └── <span class="tree-file">policy.py</span>       <span class="tree-note">← person B</span>
+├── <span class="tree-dir">repositories/</span>
+│   ├── <span class="tree-file">base.py</span>         <span class="tree-shared">← shared BaseRepository</span>
+│   ├── <span class="tree-file">funding.py</span>      <span class="tree-owner">← person A</span>
+│   ├── <span class="tree-file">zoning.py</span>       <span class="tree-note">← person B</span>
+│   ├── <span class="tree-file">policy.py</span>       <span class="tree-note">← person B</span>
+│   └── <span class="tree-file">gold.py</span>         <span class="tree-owner">← person A</span>
+├── <span class="tree-dir">models/</span>          <span class="tree-shared">← ALL shared — agree on schemas first</span>
+│   ├── <span class="tree-file">funding.py</span>
+│   ├── <span class="tree-file">zoning.py</span>
+│   ├── <span class="tree-file">policy.py</span>
+│   └── <span class="tree-file">gold.py</span>
+├── <span class="tree-dir">tools/</span>           <span class="tree-shared">← shared utilities</span>
+│   ├── <span class="tree-file">web_search.py</span>
+│   ├── <span class="tree-file">gis.py</span>
+│   └── <span class="tree-file">llm_extractor.py</span>
+├── <span class="tree-dir">api/</span>
+│   ├── <span class="tree-file">blocks.py</span>       <span class="tree-owner">← person A</span>
+│   └── <span class="tree-file">threads.py</span>      <span class="tree-owner">← person A</span>
+└── <span class="tree-dir">db/</span>
+    ├── <span class="tree-file">session.py</span>      <span class="tree-shared">← shared</span>
+    └── <span class="tree-dir">migrations/</span>     <span class="tree-shared">← shared (Alembic)</span>
+
+<span class="tree-dir">frontend/</span>          <span class="tree-note">← person B (React + Vercel)</span>
+    </div>
+
+    <div class="callout" style="margin-top:20px">
+      <strong>How parallel dev works in practice:</strong> Lock <code>models/</code> and <code>agents/base.py</code> in week 1 — these are the contracts. After that, Person A and Person B work in completely separate files. The only merge conflicts will be on <code>db/migrations/</code> when you both add new tables, which Alembic handles cleanly.
+    </div>
+
+  </section>
+
+  <hr>
+
+  <!-- Key Technical Decisions -->
+  <section class="section" id="decisions">
+    <div class="section-label">12 · Key Technical Decisions</div>
+    <h2 class="section-title">Decisions Log</h2>
+    <p class="section-body">A running record of the architectural and tooling choices made during project design, with the rationale behind each. Locked decisions are committed; open items still need confirmation.</p>
+
+    <div class="table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:32px">
+      <table class="decision-table">
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>Decision</th>
+            <th>Rationale</th>
+            <th>Cost</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <tr>
+            <td class="decision-area">Language</td>
+            <td><span class="decision-choice">Python</span></td>
+            <td class="decision-rationale">Entire AI/ML ecosystem (LangGraph, LLM SDKs, GeoPandas, SQLAlchemy) is Python-native. No context switching.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Backend framework</td>
+            <td><span class="decision-choice">FastAPI</span></td>
+            <td class="decision-rationale">Async-native, auto-generates OpenAPI docs (frontend contract), streaming responses for LLM output, plays well with LangGraph background tasks.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Agent framework</td>
+            <td><span class="decision-choice">LangGraph</span></td>
+            <td class="decision-rationale">Built-in <code>interrupt_before/after</code> and <code>MemorySaver</code> checkpointing make human-in-the-loop a first-class pattern. Parallel subgraph execution for fan-out to 3 specialist agents.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">LLM API</td>
+            <td><span class="decision-choice">Personal credits</span></td>
+            <td class="decision-rationale">Used for NLP extraction (policy docs → structured signals), eligibility parsing, feasibility narrative generation, and RAG Q&A. Estimated ~$20–50 for full semester on 43 blocks.</td>
+            <td class="decision-cost cost-owned">owned</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Database</td>
+            <td><span class="decision-choice">Supabase (PostgreSQL + PostGIS + pgvector)</span></td>
+            <td class="decision-rationale">Single hosted DB covers relational tables (bronze/silver/gold), spatial joins (PostGIS for GIS layer queries), and vector embeddings (pgvector for RAG). No Docker needed. Both teammates share one instance — better for collaboration than local DBs.</td>
+            <td class="decision-cost cost-free">free tier</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Vector store</td>
+            <td><span class="decision-choice">pgvector on Supabase</span></td>
+            <td class="decision-rationale">Avoids running a separate Chroma or Pinecone instance. One connection string for all data. Sufficient for prototype scale (43 blocks, ~10 source docs).</td>
+            <td class="decision-cost cost-free">free tier</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Frontend</td>
+            <td><span class="decision-choice">React + Vercel</span></td>
+            <td class="decision-rationale">React for map view (Leaflet or Mapbox), block panel, and chat interface. Vercel for zero-config deployment from GitHub — shareable URL for sponsor demos.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Backend hosting</td>
+            <td><span class="decision-choice">Railway</span></td>
+            <td class="decision-rationale">FastAPI needs a always-on host for demo sessions — free tiers spin down and kill live demos. Railway stays up for ~$7–10/month. Only needed from October onward.</td>
+            <td class="decision-cost cost-low">~$15 total</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Local dev</td>
+            <td><span class="decision-choice">Native Python, no Docker</span></td>
+            <td class="decision-rationale">Work machine restricts Docker. Supabase eliminates the need for a local DB container. FastAPI and agents run directly with <code>uvicorn</code>. Node.js for React to be confirmed.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Collaboration</td>
+            <td><span class="decision-choice">GitHub private repo</span></td>
+            <td class="decision-rationale">2-person team. Split: backend/agents (person A) and frontend (person B). FastAPI's auto-generated OpenAPI spec acts as the interface contract. Shared Supabase instance means no data sync issues.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Pilot geography</td>
+            <td><span class="decision-choice">Bowie, MD</span></td>
+            <td class="decision-rationale">Rec summary data already provided (43 blocks). Philadelphia is the broader SoP dataset but Bowie has the concrete recommendation CSVs needed to build and test the implementation layer. Expand to Philly post-midterm.</td>
+            <td class="decision-cost cost-free">—</td>
+            <td><span class="decision-status status-confirm">? confirm w/ sponsor</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Anchor rec type</td>
+            <td><span class="decision-choice">Public Garden / Parks</span></td>
+            <td class="decision-rationale">Appears on 39/43 blocks — broadest coverage. Exercises all three buckets (funding: EPA/CDBG/POS; zoning: land use change; policy: health ordinances, master plan). Best signal-to-effort ratio for prototype.</td>
+            <td class="decision-cost cost-free">—</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">First data source</td>
+            <td><span class="decision-choice">EPA Brownfields</span></td>
+            <td class="decision-rationale">Clean federal API, spatially tagged, updated annually. Directly relevant to park recs (contaminated sites → green space). Good first ingestion target to validate the bronze → silver pipeline.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
+
+          <tr>
+            <td class="decision-area">Feasibility weights</td>
+            <td><span class="decision-choice">0.40 funding / 0.35 zoning / 0.25 policy</span></td>
+            <td class="decision-rationale">Funding weighted highest — it's the most binary constraint (money exists or it doesn't). Weights are config-driven, not hardcoded, so they can be tuned per rec type or city without a code change.</td>
+            <td class="decision-cost cost-free">—</td>
+            <td><span class="decision-status status-open">~ to be validated</span></td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Open questions -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:0 0 12px;letter-spacing:-.01em">Open Questions</h3>
+
+    <div class="open-q-list">
+      <div class="open-q">
+        <div class="open-q-num">Q1</div>
+        <div class="open-q-text"><strong>Target geography:</strong> Should the prototype target Bowie (data already in hand) or Philadelphia (primary SoP dataset, ~8,000 blocks)? Or Bowie to prototype, Philadelphia to scale? <em>Needs sponsor confirmation from Mariela.</em></div>
+      </div>
+      <div class="open-q">
+        <div class="open-q-num">Q2</div>
+        <div class="open-q-text"><strong>Node.js availability:</strong> Is Node.js installable on the work machine? Determines whether React dev can happen on the work machine or requires the home machine.</div>
+      </div>
+      <div class="open-q">
+        <div class="open-q-num">Q3</div>
+        <div class="open-q-text"><strong>Feasibility score weights:</strong> The 0.40 / 0.35 / 0.25 split is a starting assumption. Needs validation against real block data once the pipeline is running — may differ by recommendation type.</div>
+      </div>
+      <div class="open-q">
+        <div class="open-q-num">Q4</div>
+        <div class="open-q-text"><strong>Team split:</strong> Confirm which teammate owns backend/agents vs frontend. OpenAPI spec becomes the interface contract once the split is agreed.</div>
+      </div>
+    </div>
+
+  </section>
+
+  <hr>
+
+  <!-- Evaluation Strategy -->
+  <section class="section" id="evaluation">
+    <div class="section-label">13 · Evaluation Strategy</div>
+    <h2 class="section-title">Demonstrating Technical Accuracy</h2>
+    <p class="section-body">Accuracy here is not a traditional ML metric — it's closer to <strong>retrieval precision</strong>. The question is: when the system says a funding opportunity or zoning constraint applies to a block, is that true? Three complementary approaches address this, and the third is already baked into the architecture.</p>
+
+    <div class="eval-grid">
+
+      <div class="eval-card">
+        <div class="eval-card-top">
+          <span class="eval-number" style="color:var(--silver)">01</span>
+          <div class="eval-card-titles">
+            <div class="eval-method" style="color:var(--silver)">Manual Spot-Check</div>
+            <div class="eval-name">Gold Standard Eval Set</div>
+          </div>
+        </div>
+        <div class="eval-desc">Pick 5 Bowie blocks. Manually research what funding, zoning, and policy actually applies to each. Compare to what the system produces. Report precision: <em>"System correctly identified X of Y funding opportunities."</em></div>
+        <span class="eval-tag" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">Simple · High credibility · Do in DISCOVER phase</span>
+      </div>
+
+      <div class="eval-card">
+        <div class="eval-card-top">
+          <span class="eval-number" style="color:var(--gold)">02</span>
+          <div class="eval-card-titles">
+            <div class="eval-method" style="color:var(--gold)">LLM-as-Judge</div>
+            <div class="eval-name">Faithfulness Evaluation</div>
+          </div>
+        </div>
+        <div class="eval-desc">A second LLM call evaluates whether each extracted signal is faithful to the source document. Ask: <em>"Does this extracted eligibility claim appear in this grant document?"</em> Returns a faithfulness score per signal. Scalable — runs automatically on all 43 blocks.</div>
+        <span class="eval-tag" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">Scalable · Increasingly accepted in AI evals</span>
+      </div>
+
+      <div class="eval-card">
+        <div class="eval-card-top">
+          <span class="eval-number" style="color:var(--accent)">03</span>
+          <div class="eval-card-titles">
+            <div class="eval-method" style="color:var(--accent)">Self-Reporting</div>
+            <div class="eval-name">Confidence + Provenance</div>
+          </div>
+        </div>
+        <div class="eval-desc">Already built in. Every silver signal carries a <code>confidence</code> score (0–1) and an <code>extracted_text</code> field linking back to the source. The system is honest about what it doesn't know. Low-confidence signals are surfaced as such in the frontend — accuracy is communicated, not hidden.</div>
+        <span class="eval-tag" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Already in schema · Zero extra work</span>
+      </div>
+
+    </div>
+
+    <div class="callout">
+      <strong>Scalability is argued architecturally, not demonstrated at scale.</strong> Agents run in parallel (LangGraph fan-out), deploy independently, and are config-driven per geography. Swapping Bowie for Philadelphia requires one config change, not a code rewrite. The architecture doc is the scalability evidence — no need to run all 8,000 Philadelphia blocks in a demo.
+    </div>
+
+    <!-- End of semester demo checklist -->
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">End-of-Semester Demo Checklist</h3>
+    <p class="section-body" style="margin-bottom:16px">Every item the sponsor's kickoff deck listed as the ideal final demo — mapped to how our system delivers it.</p>
+
+    <div class="demo-checklist">
+      <div class="demo-checklist-header">Ideal Demo Requirements · Kickoff Deck</div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Retrieves real public implementation data</strong> — EPA Brownfields API, HUD CDBG, PG County GIS, MD Program Open Space. Live data, not mocked.</span>
+        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">FundingAgent · ZoningAgent</span>
+      </div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Converts it into structured recommendation signals</strong> — silver tables with typed Pydantic schemas. LLM extracts unstructured → structured fields.</span>
+        <span class="check-badge" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">Bronze → Silver pipeline</span>
+      </div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Connects those signals to relevant SoP data/recommendations</strong> — geo_lookup spatial join links every signal to its Bowie block. Gold layer joins to Bowie rec data via block_id.</span>
+        <span class="check-badge" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">geo_lookup · Gold layer</span>
+      </div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Uses them to inform priority, feasibility, effort, and timing</strong> — feasibility score (0–100), effort_estimate, timing_context all in the gold layer. Score re-ranks blocks by actionability.</span>
+        <span class="check-badge" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">Gold layer schema</span>
+      </div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Generates concrete implementation actions</strong> — top_actions field with specific, sourced next steps. e.g. "Apply for EPA Brownfield Assessment Grant by Mar 2025 — this block is eligible."</span>
+        <span class="check-badge" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">top_actions · Orchestrator</span>
+      </div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Allows users to query in natural language</strong> — ChatPanel + RAG over pgvector. "What can we implement in 12 months?" returns grounded answers from the gold layer.</span>
+        <span class="check-badge" style="background:var(--app-dim);color:var(--app);border:1px solid rgba(139,130,232,.2)">ChatPanel · POST /chat</span>
+      </div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Demonstrates technical accuracy</strong> — confidence + provenance on every signal (self-reporting), manual spot-check on 5 blocks (gold standard), optional LLM-as-judge for faithfulness scoring.</span>
+        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Eval strategy · Section 13</span>
+      </div>
+
+      <div class="demo-checklist-item">
+        <span class="check-icon">✅</span>
+        <span class="check-text"><strong>Demonstrates scalability</strong> — agents run in parallel, deploy independently, config-driven per geography. Bowie → Philadelphia = one config change. Architecture is the evidence.</span>
+        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Architecture doc · Section 09</span>
+      </div>
+
+    </div>
+  </section>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"></script>
+<script>
+  function toggleCard(header) {
+    const card = header.closest('.layer-card');
+    card.classList.toggle('open');
+  }
+
+  // Detect theme and init Mermaid accordingly
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const rootTheme = document.documentElement.getAttribute('data-theme');
+  const isDark = rootTheme === 'dark' || (!rootTheme && prefersDark);
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: isDark ? {
+      primaryColor:       '#192A3E',
+      primaryTextColor:   '#D8E8F4',
+      primaryBorderColor: '#1F3248',
+      lineColor:          '#3D5E7A',
+      secondaryColor:     '#131F30',
+      tertiaryColor:      '#0E1826',
+      background:         '#131F30',
+      mainBkg:            '#192A3E',
+      nodeBorder:         '#3D5E7A',
+      clusterBkg:         '#0E1826',
+      titleColor:         '#D8E8F4',
+      edgeLabelBackground:'#131F30',
+      fontFamily:         'JetBrains Mono, monospace',
+      fontSize:           '13px'
+    } : {
+      primaryColor:       '#EBF2F8',
+      primaryTextColor:   '#1A2B3C',
+      primaryBorderColor: '#D2DCEB',
+      lineColor:          '#5A7A96',
+      secondaryColor:     '#F4F7FB',
+      tertiaryColor:      '#F0F4FA',
+      background:         '#FFFFFF',
+      mainBkg:            '#EBF2F8',
+      nodeBorder:         '#D2DCEB',
+      clusterBkg:         '#F4F7FB',
+      titleColor:         '#1A2B3C',
+      edgeLabelBackground:'#FFFFFF',
+      fontFamily:         'JetBrains Mono, monospace',
+      fontSize:           '13px'
+    }
+  });
+</script>
