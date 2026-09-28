@@ -2,13 +2,24 @@
 FundingAgent — full LangGraph implementation.
 
 Graph flow:
-  START → load_block → search_funding → extract_eligibility
+  START → load_block → gather_signals → assess_relevance
         → [INTERRUPT for human review]
         → apply_feedback → write_signals → END
+
+Two-stage design, which is the point of this agent:
+
+  1. gather_signals makes *determinations* — facts with a citable source. Candidate
+     programs come from the funding_programs table (synced from Grants.gov plus a
+     curated state/local catalog); eligibility comes from a rule (CDBG income
+     threshold) or a published dataset (NMTC tract designation).
+  2. assess_relevance asks the LLM to rank and explain those candidates, given the
+     determinations as established facts.
+
+The model is never asked whether a tract qualifies for NMTC — that is knowable, and
+an earlier version of this pipeline had it guessing from income. Everything here
+reads from Supabase, so no third-party API is on the demo path.
 """
 
-import json
-import uuid
 from typing import TypedDict, Optional
 
 from langgraph.graph import StateGraph, START, END
@@ -19,11 +30,11 @@ from backend.agents.base import SpecialistAgent
 from backend.db.session import get_supabase
 from backend.repositories.recommendations import BlockRepository
 from backend.repositories.funding import FundingRepository
-from backend.tools.epa_brownfields import (
-    get_ejscreen_data,
-    check_cdbg_eligibility,
-    get_brownfields_programs_for_park,
+from backend.repositories.funding_programs import (
+    FundingProgramRepository,
+    TractEligibilityRepository,
 )
+from backend.tools.cdbg import check_cdbg_eligibility
 from backend.tools.llm_extractor import extract_funding_eligibility
 
 
@@ -32,14 +43,13 @@ from backend.tools.llm_extractor import extract_funding_eligibility
 class FundingState(TypedDict):
     block_id: int
     thread_id: str
-    block_data: dict                # from blocks table
-    top_recs: list[str]             # human-readable rec labels
-    ejscreen_data: dict
-    cdbg_check: dict
-    raw_programs: list[dict]        # from get_brownfields_programs_for_park
-    assessed_signals: list[dict]    # after LLM eligibility assessment
-    human_feedback: Optional[str]   # set after interrupt
-    final_signals: list[dict]       # signals to write to DB
+    block_data: dict                 # from blocks table
+    top_recs: list[str]              # human-readable rec labels
+    determinations: dict             # designation_key -> verdict + provenance
+    candidate_programs: list[dict]   # rows from funding_programs
+    assessed_signals: list[dict]     # after LLM relevance assessment
+    human_feedback: Optional[str]    # set after interrupt
+    final_signals: list[dict]        # signals to write to DB
     written_signal_ids: list[int]
 
 
@@ -62,31 +72,50 @@ def load_block(state: FundingState) -> dict:
     return {"block_data": block, "top_recs": top_recs}
 
 
-def search_funding(state: FundingState) -> dict:
-    """Query EPA EJSCREEN and build program list for this block."""
+def gather_signals(state: FundingState) -> dict:
+    """
+    Assemble candidate programs and resolve every hard eligibility test.
+
+    Reads the synced catalog and the pre-computed tract designations. Produces a
+    `determinations` map of designation_key -> verdict, each carrying the basis and
+    source so the claim can be traced back later.
+    """
+    db = get_supabase()
     block = state["block_data"]
-    geom = block.get("geometry_geojson", {})
-    coords = geom.get("coordinates", [])
 
-    # Get centroid from LineString endpoints
-    ejscreen = {}
-    if coords and len(coords) >= 2:
-        mid_lng = (coords[0][0] + coords[-1][0]) / 2
-        mid_lat = (coords[0][1] + coords[-1][1]) / 2
-        ejscreen = get_ejscreen_data(mid_lat, mid_lng)
+    programs = FundingProgramRepository(db).list_candidates()
 
+    determinations: dict[str, dict] = {}
+
+    # Rule-based: CDBG low/moderate-income area benefit, from the block's real ACS
+    # median household income.
     cdbg = check_cdbg_eligibility(block.get("median_hh_income"))
-    programs = get_brownfields_programs_for_park(block.get("tract_geoid", ""))
-
-    return {
-        "ejscreen_data": ejscreen,
-        "cdbg_check": cdbg,
-        "raw_programs": programs,
+    determinations["CDBG_LMI"] = {
+        "eligible": cdbg.get("eligible"),
+        "basis": cdbg.get("reason"),
+        "source_name": cdbg.get("source"),
+        "source_url": "https://www.hud.gov/programs/cdbg_entitlement",
+        "source_vintage": f"AMI ${cdbg.get('area_median_income'):,.0f}"
+        if cdbg.get("area_median_income") else None,
     }
 
+    # Dataset-based: per-tract designations synced by scripts/sync_tract_eligibility.py.
+    tract = block.get("tract_geoid")
+    if tract:
+        for key, row in TractEligibilityRepository(db).designations_for_tract(tract).items():
+            determinations[key] = {
+                "eligible": row.get("eligible"),
+                "basis": row.get("basis"),
+                "source_name": row.get("source_name"),
+                "source_url": row.get("source_url"),
+                "source_vintage": row.get("source_vintage"),
+            }
 
-def extract_eligibility(state: FundingState) -> dict:
-    """Run LLM assessment of each program's eligibility for this block."""
+    return {"candidate_programs": programs, "determinations": determinations}
+
+
+def assess_relevance(state: FundingState) -> dict:
+    """Have the LLM rank the candidates, given the determinations as facts."""
     block = state["block_data"]
     commuters_total = block.get("commuters_total") or 1
     transit_share = round(
@@ -99,10 +128,13 @@ def extract_eligibility(state: FundingState) -> dict:
         "sop_index_norm": block.get("sop_index_norm"),
         "top_recs": state["top_recs"],
         "transit_share": transit_share,
-        "cdbg_check": state["cdbg_check"],
     }
 
-    assessed = extract_funding_eligibility(context, state["raw_programs"])
+    assessed = extract_funding_eligibility(
+        context,
+        state["candidate_programs"],
+        determinations=state["determinations"],
+    )
     return {"assessed_signals": assessed}
 
 
@@ -117,6 +149,7 @@ def human_review(state: FundingState) -> dict:
             "relevance": s.get("relevance_score"),
             "assessment": s.get("eligibility_assessment"),
             "action": s.get("recommended_action"),
+            "eligibility_confirmed": s.get("eligibility_confirmed"),
         }
         for s in state["assessed_signals"]
     ]
@@ -125,6 +158,7 @@ def human_review(state: FundingState) -> dict:
         {
             "message": "Review funding signals before writing to database",
             "signals": signals_summary,
+            "determinations": state["determinations"],
             "thread_id": state["thread_id"],
         }
     )
@@ -145,8 +179,12 @@ def apply_feedback(state: FundingState) -> dict:
         for s in signals:
             s["human_notes"] = feedback
 
-    # Filter to signals worth writing (relevance >= 0.3)
-    final = [s for s in signals if (s.get("relevance_score") or 0) >= 0.3]
+    # Drop programs with a failed hard eligibility test outright — a program the
+    # block cannot use is not a funding opportunity, regardless of how relevant the
+    # model found the topic. eligibility_confirmed is None when there is no test.
+    eligible = [s for s in signals if s.get("eligibility_confirmed") is not False]
+
+    final = [s for s in eligible if (s.get("relevance_score") or 0) >= 0.3]
     return {"final_signals": final}
 
 
@@ -157,6 +195,7 @@ def write_signals(state: FundingState) -> dict:
     written_ids = []
 
     for s in state["final_signals"]:
+        deadline = s.get("deadline")
         row = {
             "block_id": state["block_id"],
             "program_name": s.get("program_name"),
@@ -164,13 +203,25 @@ def write_signals(state: FundingState) -> dict:
             "source_agency": s.get("source_agency"),
             "award_amount_min": s.get("award_amount_min"),
             "award_amount_max": s.get("award_amount_max"),
+            "deadline": deadline,
             "eligibility_notes": s.get("eligibility_assessment") or s.get("eligibility_notes"),
-            "relevance_score": float(s.get("relevance_score", 0.5)),
+            "relevance_score": float(s.get("relevance_score") or 0.5),
             "application_url": s.get("application_url"),
+            # Provenance travels with the signal so "where did this come from?" is
+            # answerable from the row alone.
+            "source_name": s.get("source_name"),
+            "source_url": s.get("source_url"),
+            "source_vintage": s.get("source_vintage"),
+            "fetched_at": s.get("fetched_at"),
+            "eligibility_confirmed": s.get("eligibility_confirmed"),
+            "determination_basis": s.get("determination_basis"),
             "raw_data": {
-                "full_program": s,
-                "ejscreen": state.get("ejscreen_data"),
-                "cdbg_check": state.get("cdbg_check"),
+                "program_key": s.get("program_key"),
+                "is_extracted": s.get("is_extracted"),
+                "extraction_confidence": s.get("extraction_confidence"),
+                "recommended_action": s.get("recommended_action"),
+                "assessment_failed": s.get("assessment_failed", False),
+                "determinations": state.get("determinations"),
                 "human_feedback": state.get("human_feedback"),
             },
             "thread_id": state["thread_id"],
@@ -194,16 +245,16 @@ class FundingAgent(SpecialistAgent):
         builder = StateGraph(FundingState)
 
         builder.add_node("load_block", load_block)
-        builder.add_node("search_funding", search_funding)
-        builder.add_node("extract_eligibility", extract_eligibility)
+        builder.add_node("gather_signals", gather_signals)
+        builder.add_node("assess_relevance", assess_relevance)
         builder.add_node("human_review", human_review)
         builder.add_node("apply_feedback", apply_feedback)
         builder.add_node("write_signals", write_signals)
 
         builder.add_edge(START, "load_block")
-        builder.add_edge("load_block", "search_funding")
-        builder.add_edge("search_funding", "extract_eligibility")
-        builder.add_edge("extract_eligibility", "human_review")
+        builder.add_edge("load_block", "gather_signals")
+        builder.add_edge("gather_signals", "assess_relevance")
+        builder.add_edge("assess_relevance", "human_review")
         builder.add_edge("human_review", "apply_feedback")
         builder.add_edge("apply_feedback", "write_signals")
         builder.add_edge("write_signals", END)
@@ -218,9 +269,8 @@ class FundingAgent(SpecialistAgent):
             "thread_id": thread_id,
             "block_data": {},
             "top_recs": [],
-            "ejscreen_data": {},
-            "cdbg_check": {},
-            "raw_programs": [],
+            "determinations": {},
+            "candidate_programs": [],
             "assessed_signals": [],
             "human_feedback": None,
             "final_signals": [],
@@ -240,7 +290,7 @@ class FundingAgent(SpecialistAgent):
             "block_id": values.get("block_id"),
             "thread_id": thread_id,
             "signals": values.get("assessed_signals", []),
-            "cdbg_check": values.get("cdbg_check", {}),
+            "determinations": values.get("determinations", {}),
         }
 
     def apply_feedback(self, thread_id: str, feedback: str) -> dict:

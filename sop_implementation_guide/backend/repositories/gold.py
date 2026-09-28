@@ -12,10 +12,10 @@ class GoldRepository(BaseRepository):
             self._db.table(self._table)
             .select("*")
             .eq("block_id", block_id)
-            .single()
+            .maybe_single()
             .execute()
         )
-        return result.data
+        return result.data if result else None
 
     def upsert_profile(self, data: dict) -> dict:
         return self.upsert(data, on_conflict="block_id")

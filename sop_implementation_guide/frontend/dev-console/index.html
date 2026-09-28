@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoP Implementation — Dev Console</title>
+<style>
+  /* Palette from START-HERE.md "Color Palette (from SoP app)" */
+  :root {
+    --bg: #1B2535;
+    --surface: #1E2D3E;
+    --orange: #F07B3A;
+    --teal: #2EC4B6;
+    --red: #E05C5C;
+    --amber: #E0A85C;
+    --text: #FFFFFF;
+    --muted: #A0B8CC;
+    --border: #2A3F55;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    padding: .75rem 1rem; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  header h1 span { color: var(--orange); }
+  .spacer { flex: 1; }
+  label { color: var(--muted); font-size: .8rem; }
+  input, textarea, button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 4px; padding: .4rem .6rem;
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--orange); outline-offset: -1px; }
+  button {
+    cursor: pointer; background: var(--border); border-color: transparent;
+    font-weight: 600;
+  }
+  button:hover:not(:disabled) { background: #35506b; }
+  button.primary { background: var(--orange); color: #1B2535; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.12); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  main { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 57px); }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+
+  /* ---- sidebar ---- */
+  aside {
+    background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; max-height: calc(100vh - 57px);
+  }
+  .aside-head { padding: .75rem; border-bottom: 1px solid var(--border); }
+  .aside-head h2 {
+    margin: 0 0 .5rem; font-size: .75rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .aside-head input { width: 100%; }
+  .blocks { overflow-y: auto; flex: 1; }
+  .block-row {
+    padding: .55rem .75rem; border-bottom: 1px solid var(--border);
+    cursor: pointer; border-left: 3px solid transparent;
+  }
+  .block-row:hover { background: #24374b; }
+  .block-row[aria-selected="true"] {
+    background: #24374b; border-left-color: var(--orange);
+  }
+  .block-row .name { font-weight: 600; }
+  .block-row .meta { color: var(--muted); font-size: .78rem; }
+
+  /* ---- detail ---- */
+  section { padding: 1rem 1.25rem; }
+  .empty { color: var(--muted); padding: 3rem 1.25rem; text-align: center; }
+  h3 { margin: 0 0 .15rem; font-size: 1.15rem; }
+  .sub { color: var(--muted); font-size: .85rem; margin-bottom: 1rem; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: .85rem 1rem; margin-bottom: 1rem;
+  }
+  .card > h4 {
+    margin: 0 0 .65rem; font-size: .72rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .steps { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .thread {
+    font-family: ui-monospace, Consolas, monospace; font-size: .78rem;
+    color: var(--muted);
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+  td.score { font-weight: 700; white-space: nowrap; }
+  .assess { color: var(--muted); font-size: .82rem; }
+  .table-wrap { overflow-x: auto; }
+
+  .banner { border-radius: 4px; padding: .55rem .75rem; margin-bottom: .75rem; font-size: .85rem; }
+  .banner.warn { background: rgba(224,168,92,.14); border: 1px solid var(--amber); color: var(--amber); }
+  .banner.err  { background: rgba(224,92,92,.14);  border: 1px solid var(--red);   color: var(--red); }
+  .banner.ok   { background: rgba(46,196,182,.12); border: 1px solid var(--teal);  color: var(--teal); }
+
+  .scores { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: baseline; }
+  .big { font-size: 2.4rem; font-weight: 700; line-height: 1; }
+  .kv { color: var(--muted); font-size: .82rem; }
+  .kv b { color: var(--text); font-size: 1rem; }
+  ol.actions { margin: .5rem 0 0; padding-left: 1.2rem; }
+  ol.actions li { margin-bottom: .3rem; }
+  ol.actions a { color: var(--teal); }
+  .narrative { color: var(--muted); font-style: italic; margin-top: .6rem; }
+  .spin { color: var(--orange); }
+
+  /* eligibility + provenance */
+  .badges { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem; }
+  .badge {
+    font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+    padding: .2rem .5rem; border-radius: 3px; border: 1px solid;
+    text-transform: uppercase;
+  }
+  .badge.yes  { color: var(--teal);  border-color: var(--teal);  background: rgba(46,196,182,.12); }
+  .badge.no   { color: var(--red);   border-color: var(--red);   background: rgba(224,92,92,.12); }
+  .badge.unk  { color: var(--muted); border-color: var(--border); }
+  .pill {
+    font-size: .68rem; font-weight: 700; padding: .1rem .38rem; border-radius: 3px;
+    border: 1px solid; white-space: nowrap;
+  }
+  .pill.yes { color: var(--teal); border-color: var(--teal); }
+  .pill.no  { color: var(--red);  border-color: var(--red); }
+  .src { color: var(--muted); font-size: .74rem; margin-top: .2rem; }
+  .src a { color: var(--muted); }
+  .src .curated { color: var(--amber); }
+  .deadline { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .deadline.soon { color: var(--amber); font-weight: 700; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SoP <span>Implementation</span> — Dev Console</h1>
+  <div class="spacer"></div>
+  <label for="api">API</label>
+  <input id="api" value="http://localhost:8000" size="24">
+  <button id="reload">Reload blocks</button>
+</header>
+
+<main>
+  <aside>
+    <div class="aside-head">
+      <h2 id="blocks-title">Blocks</h2>
+      <input id="filter" placeholder="Filter by street…">
+    </div>
+    <div class="blocks" id="blocks"></div>
+  </aside>
+
+  <section id="detail">
+    <div class="empty">Select a block to begin.</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = () => $("api").value.replace(/\/+$/, "");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => (
+  { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]
+));
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString();
+const num = (n, d = 1) => n == null ? "—" : Number(n).toFixed(d);
+
+let blocks = [];
+let selected = null;
+let thread = null;
+
+async function call(method, path, body) {
+  const res = await fetch(api() + path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) {
+    const detail = data && data.detail ? data.detail : (typeof data === "string" ? data : res.statusText);
+    throw new Error(`${res.status} — ${detail}`);
+  }
+  return data;
+}
+
+/* ---------- sidebar ---------- */
+
+async function loadBlocks() {
+  $("blocks").innerHTML = `<div class="empty spin">Loading…</div>`;
+  try {
+    blocks = await call("GET", "/blocks/");
+    blocks.sort((a, b) => a.id - b.id);
+    $("blocks-title").textContent = `Blocks (${blocks.length})`;
+    renderBlocks();
+  } catch (e) {
+    $("blocks").innerHTML = `<div class="empty"><div class="banner err">${esc(e.message)}</div>
+      Is the API running on <code>${esc(api())}</code>?</div>`;
+  }
+}
+
+function renderBlocks() {
+  const q = $("filter").value.trim().toLowerCase();
+  const rows = blocks.filter(b => !q || (b.street_name || "").toLowerCase().includes(q));
+  $("blocks").innerHTML = rows.map(b => `
+    <div class="block-row" role="option" data-id="${b.id}"
+         aria-selected="${selected && selected.id === b.id}">
+      <div class="name">${esc(b.street_name) || "(unnamed)"} <span class="meta">#${b.id}</span></div>
+      <div class="meta">SoP ${num(b.sop_index_norm)} · ${money(b.median_hh_income)}</div>
+    </div>`).join("") || `<div class="empty">No match.</div>`;
+
+  $("blocks").querySelectorAll(".block-row").forEach(el => {
+    el.onclick = () => selectBlock(Number(el.dataset.id));
+  });
+}
+
+/* ---------- detail ---------- */
+
+function selectBlock(id) {
+  selected = blocks.find(b => b.id === id) || null;
+  thread = null;
+  renderBlocks();
+  renderDetail();
+  loadExistingProfile();
+}
+
+function renderDetail(extra = "") {
+  if (!selected) {
+    $("detail").innerHTML = `<div class="empty">Select a block to begin.</div>`;
+    return;
+  }
+  const b = selected;
+  $("detail").innerHTML = `
+    <h3>${esc(b.street_name) || "(unnamed)"} <span class="meta">#${b.id}</span></h3>
+    <div class="sub">
+      ${esc(b.intersection_a) || "—"} → ${esc(b.intersection_b) || "—"} ·
+      tract ${esc(b.tract_geoid) || "—"} ·
+      median HH income ${money(b.median_hh_income)} ·
+      SoP ${num(b.sop_index_norm)}/100
+    </div>
+
+    <div class="card">
+      <h4>Flow</h4>
+      <div class="steps">
+        <button class="primary" id="btn-analyze">1 · Analyze</button>
+        <button id="btn-approve" disabled>2 · Approve</button>
+        <button id="btn-gold" disabled>3 · Compute gold</button>
+        <span class="thread" id="thread-label"></span>
+      </div>
+    </div>
+
+    <div id="stage">${extra}</div>`;
+
+  $("btn-analyze").onclick = analyze;
+  $("btn-approve").onclick = approve;
+  $("btn-gold").onclick = computeGold;
+  if (thread) restoreThreadButtons();
+}
+
+function restoreThreadButtons() {
+  $("thread-label").textContent = thread.id;
+  $("btn-approve").disabled = thread.approved;
+  $("btn-gold").disabled = !thread.approved;
+}
+
+function stage(html) { $("stage").innerHTML = html; }
+function stageAppend(html) { $("stage").insertAdjacentHTML("beforeend", html); }
+
+async function loadExistingProfile() {
+  try {
+    const p = await call("GET", `/blocks/${selected.id}/profile`);
+    renderDetail(profileCard(p, "Existing profile (from a previous run)"));
+  } catch {
+    /* 404 = no profile yet, which is the normal first-run case */
+  }
+}
+
+/* ---------- step 1: analyze ---------- */
+
+async function analyze() {
+  const btn = $("btn-analyze");
+  btn.disabled = true;
+  stage(`<div class="card spin">Running FundingAgent — EPA lookup + LLM eligibility assessment. Takes ~10–25s…</div>`);
+  try {
+    const r = await call("POST", `/blocks/${selected.id}/analyze`);
+    thread = { id: r.thread_id, approved: false };
+    $("thread-label").textContent = thread.id;
+    const review = await call("GET", `/threads/${thread.id}/review`);
+    stage(reviewCard(review));
+    $("btn-approve").disabled = false;
+    wireFeedback();
+  } catch (e) {
+    stage(`<div class="banner err">Analyze failed — ${esc(e.message)}</div>`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Determinations are facts from a rule or published dataset, not model output —
+// shown separately from relevance so the distinction is visible in the demo.
+function determinationBadges(determinations) {
+  const entries = Object.entries(determinations || {});
+  if (!entries.length) return "";
+
+  const badges = entries.map(([key, d]) => {
+    const cls = d.eligible === true ? "yes" : d.eligible === false ? "no" : "unk";
+    const mark = d.eligible === true ? "✓" : d.eligible === false ? "✗" : "?";
+    return `<span class="badge ${cls}" title="${esc(d.basis)}">${esc(key)} ${mark}</span>`;
+  }).join("");
+
+  const detail = entries.map(([key, d]) => `
+    <div class="kv" style="margin-top:.3rem">
+      <b>${esc(key)}:</b> ${esc(d.basis)}
+      ${d.source_name ? `<div class="src">source: ${d.source_url
+          ? `<a href="${esc(d.source_url)}" target="_blank" rel="noopener">${esc(d.source_name)}</a>`
+          : esc(d.source_name)}${d.source_vintage ? ` · ${esc(d.source_vintage)}` : ""}</div>` : ""}
+    </div>`).join("");
+
+  return `<div class="card">
+    <h4>Verified eligibility determinations</h4>
+    <div class="badges">${badges}</div>
+    ${detail}
+  </div>`;
+}
+
+function deadlineCell(iso) {
+  if (!iso) return `<span class="assess">—</span>`;
+  const days = Math.round((new Date(iso) - new Date()) / 86400000);
+  const soon = days >= 0 && days <= 45 ? " soon" : "";
+  const suffix = days < 0 ? " (passed)" : days <= 45 ? ` (${days}d)` : "";
+  return `<span class="deadline${soon}">${esc(iso)}${suffix}</span>`;
+}
+
+function reviewCard(review) {
+  const signals = review.signals || [];
+  const failed = signals.filter(s => s.assessment_failed);
+
+  const warn = failed.length
+    ? `<div class="banner warn"><b>${failed.length} of ${signals.length} signals were not assessed by the model.</b>
+       Their 0.50 scores are placeholders, not analysis — check the server log before trusting this run.</div>`
+    : `<div class="banner ok">All ${signals.length} candidates assessed by the model.</div>`;
+
+  const rows = signals.map(s => {
+    const v = s.relevance_score;
+    const colour = v == null ? "var(--muted)" : v >= 0.6 ? "var(--teal)" : v >= 0.35 ? "var(--amber)" : "var(--red)";
+
+    // Programs with a failed hard eligibility test are dropped on approve.
+    let pill = "";
+    if (s.eligibility_confirmed === true) pill = `<span class="pill yes" title="${esc(s.determination_basis)}">eligible</span>`;
+    else if (s.eligibility_confirmed === false) pill = `<span class="pill no" title="${esc(s.determination_basis)}">not eligible — will be dropped</span>`;
+
+    const amt = (s.award_amount_min || s.award_amount_max)
+      ? `${money(s.award_amount_min)} – ${money(s.award_amount_max)}`
+      : `<span class="assess">varies</span>`;
+
+    const src = s.source_name
+      ? `<div class="src">${s.is_extracted ? `<span class="curated">extracted${
+            s.extraction_confidence != null ? ` ${num(s.extraction_confidence, 2)}` : ""}</span> · ` : ""}${
+          s.source_url
+            ? `<a href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_name)}</a>`
+            : esc(s.source_name)}</div>`
+      : `<div class="src">no source recorded</div>`;
+
+    return `<tr>
+      <td class="score" style="color:${colour}">${num(v, 2)}</td>
+      <td>
+        <div>${esc(s.program_name)}${s.assessment_failed ? ' <span style="color:var(--amber)">⚠</span>' : ""} ${pill}</div>
+        <div class="assess">${esc(s.eligibility_assessment)}</div>
+        ${src}
+      </td>
+      <td>${deadlineCell(s.deadline)}</td>
+      <td class="assess">${amt}</td>
+    </tr>`;
+  }).join("");
+
+  return `${determinationBadges(review.determinations)}
+  <div class="card">
+    <h4>Human review — ${signals.length} candidate programs</h4>
+    ${warn}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Relevance</th><th>Program / assessment / source</th><th>Deadline</th><th>Award</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" class="assess">No candidates returned.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:.85rem">
+      <label for="feedback">Reviewer feedback — <code>approved</code> accepts as-is</label>
+      <textarea id="feedback" rows="2" style="width:100%;margin-top:.3rem">approved</textarea>
+    </div>
+  </div>`;
+}
+
+function wireFeedback() {
+  const fb = $("feedback");
+  if (fb) fb.onkeydown = (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) approve();
+  };
+}
+
+/* ---------- step 2: approve ---------- */
+
+async function approve() {
+  if (!thread) return;
+  const btn = $("btn-approve");
+  btn.disabled = true;
+  const feedback = ($("feedback") && $("feedback").value.trim()) || "approved";
+  try {
+    const r = await call("POST", `/threads/${thread.id}/approve`, { feedback });
+    thread.approved = true;
+    stageAppend(`<div class="banner ok">Wrote ${r.signals_written} signal(s) to
+      <code>funding_signals</code> — ids ${esc(JSON.stringify(r.written_signal_ids))}</div>`);
+    $("btn-gold").disabled = false;
+  } catch (e) {
+    stageAppend(`<div class="banner err">Approve failed — ${esc(e.message)}</div>`);
+    btn.disabled = false;
+  }
+}
+
+/* ---------- step 3: gold ---------- */
+
+async function computeGold() {
+  if (!thread) return;
+  const btn = $("btn-gold");
+  btn.disabled = true;
+  try {
+    const p = await call("POST", `/threads/${thread.id}/gold`);
+    stageAppend(profileCard(p, "Gold layer — block_implementation_profile"));
+  } catch (e) {
+    stageAppend(`<div class="banner err">Gold failed — ${esc(e.message)}</div>`);
+    btn.disabled = false;
+  }
+}
+
+function profileCard(p, title) {
+  const actions = (p.top_actions || []).map(a => {
+    const m = String(a).match(/^(.*?)(https?:\/\/\S+)$/);
+    return m
+      ? `<li>${esc(m[1])}<a href="${esc(m[2])}" target="_blank" rel="noopener">${esc(m[2])}</a></li>`
+      : `<li>${esc(a)}</li>`;
+  }).join("");
+
+  return `<div class="card">
+    <h4>${esc(title)}</h4>
+    <div class="scores">
+      <div>
+        <div class="big" style="color:var(--orange)">${num(p.feasibility_score)}</div>
+        <div class="kv">feasibility / 100</div>
+      </div>
+      <div class="kv">funding <b>${num(p.funding_score)}</b></div>
+      <div class="kv">zoning <b>${num(p.zoning_score)}</b> <span title="ZoningAgent is a scaffold — placeholder value">*</span></div>
+      <div class="kv">policy <b>${num(p.policy_score)}</b> <span title="PolicyAgent is a scaffold — placeholder value">*</span></div>
+    </div>
+    <div class="kv" style="margin-top:.5rem">* zoning and policy are placeholder 50s until those agents are implemented.</div>
+    ${actions ? `<ol class="actions">${actions}</ol>` : ""}
+    ${p.narrative ? `<div class="narrative">${esc(p.narrative)}</div>` : ""}
+  </div>`;
+}
+
+/* ---------- boot ---------- */
+
+$("reload").onclick = loadBlocks;
+$("filter").oninput = renderBlocks;
+$("api").onchange = loadBlocks;
+loadBlocks();
+</script>
+</body>
+</html>

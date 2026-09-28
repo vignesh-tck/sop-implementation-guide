@@ -28,7 +28,15 @@ def approve(
 @router.post("/{thread_id}/gold")
 def compute_gold(
     thread_id: str,
-    block_id: int = Body(..., embed=True),
     orchestrator: OrchestratorAgent = Depends(get_orchestrator),
 ):
-    return orchestrator.compute_gold(block_id, thread_id)
+    """
+    Compute the gold-layer profile for this thread's block.
+
+    Takes no body — block_id is read from the thread's graph state so it cannot
+    disagree with the thread that produced the signals.
+    """
+    try:
+        return orchestrator.compute_gold(thread_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e

@@ -12,8 +12,11 @@ class BaseRepository(Generic[T]):
         self._table = table
 
     def get_by_id(self, id: Any) -> dict | None:
-        result = self._db.table(self._table).select("*").eq("id", id).single().execute()
-        return result.data
+        # maybe_single() returns None for zero rows; single() raises.
+        result = (
+            self._db.table(self._table).select("*").eq("id", id).maybe_single().execute()
+        )
+        return result.data if result else None
 
     def list_all(self) -> list[dict]:
         result = self._db.table(self._table).select("*").execute()
