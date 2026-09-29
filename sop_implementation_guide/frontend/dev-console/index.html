@@ -136,19 +136,130 @@
   .src .curated { color: var(--amber); }
   .deadline { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .deadline.soon { color: var(--amber); font-weight: 700; }
+
+  /* ---- top-nav tabs ---- */
+  .tabs { display: flex; gap: .2rem; }
+  .tab {
+    background: transparent; border: none; color: var(--muted);
+    padding: .4rem .8rem; border-radius: 4px; cursor: pointer;
+    font-weight: 600; font-size: .85rem; letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .tab:hover { background: var(--border); color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--orange); background: rgba(240,123,58,.12); }
+
+  /* ---- discovery view ---- */
+  .discovery-wrap {
+    padding: 1rem 1.25rem; max-width: 1100px; margin: 0 auto; width: 100%;
+  }
+  .discovery-wrap h3 { margin-bottom: .3rem; }
+  .stage-crumbs {
+    display: flex; gap: .35rem; margin: .5rem 0 1rem; flex-wrap: wrap;
+    color: var(--muted); font-size: .78rem; align-items: center;
+  }
+  .stage-crumbs .crumb {
+    padding: .18rem .5rem; border-radius: 3px; border: 1px solid var(--border);
+  }
+  .stage-crumbs .crumb.done { color: var(--teal); border-color: var(--teal); }
+  .stage-crumbs .crumb.current {
+    color: var(--orange); border-color: var(--orange);
+    background: rgba(240,123,58,.10);
+  }
+  .stage-crumbs .arrow { color: var(--border); }
+
+  .field { margin-bottom: .85rem; }
+  .field label {
+    display: block; margin-bottom: .3rem;
+    font-size: .78rem; color: var(--muted); letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .field input, .field textarea {
+    width: 100%; font-family: inherit;
+  }
+  .field textarea { min-height: 5rem; }
+
+  .sources-list { list-style: none; padding: 0; margin: 0; }
+  .sources-list li {
+    display: flex; align-items: center; gap: .5rem; margin-bottom: .3rem;
+    padding: .3rem .5rem; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 3px;
+  }
+  .sources-list li input[type="checkbox"] { flex-shrink: 0; }
+  .sources-list li .url {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: ui-monospace, Consolas, monospace; font-size: .78rem;
+  }
+  .sources-list li .rm {
+    background: transparent; border: none; color: var(--muted);
+    font-size: .9rem; cursor: pointer; padding: 0 .3rem;
+  }
+  .sources-list li .rm:hover { color: var(--red); }
+
+  .question-item {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: .55rem .75rem; margin-bottom: .5rem;
+  }
+  .question-item .q { font-weight: 600; }
+  .question-item .why { color: var(--muted); font-size: .82rem; margin-top: .2rem; }
+
+  .assess-item {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: .55rem .75rem; margin-bottom: .5rem;
+  }
+  .assess-item .assess-url {
+    font-family: ui-monospace, Consolas, monospace; font-size: .78rem;
+    word-break: break-all;
+  }
+  .assess-item .assess-body { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
+  .assess-item .assess-body b { color: var(--text); }
+  .assess-item.unusable { border-left: 3px solid var(--red); }
+  .assess-item.usable   { border-left: 3px solid var(--teal); }
+
+  .program-edit {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: .75rem; margin-bottom: .75rem;
+  }
+  .program-edit.unverified { border-left: 3px solid var(--amber); }
+  .program-edit.verified   { border-left: 3px solid var(--teal); }
+  .program-edit .row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: .5rem;
+    margin-bottom: .5rem;
+  }
+  @media (max-width: 700px) { .program-edit .row { grid-template-columns: 1fr; } }
+  .program-edit .row.full { grid-template-columns: 1fr; }
+  .program-edit input, .program-edit textarea, .program-edit select {
+    width: 100%; font-family: inherit; font-size: .85rem;
+  }
+  .program-edit .excerpt {
+    background: rgba(0,0,0,.2); border: 1px dashed var(--border);
+    padding: .4rem .5rem; margin-top: .3rem; font-size: .78rem;
+    color: var(--muted); font-style: italic; white-space: pre-wrap;
+    max-height: 6rem; overflow-y: auto;
+  }
+  .program-edit .drop-flag {
+    display: inline-block; font-size: .72rem; padding: .1rem .4rem;
+    margin-left: .5rem; border-radius: 3px; border: 1px solid var(--red);
+    color: var(--red); text-transform: uppercase; letter-spacing: .04em;
+  }
+  .btn-row { display: flex; gap: .5rem; margin-top: 1rem; }
+  .muted-note { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
 </style>
 </head>
 <body>
 
 <header>
   <h1>SoP <span>Implementation</span> — Dev Console</h1>
+  <nav class="tabs">
+    <button class="tab" id="tab-blocks"    aria-selected="true"  data-view="blocks">Blocks</button>
+    <button class="tab" id="tab-discovery" aria-selected="false" data-view="discovery">Funding discovery</button>
+  </nav>
   <div class="spacer"></div>
   <label for="api">API</label>
   <input id="api" value="http://localhost:8000" size="24">
   <button id="reload">Reload blocks</button>
 </header>
 
-<main>
+<main id="view-blocks">
   <aside>
     <div class="aside-head">
       <h2 id="blocks-title">Blocks</h2>
@@ -160,6 +271,10 @@
   <section id="detail">
     <div class="empty">Select a block to begin.</div>
   </section>
+</main>
+
+<main id="view-discovery" style="display:none; grid-template-columns: 1fr;">
+  <div class="discovery-wrap" id="discovery"></div>
 </main>
 
 <script>
@@ -463,8 +578,547 @@ function profileCard(p, title) {
   </div>`;
 }
 
+/* ============================================================
+ * DISCOVERY VIEW
+ *
+ * A single generic renderer keyed on stage_payload.stage. The API is untyped
+ * by design (see backend/api/discovery.py), so the client is what decides
+ * what the reviewer sees and what shape gets sent back.
+ *
+ * Thread id is persisted in localStorage so a page reload does not lose an
+ * in-flight session — but MemorySaver on the backend still loses it on any
+ * server restart. That mismatch is intentionally visible: the resume banner
+ * says "unresolvable — server restarted?" when GET returns 404.
+ * ============================================================ */
+
+const DISCOVERY_KEY = "sop.discovery.thread";
+const STAGE_ORDER = ["load_sources", "clarify", "research", "extract", "geo_tie", "write_silver"];
+const STAGE_LABELS = {
+  load_sources: "Load",
+  clarify: "Clarify",
+  research: "Research",
+  extract: "Extract",
+  geo_tie: "Geo tie",
+  write_silver: "Write",
+};
+
+let dThread = null;   // { id, goal, currentStage }
+let dPayload = null;  // last stage_payload rendered
+
+/* ---------- tab switching ---------- */
+
+function switchView(view) {
+  document.querySelectorAll(".tab").forEach(t => {
+    t.setAttribute("aria-selected", String(t.dataset.view === view));
+  });
+  $("view-blocks").style.display    = view === "blocks"    ? "grid" : "none";
+  $("view-discovery").style.display = view === "discovery" ? "grid" : "none";
+  if (view === "discovery") bootDiscovery();
+}
+
+/* ---------- session lifecycle ---------- */
+
+function bootDiscovery() {
+  const stored = localStorage.getItem(DISCOVERY_KEY);
+  if (stored) {
+    try {
+      dThread = JSON.parse(stored);
+      resumeSession();
+      return;
+    } catch { /* corrupt storage — ignore */ }
+  }
+  renderStartForm();
+}
+
+function renderStartForm(banner = "") {
+  dThread = null;
+  dPayload = null;
+  $("discovery").innerHTML = `
+    <h3>Funding discovery — new session</h3>
+    <div class="sub">Paste one or more source URLs the agent should read.
+      Nothing is written to the silver layer until you confirm every stage.</div>
+    ${banner}
+    <div class="card">
+      <div class="field">
+        <label for="d-goal">Goal — what are you trying to fund?</label>
+        <textarea id="d-goal" rows="2" placeholder="e.g. Find state and local funding to build a public garden on a residential block in Bowie, Maryland."></textarea>
+      </div>
+      <div class="field">
+        <label for="d-sources">Sources — one URL per line</label>
+        <textarea id="d-sources" rows="4" placeholder="https://dnr.maryland.gov/land/Pages/ProgramOpenSpace/home.aspx"></textarea>
+      </div>
+      <div class="btn-row">
+        <button class="primary" id="d-start">Start session</button>
+      </div>
+      <div class="muted-note">
+        The agent will fetch each source, ask any clarifying questions, report what the
+        pages actually contain, propose extractions with verifiable excerpts, and
+        recommend a geographic tie. You review each step.
+      </div>
+    </div>`;
+  $("d-start").onclick = startSession;
+}
+
+async function startSession() {
+  const goal = $("d-goal").value.trim();
+  const sources = $("d-sources").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (!goal) return alert("Enter a goal.");
+  if (!sources.length) return alert("Add at least one source URL.");
+
+  const btn = $("d-start");
+  btn.disabled = true;
+  btn.textContent = "Starting…";
+  try {
+    const state = await call("POST", "/funding/discovery", { goal, sources });
+    dThread = { id: state.thread_id, goal, currentStage: state.stage_payload?.stage || null };
+    localStorage.setItem(DISCOVERY_KEY, JSON.stringify(dThread));
+    renderStage(state);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Start session";
+    $("discovery").insertAdjacentHTML("afterbegin",
+      `<div class="banner err">Failed to start — ${esc(e.message)}</div>`);
+  }
+}
+
+async function resumeSession() {
+  $("discovery").innerHTML = `<div class="card spin">Resuming session ${esc(dThread.id)}…</div>`;
+  try {
+    const state = await call("GET", `/funding/discovery/${dThread.id}`);
+    if (state.stage_payload) dThread.currentStage = state.stage_payload.stage;
+    renderStage(state);
+  } catch (e) {
+    localStorage.removeItem(DISCOVERY_KEY);
+    dThread = null;
+    renderStartForm(`<div class="banner warn">
+      Could not resume the previous session — <code>${esc(e.message)}</code>.
+      The discovery agent's checkpointer is in-memory, so a server restart
+      loses paused sessions. Starting fresh.</div>`);
+  }
+}
+
+/* ---------- stage router ---------- */
+
+function renderStage(state) {
+  if (state.done) return renderDone(state);
+  const payload = state.stage_payload;
+  if (!payload) {
+    $("discovery").innerHTML = `<div class="banner err">
+      Unexpected response — session is not done but no stage_payload was returned.</div>`;
+    return;
+  }
+  dPayload = payload;
+  const stage = payload.stage;
+  const header = `
+    <h3>Funding discovery <span class="meta">· ${esc(dThread.goal)}</span></h3>
+    <div class="thread">${esc(dThread.id)}</div>
+    ${crumbs(stage)}
+    <div class="card">
+      <div class="sub">${esc(payload.message || "")}</div>
+      <div id="stage-body"></div>
+      <div class="btn-row">
+        <button class="primary" id="d-submit">Submit ${esc(STAGE_LABELS[stage] || stage)}</button>
+        <button id="d-abandon">Abandon session</button>
+      </div>
+    </div>`;
+  $("discovery").innerHTML = header;
+
+  const renderers = {
+    clarify: renderClarify,
+    research: renderResearch,
+    extract: renderExtract,
+    geo_tie: renderGeoTie,
+  };
+  const fn = renderers[stage];
+  if (fn) fn(payload);
+  else $("stage-body").innerHTML = `<pre>${esc(JSON.stringify(payload, null, 2))}</pre>`;
+
+  $("d-submit").onclick = submitStage;
+  $("d-abandon").onclick = abandonSession;
+}
+
+function crumbs(currentStage) {
+  const idx = STAGE_ORDER.indexOf(currentStage);
+  return `<div class="stage-crumbs">${
+    STAGE_ORDER.map((s, i) => {
+      const cls = i < idx ? "done" : i === idx ? "current" : "";
+      return `<span class="crumb ${cls}">${esc(STAGE_LABELS[s])}</span>` +
+             (i < STAGE_ORDER.length - 1 ? '<span class="arrow">›</span>' : "");
+    }).join("")
+  }</div>`;
+}
+
+/* ---------- stage: clarify ---------- */
+// Expects free text or 'skip'.
+
+function renderClarify(p) {
+  const qs = (p.questions || []).map((q, i) => `
+    <div class="question-item">
+      <div class="q">${i + 1}. ${esc(q.question)}</div>
+      ${q.why ? `<div class="why">${esc(q.why)}</div>` : ""}
+    </div>`).join("");
+
+  const srcSummary = (p.sources_read || []).map(s =>
+    `<li><code>${esc(s.url)}</code> — ${s.chars} chars${s.adapter ? ` via ${esc(s.adapter)}` : ""}</li>`
+  ).join("");
+  const failSummary = (p.fetch_failures || []).map(f =>
+    `<li class="assess"><code>${esc(f.url)}</code> — ${esc(f.error)}</li>`
+  ).join("");
+
+  $("stage-body").innerHTML = `
+    ${srcSummary ? `<div class="field"><label>Sources read</label><ul style="margin:0;padding-left:1.2rem">${srcSummary}</ul></div>` : ""}
+    ${failSummary ? `<div class="banner warn">Some sources failed: <ul style="margin:.3rem 0 0;padding-left:1.2rem">${failSummary}</ul></div>` : ""}
+    ${p.notes ? `<div class="muted-note">${esc(p.notes)}</div>` : ""}
+    ${qs || `<div class="assess">The agent has no clarifying questions.</div>`}
+    <div class="field" style="margin-top:1rem">
+      <label for="clarify-answer">Your answer (free text) — send <code>skip</code> to proceed without answering</label>
+      <textarea id="clarify-answer" rows="4" placeholder="e.g. City of Bowie via Prince George's County; development on existing city land."></textarea>
+    </div>`;
+}
+
+function collectClarify() {
+  const val = $("clarify-answer").value.trim() || "skip";
+  return val;
+}
+
+/* ---------- stage: research ---------- */
+// Expects {sources: [...]} or 'approved'.
+
+function renderResearch(p) {
+  const assessCards = (p.assessments || []).map(a => `
+    <div class="assess-item ${a.usable ? "usable" : "unusable"}">
+      <div class="assess-url">${esc(a.url)} ${a.usable ? "" : `<span class="pill no">unusable</span>`}</div>
+      <div class="assess-body"><b>Contains:</b> ${esc(a.contains || "—")}</div>
+      <div class="assess-body"><b>Missing:</b> ${esc(a.missing || "—")}</div>
+    </div>`).join("");
+
+  const suggested = (p.suggested_sources || []).map(s => `
+    <li>
+      <button class="rm" title="Add to source list" data-add="${esc(s.url)}">+</button>
+      <span class="url">${esc(s.url)}</span>
+      <span class="assess" style="font-size:.75rem">${esc(s.why || "")}</span>
+    </li>`).join("");
+
+  $("stage-body").innerHTML = `
+    ${p.summary ? `<div class="muted-note" style="margin-bottom:.75rem">${esc(p.summary)}</div>` : ""}
+    <div class="field">
+      <label>Source assessments (from agent)</label>
+      ${assessCards || `<div class="assess">No assessments returned.</div>`}
+    </div>
+    <div class="field">
+      <label>Expected program count: <b>${esc(p.expected_program_count ?? "?")}</b></label>
+    </div>
+    ${suggested ? `
+      <div class="field">
+        <label>Suggested additional sources — click + to add</label>
+        <ul class="sources-list">${suggested}</ul>
+      </div>` : ""}
+    <div class="field">
+      <label>Sources to extract from (edit freely)</label>
+      <ul class="sources-list" id="research-sources"></ul>
+      <div class="btn-row" style="margin-top:.5rem">
+        <input id="research-add-url" placeholder="https://…" style="flex:1">
+        <button id="research-add-btn" type="button">Add</button>
+      </div>
+      <div class="muted-note">Submitting the current list unchanged sends <code>"approved"</code>. Any edit sends the new list.</div>
+    </div>`;
+
+  // Wire the source list up.
+  const initial = (p.current_sources || []).slice();
+  const listEl = $("research-sources");
+  const state = { sources: initial.slice(), initial };
+  const refresh = () => {
+    listEl.innerHTML = state.sources.map((u, i) => `
+      <li>
+        <span class="url">${esc(u)}</span>
+        <button class="rm" data-i="${i}" title="Remove">×</button>
+      </li>`).join("") || `<li class="assess">(empty)</li>`;
+    listEl.querySelectorAll(".rm").forEach(b => {
+      b.onclick = () => { state.sources.splice(Number(b.dataset.i), 1); refresh(); };
+    });
+  };
+  refresh();
+  dPayload.__researchState = state;
+
+  $("research-add-btn").onclick = () => {
+    const v = $("research-add-url").value.trim();
+    if (v) { state.sources.push(v); $("research-add-url").value = ""; refresh(); }
+  };
+  $("stage-body").querySelectorAll("[data-add]").forEach(b => {
+    b.onclick = () => { state.sources.push(b.dataset.add); refresh(); };
+  });
+}
+
+function collectResearch() {
+  const st = dPayload.__researchState || { sources: [], initial: [] };
+  const same = st.sources.length === st.initial.length &&
+               st.sources.every((u, i) => u === st.initial[i]);
+  return same ? "approved" : { sources: st.sources };
+}
+
+/* ---------- stage: extract ---------- */
+// Expects {programs: [...edited...]} or 'approved'.
+
+function renderExtract(p) {
+  const programs = p.programs || [];
+  const verifiedCount = programs.filter(pr => pr.excerpt_verified).length;
+
+  const summary = programs.length
+    ? `<div class="banner ${verifiedCount === programs.length ? "ok" : "warn"}">
+        ${verifiedCount}/${programs.length} excerpts verified against fetched text.
+        Unverified ones may have been invented — check before approving.
+      </div>`
+    : `<div class="banner warn">No programs were extracted. Add sources or fill in manually.</div>`;
+
+  const cards = programs.map((pr, i) => programEditCard(pr, i)).join("");
+
+  $("stage-body").innerHTML = `
+    ${summary}
+    ${p.notes ? `<div class="muted-note">${esc(p.notes)}</div>` : ""}
+    <div id="programs-container">${cards}</div>
+    <div class="btn-row">
+      <button id="extract-add" type="button">+ Add empty program</button>
+    </div>
+    <div class="muted-note">Submitting sends <code>{"programs": [...]}</code> with your edits included.</div>`;
+
+  $("extract-add").onclick = () => {
+    const container = $("programs-container");
+    const idx = container.querySelectorAll(".program-edit").length;
+    container.insertAdjacentHTML("beforeend", programEditCard({
+      program_name: "", program_type: null, source_agency: "",
+      award_amount_min: null, award_amount_max: null, deadline: null,
+      eligibility_notes: "", application_url: "", source_url: "",
+      source_excerpt: "", confidence: null, excerpt_verified: null,
+    }, idx));
+  };
+}
+
+function programEditCard(pr, i) {
+  const verifiedCls = pr.excerpt_verified === true ? "verified"
+                    : pr.excerpt_verified === false ? "unverified" : "";
+  const verifiedBadge = pr.excerpt_verified === true ? `<span class="pill yes">excerpt verified</span>`
+                     : pr.excerpt_verified === false ? `<span class="pill no">excerpt NOT verified</span>` : "";
+
+  const val = (v) => v == null ? "" : esc(String(v));
+  return `
+    <div class="program-edit ${verifiedCls}" data-i="${i}">
+      <div class="row">
+        <div>
+          <label>Program name ${verifiedBadge}</label>
+          <input data-f="program_name" value="${val(pr.program_name)}">
+        </div>
+        <div>
+          <label>Source agency</label>
+          <input data-f="source_agency" value="${val(pr.source_agency)}">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Program type</label>
+          <select data-f="program_type">
+            <option value="">—</option>
+            <option value="federal" ${pr.program_type === "federal" ? "selected" : ""}>federal</option>
+            <option value="state"   ${pr.program_type === "state"   ? "selected" : ""}>state</option>
+            <option value="local"   ${pr.program_type === "local"   ? "selected" : ""}>local</option>
+          </select>
+        </div>
+        <div>
+          <label>Deadline (YYYY-MM-DD)</label>
+          <input data-f="deadline" value="${val(pr.deadline)}" placeholder="YYYY-MM-DD">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Award min ($)</label>
+          <input data-f="award_amount_min" type="number" step="1" value="${val(pr.award_amount_min)}">
+        </div>
+        <div>
+          <label>Award max ($)</label>
+          <input data-f="award_amount_max" type="number" step="1" value="${val(pr.award_amount_max)}">
+        </div>
+      </div>
+      <div class="row full">
+        <div>
+          <label>Eligibility notes</label>
+          <textarea data-f="eligibility_notes" rows="2">${val(pr.eligibility_notes)}</textarea>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Application URL</label>
+          <input data-f="application_url" value="${val(pr.application_url)}">
+        </div>
+        <div>
+          <label>Source URL</label>
+          <input data-f="source_url" value="${val(pr.source_url)}">
+        </div>
+      </div>
+      <div class="row full">
+        <div>
+          <label>Source excerpt (verbatim) ${pr.confidence != null ? `<span class="muted-note" style="margin:0">— confidence ${num(pr.confidence, 2)}</span>` : ""}</label>
+          <textarea data-f="source_excerpt" rows="3">${val(pr.source_excerpt)}</textarea>
+        </div>
+      </div>
+    </div>`;
+}
+
+function collectExtract() {
+  const cards = $("programs-container").querySelectorAll(".program-edit");
+  const programs = [];
+  cards.forEach(card => {
+    const p = {};
+    card.querySelectorAll("[data-f]").forEach(el => {
+      const key = el.dataset.f;
+      let v = el.value;
+      if (["award_amount_min", "award_amount_max", "confidence"].includes(key)) {
+        v = v === "" ? null : Number(v);
+      } else if (v === "") {
+        v = null;
+      }
+      p[key] = v;
+    });
+    // Only include programs with a name — the empty card is discarded.
+    if (p.program_name && p.program_name.trim()) programs.push(p);
+  });
+  return { programs };
+}
+
+/* ---------- stage: geo_tie ---------- */
+// Expects {geo: {'<program_name>': '<scope>'}} or 'approved'.
+
+const GEO_OPTIONS = ["federal", "state:MD", "county:24033", "tract:NMTC", "unknown"];
+
+function renderGeoTie(p) {
+  const rows = (p.programs || []).map((pr, i) => {
+    const rec = pr.recommended_geo_scope || "unknown";
+    const opts = GEO_OPTIONS.map(o =>
+      `<option value="${esc(o)}" ${o === rec ? "selected" : ""}>${esc(o)}</option>`).join("");
+    return `
+      <tr data-name="${esc(pr.program_name)}">
+        <td>
+          <div><b>${esc(pr.program_name)}</b></div>
+          ${pr.reason ? `<div class="assess">${esc(pr.reason)}</div>` : ""}
+        </td>
+        <td>
+          <select data-geo="${i}">${opts}<option value="__custom__">(custom…)</option></select>
+          <input data-custom="${i}" style="display:none; margin-top:.3rem" placeholder="e.g. tract:LIC">
+        </td>
+      </tr>`;
+  }).join("");
+
+  $("stage-body").innerHTML = `
+    <div class="banner ok">Last step. On submit, everything you have reviewed is written to <code>funding_programs</code>.</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="width:60%">Program</th><th>Geographic reach</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="2" class="assess">No programs to tie.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div class="muted-note">Submitting sends only the programs whose scope you changed. Send <code>approved</code> to accept every recommendation.</div>`;
+
+  $("stage-body").querySelectorAll("[data-geo]").forEach(sel => {
+    sel.onchange = () => {
+      const cust = $("stage-body").querySelector(`[data-custom="${sel.dataset.geo}"]`);
+      cust.style.display = sel.value === "__custom__" ? "block" : "none";
+    };
+  });
+
+  dPayload.__geoInitial = Object.fromEntries(
+    (p.programs || []).map(pr => [pr.program_name, pr.recommended_geo_scope || "unknown"])
+  );
+}
+
+function collectGeoTie() {
+  const rows = $("stage-body").querySelectorAll("tr[data-name]");
+  const overrides = {};
+  rows.forEach(tr => {
+    const name = tr.dataset.name;
+    const idx = tr.querySelector("[data-geo]").dataset.geo;
+    let scope = tr.querySelector("[data-geo]").value;
+    if (scope === "__custom__") {
+      scope = tr.querySelector(`[data-custom="${idx}"]`).value.trim() || "unknown";
+    }
+    if (scope !== dPayload.__geoInitial[name]) overrides[name] = scope;
+  });
+  return Object.keys(overrides).length ? { geo: overrides } : "approved";
+}
+
+/* ---------- submit / done ---------- */
+
+async function submitStage() {
+  if (!dPayload) return;
+  const stage = dPayload.stage;
+  const collectors = {
+    clarify: collectClarify,
+    research: collectResearch,
+    extract: collectExtract,
+    geo_tie: collectGeoTie,
+  };
+  const collector = collectors[stage];
+  const value = collector ? collector() : "approved";
+
+  const btn = $("d-submit");
+  btn.disabled = true;
+  btn.textContent = "Submitting…";
+  try {
+    const state = await call("POST", `/funding/discovery/${dThread.id}/respond`, { value });
+    if (state.stage_payload) dThread.currentStage = state.stage_payload.stage;
+    localStorage.setItem(DISCOVERY_KEY, JSON.stringify(dThread));
+    renderStage(state);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = `Submit ${STAGE_LABELS[stage] || stage}`;
+    $("discovery").insertAdjacentHTML("afterbegin",
+      `<div class="banner err">Submit failed — ${esc(e.message)}</div>`);
+  }
+}
+
+function renderDone(state) {
+  const rows = (state.written || []).map(w => `
+    <tr>
+      <td><b>${esc(w.program_name)}</b></td>
+      <td class="assess">${esc(w.geo_scope)}</td>
+      <td class="assess"><code>${esc(w.program_key)}</code></td>
+    </tr>`).join("");
+
+  $("discovery").innerHTML = `
+    <h3>Discovery complete</h3>
+    <div class="thread">${esc(dThread.id)}</div>
+    ${crumbs("write_silver")}
+    <div class="card">
+      <div class="banner ok">
+        Wrote <b>${(state.written || []).length}</b> program(s) to <code>funding_programs</code>
+        for goal: <i>${esc(state.goal || dThread.goal)}</i>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Program</th><th>Geo scope</th><th>Program key</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="3" class="assess">Nothing written.</td></tr>`}</tbody>
+        </table>
+      </div>
+      <div class="btn-row">
+        <button class="primary" id="d-new">Start another session</button>
+      </div>
+    </div>`;
+  localStorage.removeItem(DISCOVERY_KEY);
+  dThread = null;
+  dPayload = null;
+  $("d-new").onclick = () => renderStartForm();
+}
+
+function abandonSession() {
+  if (!confirm("Abandon this session? Nothing has been written yet.")) return;
+  localStorage.removeItem(DISCOVERY_KEY);
+  dThread = null;
+  dPayload = null;
+  renderStartForm();
+}
+
 /* ---------- boot ---------- */
 
+document.querySelectorAll(".tab").forEach(t => {
+  t.onclick = () => switchView(t.dataset.view);
+});
 $("reload").onclick = loadBlocks;
 $("filter").oninput = renderBlocks;
 $("api").onchange = loadBlocks;
