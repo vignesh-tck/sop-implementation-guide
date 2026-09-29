@@ -36,31 +36,40 @@ class OrchestratorAgent:
         """Get funding signals awaiting review."""
         return self.funding_agent.get_pending_review(thread_id)
 
-    def resolve_block_id(self, thread_id: str) -> int | None:
+    def resolve_block_id(self, thread_id: str, db=None) -> int | None:
         """
         Recover the block this thread belongs to.
 
-        The thread's graph state is authoritative. We never take block_id from the
-        caller: a mismatched value would write a profile for the wrong block without
-        raising anything.
+        The thread's graph state is authoritative while it exists. We never take
+        block_id from the caller: a mismatched value would write a profile for the
+        wrong block without raising anything.
+
+        The checkpointer is in-memory, so a server restart (uvicorn --reload fires on
+        any edit) wipes the state of threads whose signals are already committed.
+        Those rows carry their own thread_id, so fall back to the DB rather than
+        making the user re-run an analysis that already succeeded.
         """
         state = self.funding_agent.get_pending_review(thread_id)
-        return state.get("block_id") if state else None
+        block_id = state.get("block_id") if state else None
+        if block_id is not None:
+            return block_id
+
+        return FundingRepository(db or get_supabase()).get_block_id_for_thread(thread_id)
 
     def compute_gold(self, thread_id: str) -> dict:
         """
         Compute and write the gold layer for a block after all signals are reviewed.
         Uses placeholder scores for zoning/policy (midterm — FundingAgent only).
         """
-        block_id = self.resolve_block_id(thread_id)
+        db = get_supabase()
+        block_id = self.resolve_block_id(thread_id, db)
         if block_id is None:
             raise ValueError(
-                f"No state found for thread {thread_id}. The checkpointer is "
-                "in-memory, so threads do not survive a server restart — re-run "
-                "POST /blocks/{block_id}/analyze."
+                f"Thread {thread_id} has no live graph state and wrote no funding "
+                "signals. Either it was never approved, or the server restarted "
+                "before approval — re-run POST /blocks/{block_id}/analyze."
             )
 
-        db = get_supabase()
         funding_repo = FundingRepository(db)
         gold_repo = GoldRepository(db)
 

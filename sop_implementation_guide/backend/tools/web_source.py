@@ -106,23 +106,6 @@ def _strip_block(html_text: str, tag: str) -> str:
         cursor = end + len(close_t)
 
 
-def fetch_many(urls: list[str]) -> tuple[list[dict], list[dict]]:
-    """
-    Fetch several sources. Returns (fetched, failures).
-
-    Failures are returned rather than raised so one bad URL does not abandon a
-    session — the user sees which ones failed and can fix or drop them.
-    """
-    fetched, failures = [], []
-    for u in urls:
-        try:
-            fetched.append(fetch(u))
-        except (FetchError, ValueError) as e:
-            log.warning("source failed: %s (%s)", u, e)
-            failures.append({"url": u, "error": str(e)})
-    return fetched, failures
-
-
 def excerpt_is_genuine(excerpt: Optional[str], sources: list[dict], min_len: int = 24) -> bool:
     """
     Check that a model-supplied excerpt really appears in the fetched text.

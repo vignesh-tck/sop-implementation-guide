@@ -12,18 +12,22 @@ class FundingRepository(BaseRepository):
             q = q.eq("reviewed", True)
         return q.execute().data or []
 
-    def get_pending_review(self, thread_id: str) -> list[dict]:
+    def get_block_id_for_thread(self, thread_id: str) -> int | None:
+        """
+        Recover the block a thread wrote signals for.
+
+        write_signals stamps thread_id and block_id on every row, so this survives
+        the in-memory checkpointer being wiped by a server restart.
+        """
         result = (
             self._db.table(self._table)
-            .select("*")
+            .select("block_id")
             .eq("thread_id", thread_id)
-            .eq("reviewed", False)
+            .limit(1)
             .execute()
         )
-        return result.data or []
-
-    def mark_reviewed(self, signal_id: int) -> None:
-        self._db.table(self._table).update({"reviewed": True}).eq("id", signal_id).execute()
+        rows = result.data or []
+        return rows[0]["block_id"] if rows else None
 
     def upsert_signal(self, data: dict) -> dict:
         return self.upsert(data, on_conflict="block_id,program_name")

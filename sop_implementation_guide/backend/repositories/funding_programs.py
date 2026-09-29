@@ -22,26 +22,13 @@ def _jsonable(data: dict) -> dict:
 
 
 class FundingProgramRepository(BaseRepository):
-    """The synced/curated funding catalog — read by agents, written by sync scripts."""
+    """The funding catalogue — written by discovery sessions, read by FundingAgent."""
 
     def __init__(self, client: Client):
         super().__init__(client, "funding_programs")
 
     def upsert_program(self, data: dict) -> dict:
         return self.upsert(_jsonable(data), on_conflict="program_key")
-
-    def upsert_programs(self, rows: list[dict]) -> list[dict]:
-        return self.upsert_many([_jsonable(r) for r in rows], on_conflict="program_key")
-
-    def get_by_key(self, program_key: str) -> dict | None:
-        result = (
-            self._db.table(self._table)
-            .select("*")
-            .eq("program_key", program_key)
-            .maybe_single()
-            .execute()
-        )
-        return result.data if result else None
 
     def list_candidates(self, limit: int = 50) -> list[dict]:
         """

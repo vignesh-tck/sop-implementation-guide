@@ -221,6 +221,26 @@
   }
   .program-edit.unverified { border-left: 3px solid var(--amber); }
   .program-edit.verified   { border-left: 3px solid var(--teal); }
+  .program-edit.rejected {
+    opacity: .5; border-left: 3px solid var(--red);
+  }
+  .program-edit .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .5rem; margin-bottom: .6rem;
+  }
+  .program-edit .card-title {
+    display: flex; align-items: center; gap: .4rem;
+    font-size: .78rem; color: var(--muted); letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .program-edit .drop-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-size: .72rem; font-weight: 700; padding: .2rem .6rem; border-radius: 3px;
+    cursor: pointer; text-transform: uppercase; letter-spacing: .04em;
+    flex-shrink: 0;
+  }
+  .program-edit .drop-btn:hover { color: var(--red); border-color: var(--red); }
+  .program-edit.rejected .drop-btn { color: var(--teal); border-color: var(--teal); }
   .program-edit .row {
     display: grid; grid-template-columns: 1fr 1fr; gap: .5rem;
     margin-bottom: .5rem;
@@ -241,6 +261,7 @@
     margin-left: .5rem; border-radius: 3px; border: 1px solid var(--red);
     color: var(--red); text-transform: uppercase; letter-spacing: .04em;
   }
+  .program-edit .drop-flag[hidden] { display: none; }
   .btn-row { display: flex; gap: .5rem; margin-top: 1rem; }
   .muted-note { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
 </style>
@@ -875,11 +896,16 @@ function renderExtract(p) {
   $("stage-body").innerHTML = `
     ${summary}
     ${p.notes ? `<div class="muted-note">${esc(p.notes)}</div>` : ""}
+    <div class="muted-note">Reject the programmes you do not want — only the kept ones are carried forward.</div>
     <div id="programs-container">${cards}</div>
     <div class="btn-row">
       <button id="extract-add" type="button">+ Add empty program</button>
     </div>
+    <div class="muted-note" id="extract-kept"></div>
     <div class="muted-note">Submitting sends <code>{"programs": [...]}</code> with your edits included.</div>`;
+
+  $("programs-container").querySelectorAll(".program-edit").forEach(wireExtractCard);
+  refreshExtractCounts();
 
   $("extract-add").onclick = () => {
     const container = $("programs-container");
@@ -890,7 +916,31 @@ function renderExtract(p) {
       eligibility_notes: "", application_url: "", source_url: "",
       source_excerpt: "", confidence: null, excerpt_verified: null,
     }, idx));
+    wireExtractCard(container.lastElementChild);
+    refreshExtractCounts();
   };
+}
+
+// Reject is a toggle, not a delete: a rejected card stays on screen (greyed, inputs
+// locked) so the decision is visible and reversible before submit.
+function wireExtractCard(card) {
+  const btn = card.querySelector(".drop-btn");
+  btn.onclick = () => {
+    const rejected = card.classList.toggle("rejected");
+    card.querySelectorAll("input, textarea, select").forEach(el => { el.disabled = rejected; });
+    card.querySelector(".drop-flag").hidden = !rejected;
+    btn.textContent = rejected ? "Restore" : "Reject";
+    refreshExtractCounts();
+  };
+}
+
+function refreshExtractCounts() {
+  const cards = [...$("programs-container").querySelectorAll(".program-edit")];
+  cards.forEach((c, i) => { c.querySelector(".card-n").textContent = `Program ${i + 1}`; });
+  const kept = cards.filter(c => !c.classList.contains("rejected")).length;
+  $("extract-kept").innerHTML = kept === cards.length
+    ? `Keeping all <b>${cards.length}</b> programme(s).`
+    : `Keeping <b>${kept}</b> of ${cards.length} programme(s) — ${cards.length - kept} rejected.`;
 }
 
 function programEditCard(pr, i) {
@@ -902,9 +952,17 @@ function programEditCard(pr, i) {
   const val = (v) => v == null ? "" : esc(String(v));
   return `
     <div class="program-edit ${verifiedCls}" data-i="${i}">
+      <div class="card-head">
+        <span class="card-title">
+          <span class="card-n">Program ${i + 1}</span>
+          ${verifiedBadge}
+          <span class="drop-flag" hidden>rejected — not saved</span>
+        </span>
+        <button type="button" class="drop-btn">Reject</button>
+      </div>
       <div class="row">
         <div>
-          <label>Program name ${verifiedBadge}</label>
+          <label>Program name</label>
           <input data-f="program_name" value="${val(pr.program_name)}">
         </div>
         <div>
@@ -966,6 +1024,7 @@ function collectExtract() {
   const cards = $("programs-container").querySelectorAll(".program-edit");
   const programs = [];
   cards.forEach(card => {
+    if (card.classList.contains("rejected")) return;  // explicitly dropped by the reviewer
     const p = {};
     card.querySelectorAll("[data-f]").forEach(el => {
       const key = el.dataset.f;

@@ -11,7 +11,7 @@ renders and what it sends back, so adding or reordering stages needs no new rout
 
 import uuid
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field

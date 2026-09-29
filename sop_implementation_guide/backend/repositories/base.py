@@ -18,10 +18,6 @@ class BaseRepository(Generic[T]):
         )
         return result.data if result else None
 
-    def list_all(self) -> list[dict]:
-        result = self._db.table(self._table).select("*").execute()
-        return result.data or []
-
     def upsert(self, data: dict, on_conflict: str = "id") -> dict:
         """INSERT ON CONFLICT DO UPDATE — agents are safe to re-run."""
         result = (
@@ -30,14 +26,3 @@ class BaseRepository(Generic[T]):
             .execute()
         )
         return result.data[0] if result.data else {}
-
-    def upsert_many(self, rows: list[dict], on_conflict: str = "id") -> list[dict]:
-        result = (
-            self._db.table(self._table)
-            .upsert(rows, on_conflict=on_conflict)
-            .execute()
-        )
-        return result.data or []
-
-    def delete(self, id: Any) -> None:
-        self._db.table(self._table).delete().eq("id", id).execute()

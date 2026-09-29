@@ -342,10 +342,19 @@ def extract(state: DiscoveryState) -> dict:
         "programs": drafts,
         "unverified": unverified,
         "notes": result["notes"],
-        "expects": "{'programs': [the corrected list]} — or 'approved' to accept as extracted.",
+        "expects": "{'programs': [the kept, corrected list — omit the ones you reject]} "
+                   "— or 'approved' to accept every programme as extracted.",
     })
 
-    final = edited.get("programs") if isinstance(edited, dict) and edited.get("programs") else drafts
+    # An empty list is a real answer: it means every programme was rejected. Only a
+    # response with no 'programs' key at all ('approved') falls back to the drafts.
+    edits = edited.get("programs") if isinstance(edited, dict) else None
+    final = edits if isinstance(edits, list) else drafts
+    if len(final) < len(drafts):
+        kept = {p.get("program_name") for p in final}
+        log.info("reviewer rejected %d of %d programmes: %s",
+                 len(drafts) - len(final), len(drafts),
+                 ", ".join(d["program_name"] for d in drafts if d["program_name"] not in kept))
     return {"drafts": final}
 
 

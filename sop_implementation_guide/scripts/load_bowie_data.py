@@ -12,7 +12,6 @@ The data files live one folder up (in the project root).
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
