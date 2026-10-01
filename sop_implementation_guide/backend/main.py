@@ -37,3 +37,10 @@ app.include_router(discovery_router)
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "sop-implementation-engine"}
+
+
+@app.get("/")
+def root():
+    # No real content lives here — this exists so platform health checks
+    # (Render pings "/" by default) get a 200 instead of a 404.
+    return {"status": "ok", "service": "sop-implementation-engine", "docs": "/docs"}
