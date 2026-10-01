@@ -3,11 +3,13 @@ import { call, money, num } from "../api.js";
 import ReviewTable, { fitKey } from "./ReviewTable.jsx";
 import SignalsView from "./SignalsView.jsx";
 import ProfileCard from "./ProfileCard.jsx";
+import AllRecommendations from "./AllRecommendations.jsx";
 
 export default function BlockDetail({ block, onProfileComputed }) {
   const [existingProfile, setExistingProfile] = useState(null);
   const [existingSignals, setExistingSignals] = useState(null);
   const [existingLoading, setExistingLoading] = useState(false);
+  const [allRecommendations, setAllRecommendations] = useState(null);
 
   const [thread, setThread] = useState(null); // { id, approved }
   const [analyzing, setAnalyzing] = useState(false);
@@ -40,6 +42,7 @@ export default function BlockDetail({ block, onProfileComputed }) {
     setGoldError(null);
     setExistingProfile(null);
     setExistingSignals(null);
+    setAllRecommendations(null);
 
     if (!block) return;
     const id = block.id;
@@ -47,12 +50,14 @@ export default function BlockDetail({ block, onProfileComputed }) {
     Promise.all([
       call("GET", `/blocks/${id}/profile`).catch(() => null),
       call("GET", `/blocks/${id}/signals`).catch(() => null),
-    ]).then(([profile, signals]) => {
+      call("GET", `/blocks/${id}`).catch(() => null),
+    ]).then(([profile, signals, full]) => {
       // A block can be reselected while these are in flight — drop a late response
       // rather than render one block's funding under another block's heading.
       if (!block || block.id !== id) return;
       setExistingProfile(profile);
       setExistingSignals(signals);
+      setAllRecommendations(full?.recommendations || null);
       setExistingLoading(false);
     });
   }, [block]);
@@ -160,6 +165,8 @@ export default function BlockDetail({ block, onProfileComputed }) {
         {block.intersection_a || "—"} → {block.intersection_b || "—"} · tract {block.tract_geoid || "—"} ·
         median HH income {money(block.median_hh_income)} · SoP {num(block.sop_index_norm)}/100
       </div>
+
+      <AllRecommendations recommendations={allRecommendations} />
 
       <div className="card">
         <h4>Flow</h4>

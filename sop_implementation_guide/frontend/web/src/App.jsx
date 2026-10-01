@@ -10,7 +10,7 @@ function BlocksView() {
   const [loadError, setLoadError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [profiles, setProfiles] = useState({}); // blockId -> gold profile, for map color overlay
-  const [showMap, setShowMap] = useState(false); // map is on-demand, not shown on every load
+  const [panelOpen, setPanelOpen] = useState(true); // list+detail float over an always-visible map
 
   useEffect(() => {
     call("GET", "/blocks/")
@@ -35,23 +35,45 @@ function BlocksView() {
   }
 
   return (
-    <main className="view">
-      <div className={`blocks-top${showMap ? "" : " map-collapsed"}`}>
-        <BlockList
-          blocks={blocks}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          showMap={showMap}
-          onToggleMap={() => setShowMap((s) => !s)}
-        />
-        {showMap && (
-          <BlockMap blocks={blocks} selectedId={selectedId} profiles={profiles} onSelect={setSelectedId} />
-        )}
+    <main className="view map-view">
+      <div className="map-canvas">
+        <BlockMap blocks={blocks} selectedId={selectedId} profiles={profiles} onSelect={setSelectedId} />
       </div>
-      <BlockDetail
-        block={selected}
-        onProfileComputed={(id, profile) => setProfiles((prev) => ({ ...prev, [id]: profile }))}
-      />
+
+      {!panelOpen && (
+        <button type="button" className="panel-reopen" onClick={() => setPanelOpen(true)}>
+          Blocks ({blocks.length})
+        </button>
+      )}
+
+      {panelOpen && (
+        <div className="panel list-panel">
+          <div className="panel-head">
+            <h2>Blocks ({blocks.length})</h2>
+            <button type="button" className="panel-collapse" aria-label="Collapse panel" onClick={() => setPanelOpen(false)}>
+              ✕
+            </button>
+          </div>
+          <BlockList blocks={blocks} selectedId={selectedId} onSelect={setSelectedId} />
+        </div>
+      )}
+
+      {selected && (
+        <div className="panel detail-panel">
+          <button
+            type="button"
+            className="detail-close"
+            aria-label="Close detail"
+            onClick={() => setSelectedId(null)}
+          >
+            ✕
+          </button>
+          <BlockDetail
+            block={selected}
+            onProfileComputed={(id, profile) => setProfiles((prev) => ({ ...prev, [id]: profile }))}
+          />
+        </div>
+      )}
     </main>
   );
 }
