@@ -281,3 +281,82 @@ ALTER TABLE funding_programs
     ADD COLUMN IF NOT EXISTS discovery_thread_id   TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_funding_programs_thread ON funding_programs(discovery_thread_id);
+
+
+-- ---------------------------------------------------------------
+-- PER-RECOMMENDATION FUNDING FIT  (added Sep 2026)
+--
+-- A funding signal used to be "this program suits this block". The unit is now
+-- "this program could fund this specific recommendation", because that is the
+-- question a planner actually asks and the only one a narrative can answer
+-- concretely. One block with five recommendations produces five independent
+-- sets of fits, each approved on its own.
+--
+-- This is the one DESTRUCTIVE statement in this file: the old
+-- UNIQUE (block_id, program_name) has to go, or two recommendations that both
+-- match the same program would collide and the second write would overwrite the
+-- first. Rows written before this migration carry rec_id NULL.
+-- ---------------------------------------------------------------
+
+ALTER TABLE funding_signals
+    ADD COLUMN IF NOT EXISTS rec_id BIGINT
+        REFERENCES block_recommendations(id) ON DELETE CASCADE,
+    -- The rec_label as it stood when assessed. Denormalised on purpose: the
+    -- narrative below refers to it, so the row stays readable even if the
+    -- recommendation is later re-ranked or relabelled.
+    ADD COLUMN IF NOT EXISTS rec_label TEXT;
+
+ALTER TABLE funding_signals
+    DROP CONSTRAINT IF EXISTS funding_signals_block_id_program_name_key;
+
+-- Guarded because ADD CONSTRAINT has no IF NOT EXISTS in Postgres, and this
+-- file is meant to be re-runnable.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'funding_signals_block_rec_program_key'
+    ) THEN
+        ALTER TABLE funding_signals
+            ADD CONSTRAINT funding_signals_block_rec_program_key
+            UNIQUE (block_id, rec_id, program_name);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_funding_signals_rec ON funding_signals(rec_id);
+
+
+-- ---------------------------------------------------------------
+-- DISCOVERY SESSION HISTORY  (added Sep 2026)
+--
+-- One append-only row per completed discovery session, so past sessions stay
+-- browsable and re-runnable. The agent's checkpointer is in-memory and only
+-- holds sessions that are still paused, so without this a finished session
+-- left no record of itself beyond the programs it wrote.
+--
+-- Why not just group funding_programs by discovery_thread_id: program_key is
+-- the upsert conflict target, so re-running a session over the same sources
+-- moves those rows onto the newer thread_id and the older session appears to
+-- have written nothing. A session's history must not be rewritten by a later
+-- one. `programs` holds the snapshot of what THIS session wrote, at the values
+-- it wrote them; the live catalogue is still the place to read current values.
+--
+-- Sessions that ran before this table existed are recovered by grouping
+-- funding_programs instead — see FundingProgramRepository.sessions_from_catalogue.
+-- ---------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS discovery_sessions (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    thread_id       TEXT UNIQUE NOT NULL,
+    goal            TEXT NOT NULL,
+    -- The sources extraction actually read, which is not necessarily the list
+    -- the session started with: the research stage lets the user replace it.
+    sources         JSONB,
+    requested_sources JSONB,
+    -- Snapshot of the programs written, one object per program.
+    programs        JSONB,
+    program_count   INTEGER DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_sessions_created ON discovery_sessions(created_at DESC);

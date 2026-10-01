@@ -1,3 +1,5 @@
+from typing import Any, Optional
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 from backend.agents.deps import get_orchestrator
 from backend.agents.orchestrator import OrchestratorAgent
@@ -19,10 +21,28 @@ def get_review(
 @router.post("/{thread_id}/approve")
 def approve(
     thread_id: str,
+    fits: Optional[list[dict[str, Any]]] = Body(default=None, embed=True),
     feedback: str = Body(default="approved", embed=True),
     orchestrator: OrchestratorAgent = Depends(get_orchestrator),
 ):
-    return orchestrator.approve_funding(thread_id, feedback)
+    """
+    Approve a thread's funding fits.
+
+    Send `fits` to decide per (rec_id, program_name) — each entry needs `rec_id`,
+    `program_name` and `approved`, and may carry an adjusted `fit_score`. Only
+    approved entries are written; rejected ones are deleted if an earlier review
+    of the same pair wrote them, so re-reviewing a block can take a signal back
+    and not only add one.
+
+    An empty `fits` list is a real answer meaning "reject everything", so it is
+    passed through rather than treated as absent. Omitting `fits` entirely falls
+    back to `feedback`, where 'approved' keeps every fit above the default floor.
+
+    `feedback` is carried alongside `fits` rather than replaced by it — the note is
+    recorded on every signal that gets written.
+    """
+    payload: Any = {"fits": fits, "feedback": feedback} if fits is not None else feedback
+    return orchestrator.approve_funding(thread_id, payload)
 
 
 @router.post("/{thread_id}/gold")

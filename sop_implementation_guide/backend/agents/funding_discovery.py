@@ -26,7 +26,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from backend.db.session import get_supabase
-from backend.repositories.funding_programs import FundingProgramRepository
+from backend.repositories.funding_programs import (
+    DiscoverySessionRepository,
+    FundingProgramRepository,
+)
 from backend.tools import grants_gov, web_source
 from backend.tools.llm_extractor import structured_call
 
@@ -34,6 +37,19 @@ log = logging.getLogger(__name__)
 
 
 # ── Prompts (edit these, not the nodes) ──────────────────────────────────────
+
+KEYWORD_PROMPT = """A city planner stated this funding goal in their own words:
+
+{goal}
+
+Reduce it to a short search phrase for a government grants database, which matches on
+keywords and has no understanding of sentences.
+
+- Keep the subject matter and the kind of work. Drop the place name, the applicant, the
+  verbs ("find", "looking for"), and any instruction to the extractor.
+- Two to five words. Prefer the vocabulary a funding agency would use for this work over
+  the planner's own phrasing.
+- If the goal is already short and keyword-like, return it unchanged."""
 
 CLARIFY_PROMPT = """You are helping a city planner build a funding catalogue for
 specific city blocks.
@@ -122,6 +138,10 @@ def _obj(props: dict, required: list[str]) -> dict:
             "additionalProperties": False}
 
 
+KEYWORD_SCHEMA = _obj({
+    "keyword": {"type": "string", "description": "Two to five words."},
+}, ["keyword"])
+
 CLARIFY_SCHEMA = _obj({
     "questions": {"type": "array", "items": _obj({
         "question": {"type": "string"},
@@ -145,21 +165,54 @@ RESEARCH_SCHEMA = _obj({
     "summary": {"type": "string"},
 }, ["source_assessments", "expected_program_count", "suggested_sources", "summary"])
 
+# Every property carries a description, and they are not decoration: the model reads
+# them during extraction, and `extraction_fields()` serves them to the console so the
+# form can promise exactly what the agent will record. One definition, both jobs —
+# so the promise cannot drift from the behaviour.
 PROGRAM_SCHEMA = _obj({
-    "program_name": {"type": "string"},
-    "program_type": {"type": ["string", "null"], "description": "federal | state | local"},
-    "source_agency": {"type": ["string", "null"]},
-    "award_amount_min": {"type": ["number", "null"]},
-    "award_amount_max": {"type": ["number", "null"]},
-    "deadline": {"type": ["string", "null"], "description": "YYYY-MM-DD, or null"},
-    "eligibility_notes": {"type": ["string", "null"]},
-    "application_url": {"type": ["string", "null"]},
-    "source_url": {"type": "string"},
+    "program_name": {"type": "string",
+                     "description": "The programme's name as the source writes it."},
+    "program_type": {"type": ["string", "null"],
+                     "description": "federal, state or local — whichever the source indicates."},
+    "source_agency": {"type": ["string", "null"],
+                      "description": "The body that administers the programme."},
+    "award_amount_min": {"type": ["number", "null"],
+                         "description": "Smallest award the source states, in dollars."},
+    "award_amount_max": {"type": ["number", "null"],
+                         "description": "Largest award the source states, in dollars."},
+    "deadline": {"type": ["string", "null"],
+                 "description": "The closing date the source states, as YYYY-MM-DD."},
+    "eligibility_notes": {"type": ["string", "null"],
+                          "description": "Who may apply and what the money may be spent "
+                                         "on, in the source's own terms."},
+    "application_url": {"type": ["string", "null"],
+                        "description": "Where to apply, if the source links it."},
+    "source_url": {"type": "string", "description": "The page this programme was read from."},
     "source_excerpt": {"type": "string", "description": "Verbatim span from the source."},
-    "confidence": {"type": "number"},
+    "confidence": {"type": "number",
+                   "description": "0-1. How well the source text supports these values."},
 }, ["program_name", "program_type", "source_agency", "award_amount_min", "award_amount_max",
     "deadline", "eligibility_notes", "application_url", "source_url", "source_excerpt",
     "confidence"])
+
+
+def extraction_fields() -> list[dict]:
+    """
+    The fields a session records per programme, for the console to show up front.
+
+    Read off PROGRAM_SCHEMA rather than restated, so adding a field to the schema
+    updates what the user was promised in the same commit.
+    """
+    return [
+        {
+            "field": name,
+            "description": spec.get("description", ""),
+            # A nullable field is one the agent is allowed to leave blank rather
+            # than guess — that distinction is the point of showing this list.
+            "optional": "null" in spec["type"] if isinstance(spec["type"], list) else False,
+        }
+        for name, spec in PROGRAM_SCHEMA["properties"].items()
+    ]
 
 EXTRACT_SCHEMA = _obj({
     "programs": {"type": "array", "items": PROGRAM_SCHEMA},
@@ -180,6 +233,7 @@ GEO_SCHEMA = _obj({
 class DiscoveryState(TypedDict):
     thread_id: str
     goal: str
+    search_keyword: str
     requested_sources: list[str]
     fetched: list[dict]
     fetch_failures: list[dict]
@@ -207,12 +261,38 @@ def _render_sources(fetched: list[dict], limit: int = PREVIEW_CHARS) -> str:
     )
 
 
-def _load_one(url: str, goal: str) -> dict:
+def _search_keyword(goal: str) -> str:
+    """
+    Distil the goal into something a keyword index can match.
+
+    The goal is prose aimed at the extractor — it names a place, an applicant and
+    often an instruction, none of which a keyword database understands. Sending it
+    raw meant the more carefully a planner wrote their goal, the worse their
+    Grants.gov and web-search results got.
+
+    Falls back to the goal on any failure. A weak search is a bad session; a failed
+    session over a search term is a worse one.
+    """
+    try:
+        keyword = (structured_call(
+            KEYWORD_PROMPT.format(goal=goal), KEYWORD_SCHEMA, max_tokens=256,
+        )["keyword"] or "").strip()
+    except Exception as e:  # noqa: BLE001
+        log.warning("keyword distillation failed, searching on the raw goal: %s", e)
+        return goal
+    if not keyword:
+        return goal
+    log.info("search keyword %r distilled from goal %r", keyword, goal[:80])
+    return keyword
+
+
+def _load_one(url: str, keyword: str) -> dict:
     """Fetch a source, routing through the Grants.gov adapter when applicable."""
     if grants_gov.handles(url):
-        # Grants.gov needs POST, so a plain GET cannot read it. The search term comes
-        # from the user's goal, not from a keyword list in this repo.
-        text, hits = grants_gov.as_source_text(goal)
+        # Grants.gov needs POST, so a plain GET cannot read it. The search term still
+        # derives from the user's goal, not from a keyword list in this repo — only
+        # now it is the distilled form rather than the full sentence.
+        text, hits = grants_gov.as_source_text(keyword)
         return {
             "url": url, "final_url": url, "status": 200,
             "content_type": "application/json (grants.gov adapter)",
@@ -226,14 +306,15 @@ def _load_one(url: str, goal: str) -> dict:
 # ── Nodes ────────────────────────────────────────────────────────────────────
 
 def load_sources(state: DiscoveryState) -> dict:
+    keyword = _search_keyword(state["goal"])
     fetched, failures = [], []
     for url in state["requested_sources"]:
         try:
-            fetched.append(_load_one(url, state["goal"]))
+            fetched.append(_load_one(url, keyword))
         except Exception as e:  # noqa: BLE001 — report, never drop silently
             log.warning("source failed: %s (%s)", url, e)
             failures.append({"url": url, "error": str(e)})
-    return {"fetched": fetched, "fetch_failures": failures}
+    return {"fetched": fetched, "fetch_failures": failures, "search_keyword": keyword}
 
 
 def clarify(state: DiscoveryState) -> dict:
@@ -255,14 +336,16 @@ def clarify(state: DiscoveryState) -> dict:
             for s in state["fetched"]
         ],
         "fetch_failures": state["fetch_failures"],
+        "search_keyword": state.get("search_keyword"),
         "expects": "Free text answering the questions. Send 'skip' to proceed without answering.",
     })
     return {"questions": result["questions"], "answers": answers or "skip"}
 
 
 def research(state: DiscoveryState) -> dict:
+    keyword = state.get("search_keyword") or state["goal"]
     search_result = web_source.search(
-        f"{state['goal']} — official government funding programme pages"
+        f"{keyword} official government funding programme pages"
     )
     search_block = (
         f"WEB SEARCH RESULTS:\n{search_result['summary']}\n"
@@ -289,6 +372,7 @@ def research(state: DiscoveryState) -> dict:
         "suggested_sources": result["suggested_sources"],
         "summary": result["summary"],
         "web_search_available": search_result["available"],
+        "search_keyword": keyword,
         "current_sources": [s["final_url"] for s in state["fetched"]],
         "expects": "{'sources': [final list of URLs to extract from]} — or 'approved' to keep the current list.",
     })
@@ -306,7 +390,7 @@ def research(state: DiscoveryState) -> dict:
             fetched.append(have[url])
             continue
         try:
-            fetched.append(_load_one(url, state["goal"]))
+            fetched.append(_load_one(url, keyword))
         except Exception as e:  # noqa: BLE001
             failures.append({"url": url, "error": str(e)})
     return {"research": result, "search_result": search_result,
@@ -396,12 +480,24 @@ def geo_tie(state: DiscoveryState) -> dict:
     return {"geo_recommendations": recs}
 
 
+def _session_sources(state: DiscoveryState) -> list[str]:
+    """The sources extraction actually read — not necessarily the requested list,
+    since the research stage lets the user replace it."""
+    return [s["final_url"] for s in state["fetched"]]
+
+
 def write_silver(state: DiscoveryState) -> dict:
     """Persist to funding_programs. Only reached after every stage was confirmed."""
+    db = get_supabase()
+
     if not state["drafts"]:
+        # Still record the session. A session that extracted nothing is a real
+        # result worth keeping — it says those sources were tried and came up
+        # empty, which is what stops someone re-running them next month.
+        _record_session(db, state, [])
         return {"written": []}
 
-    repo = FundingProgramRepository(get_supabase())
+    repo = FundingProgramRepository(db)
     geo = {r["program_name"]: r["geo_scope"] for r in state["geo_recommendations"]}
     written = []
 
@@ -428,13 +524,48 @@ def write_silver(state: DiscoveryState) -> dict:
             "reviewed_by_user": True,
             "discovery_thread_id": state["thread_id"],
             "raw_data": {"excerpt_verified": d.get("excerpt_verified"),
-                         "goal": state["goal"]},
+                         "goal": state["goal"],
+                         # Stamped on every program so a session's source list is
+                         # recoverable from the catalogue alone, which is how
+                         # sessions that predate discovery_sessions are browsed.
+                         "session_sources": _session_sources(state)},
         }
         result = repo.upsert_program(row)
         if result:
-            written.append({"program_key": row["program_key"], "program_name": name,
-                            "geo_scope": row["geo_scope"]})
+            written.append({
+                "program_key": row["program_key"],
+                "program_name": name,
+                "program_type": row["program_type"],
+                "source_agency": row["source_agency"],
+                "geo_scope": row["geo_scope"],
+                "deadline": row["deadline"],
+                "source_url": row["source_url"],
+                "extraction_confidence": row["extraction_confidence"],
+            })
+
+    _record_session(db, state, written)
     return {"written": written}
+
+
+def _record_session(db, state: DiscoveryState, written: list[dict]) -> None:
+    """
+    Append this session to the browsable history.
+
+    Written last, and never allowed to fail the run: the programs are already in
+    the silver layer at this point, and losing the history entry is a smaller
+    loss than throwing away a session the user just spent four reviews on.
+    """
+    try:
+        DiscoverySessionRepository(db).record({
+            "thread_id": state["thread_id"],
+            "goal": state["goal"],
+            "sources": _session_sources(state),
+            "requested_sources": state["requested_sources"],
+            "programs": written,
+            "program_count": len(written),
+        })
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not record discovery session %s: %s", state["thread_id"], e)
 
 
 def _programs_digest(drafts: list[dict]) -> str:
@@ -491,7 +622,8 @@ class FundingDiscoveryAgent:
 
     def start(self, thread_id: str, goal: str, sources: list[str]) -> dict:
         state: DiscoveryState = {
-            "thread_id": thread_id, "goal": goal, "requested_sources": sources,
+            "thread_id": thread_id, "goal": goal, "search_keyword": "",
+            "requested_sources": sources,
             "fetched": [], "fetch_failures": [], "questions": [], "answers": "",
             "research": {}, "search_result": {}, "drafts": [],
             "geo_recommendations": [], "written": [],

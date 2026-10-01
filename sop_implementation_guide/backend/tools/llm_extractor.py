@@ -1,8 +1,7 @@
-"""LLM tool for extracting structured funding eligibility from raw program data."""
+"""LLM tool for judging how well funding programs fit a block recommendation."""
 
 import json
 import logging
-from typing import Optional
 
 from anthropic import (
     Anthropic,
@@ -35,16 +34,16 @@ def _get_client() -> Anthropic:
 
 
 # Structured-output schema. This is what stops the model wrapping its answer in
-# ```json fences (which broke json.loads at char 0) and what guarantees
-# relevance_score is a real number rather than null.
+# ```json fences (which broke json.loads at char 0) and what guarantees fit_score
+# is a real number rather than null.
 #
-# The model returns ONLY its assessment, keyed by program_name. Award amounts and
+# The model returns ONLY its judgement, keyed by program_name. Award amounts and
 # application URLs are merged back in locally — asking the model to echo facts we
 # already hold wastes tokens and invites transcription errors.
-ASSESSMENT_SCHEMA = {
+FIT_SCHEMA = {
     "type": "object",
     "properties": {
-        "assessments": {
+        "fits": {
             "type": "array",
             "items": {
                 "type": "object",
@@ -53,34 +52,33 @@ ASSESSMENT_SCHEMA = {
                         "type": "string",
                         "description": "Must exactly match a program_name from the input list.",
                     },
-                    "relevance_score": {
+                    "fit_score": {
                         "type": "number",
                         "description": (
-                            "0.0-1.0. How relevant this program is for a parks/green "
-                            "space project on this block. Never null — use a real "
-                            "estimate even when information is incomplete."
+                            "0.0-1.0. How well this program could fund THIS ONE "
+                            "recommendation. Never null — give a real estimate even "
+                            "when the program's notes are thin."
                         ),
                     },
-                    "eligibility_assessment": {
+                    "narrative": {
                         "type": "string",
-                        "description": "1-2 sentences on whether this block likely qualifies, and why.",
+                        "description": (
+                            "1-2 sentences naming the concrete connection between this "
+                            "program and this recommendation, or the concrete reason "
+                            "there isn't one. The reviewer reads this to decide."
+                        ),
                     },
                     "recommended_action": {
                         "type": "string",
-                        "description": 'e.g. "Apply", "Investigate further", "Unlikely — income too high".',
+                        "description": 'e.g. "Apply", "Investigate further", "Skip — wrong region".',
                     },
                 },
-                "required": [
-                    "program_name",
-                    "relevance_score",
-                    "eligibility_assessment",
-                    "recommended_action",
-                ],
+                "required": ["program_name", "fit_score", "narrative", "recommended_action"],
                 "additionalProperties": False,
             },
         }
     },
-    "required": ["assessments"],
+    "required": ["fits"],
     "additionalProperties": False,
 }
 
@@ -120,8 +118,8 @@ def structured_call(prompt: str, schema: dict, max_tokens: int = 4096) -> dict:
         raise ValueError(f"Could not parse model response: {type(e).__name__}") from e
 
 
-def _clamp_relevance(value) -> float:
-    """Coerce a model-supplied relevance score into 0.0-1.0.
+def _clamp_score(value) -> float:
+    """Coerce a model-supplied score into 0.0-1.0.
 
     The DB has a CHECK (relevance_score BETWEEN 0 AND 1), so an out-of-range
     value would fail the insert rather than the request.
@@ -132,18 +130,25 @@ def _clamp_relevance(value) -> float:
         return 0.5
 
 
-def _fallback(programs: list[dict], reason: str) -> list[dict]:
-    """Assessment-failed result.
+def _fallback(programs: list[dict], recommendation: dict, reason: str) -> list[dict]:
+    """Assessment-failed result for one recommendation.
 
     Flagged with assessment_failed so a flat wall of 0.5 scores is visible in the
     review payload instead of looking like real model output.
     """
-    log.error("Funding eligibility assessment failed (%s) — returning defaults", reason)
+    log.error(
+        "Fit assessment failed for rec %s (%s) — returning defaults",
+        recommendation.get("rec_label"), reason,
+    )
     return [
         {
             **p,
-            "relevance_score": 0.5,
-            "eligibility_assessment": f"Automated assessment unavailable ({reason}). Manual review required.",
+            "rec_id": recommendation.get("id"),
+            "rec_label": recommendation.get("rec_label"),
+            "rec_dimension": recommendation.get("dimension"),
+            "rec_direction": recommendation.get("direction"),
+            "fit_score": 0.5,
+            "narrative": f"Automated assessment unavailable ({reason}). Manual review required.",
             "recommended_action": "Investigate further",
             "assessment_failed": True,
         }
@@ -151,107 +156,110 @@ def _fallback(programs: list[dict], reason: str) -> list[dict]:
     ]
 
 
-def _designation_status(program: dict, determinations: dict) -> tuple[Optional[bool], Optional[str], str]:
-    """
-    Resolve a program's hard eligibility test into (confirmed, basis, label).
-
-    `confirmed` is tri-state: True eligible, False confirmed ineligible, None when
-    the program has no designation test or the test could not be evaluated.
-    """
-    key = program.get("requires_tract_designation")
-    if not key:
-        return None, None, "no location-based eligibility test"
-
-    d = (determinations or {}).get(key)
-    if not d:
-        return None, None, f"{key}: UNDETERMINED (no determination on record)"
-
-    eligible, basis = d.get("eligible"), d.get("basis")
-    if eligible is True:
-        return True, basis, f"{key}: CONFIRMED ELIGIBLE — {basis}"
-    if eligible is False:
-        return False, basis, f"{key}: NOT ELIGIBLE — {basis}"
-    return None, basis, f"{key}: UNDETERMINED — {basis or 'lookup failed'}"
-
-
-def extract_funding_eligibility(
-    block_context: dict,
-    programs: list[dict],
-    determinations: Optional[dict] = None,
-) -> list[dict]:
-    """
-    Use Claude to rank funding programs for a specific block.
-
-    block_context: dict with tract_geoid, median_hh_income, sop_index_norm,
-                   top_recs, transit_share
-    programs: rows from the funding_programs table
-    determinations: designation_key -> verdict, computed deterministically by the
-                   agent (CDBG income rule, NMTC tract designation). These are
-                   passed to the model as *established facts*, not questions — an
-                   earlier version had the model guessing NMTC status from income.
-
-    Returns the same programs, each augmented with relevance_score,
-    eligibility_assessment, recommended_action, eligibility_confirmed and
-    determination_basis. On failure, returns every program with relevance_score 0.5
-    and assessment_failed=True.
-    """
-    client = _get_client()
-
-    income = block_context.get("median_hh_income")
-    income_str = f"${income:,.0f}" if income is not None else "unknown"
-
-    # Resolve each program's hard eligibility test up front, so the model is told
-    # the verdict rather than asked to infer it.
-    status_by_name: dict[str, tuple[Optional[bool], Optional[str], str]] = {
-        p.get("program_name"): _designation_status(p, determinations) for p in programs
-    }
-
-    # Only the fields the model needs to judge relevance — not award amounts or URLs.
-    program_digest = [
+def _program_digest(programs: list[dict]) -> list[dict]:
+    """Only the fields the model needs to judge fit — not award amounts or URLs."""
+    return [
         {
             "program_name": p.get("program_name"),
             "program_type": p.get("program_type"),
             "source_agency": p.get("source_agency"),
             "application_deadline": str(p.get("deadline")) if p.get("deadline") else None,
+            "geo_scope": p.get("geo_scope"),
             "eligibility_notes": (p.get("eligibility_notes") or "")[:700],
-            "verified_eligibility": status_by_name[p.get("program_name")][2],
         }
         for p in programs
     ]
 
-    prompt = f"""You are a grant analyst helping a municipality fund built-environment
-improvements on a specific city block in Prince George's County, Maryland.
+
+def assess_recommendation_fit(
+    block_context: dict,
+    recommendation: dict,
+    programs: list[dict],
+) -> list[dict]:
+    """
+    Ask Claude how well each funding program could pay for ONE recommendation.
+
+    block_context: dict with tract_geoid, median_hh_income, sop_index_norm,
+                   transit_share
+    recommendation: a block_recommendations row (id, rec_label, dimension,
+                   direction, predicted_score_increase)
+    programs: rows from the funding_programs table
+
+    The recommendation is the unit of judgement, not the block. Scoring a program
+    against a whole block's worth of improvements produced narratives too vague to
+    act on — "supports community development" rather than "funds tree planting,
+    which is what this recommendation is".
+
+    Returns one row per program, highest fit first, each carrying the program's own
+    fields plus rec_id, rec_label, fit_score, narrative and recommended_action.
+    Every program gets a row: a low score is a judgement the reviewer can see and
+    override, whereas an omission is indistinguishable from the model forgetting.
+
+    On failure, returns every program at fit_score 0.5 with assessment_failed=True.
+    """
+    client = _get_client()
+
+    income = block_context.get("median_hh_income")
+    income_str = f"${income:,.0f}" if income is not None else "unknown"
+    gain = recommendation.get("predicted_score_increase")
+
+    # Direction is load-bearing, not decoration. Roughly 14% of recommendations are
+    # 'Decrease' — "Surface parking lot / Decrease" means REMOVE the parking. Without
+    # this line the model went looking for grants to build one.
+    direction = recommendation.get("direction")
+    if direction == "Decrease":
+        intent = f"REMOVE or REDUCE: {recommendation.get('rec_label')}"
+        intent_note = (
+            "This block has too much of this feature. The work to fund is removal, "
+            "reduction or conversion to something better — not building more of it."
+        )
+    else:
+        intent = f"ADD or IMPROVE: {recommendation.get('rec_label')}"
+        intent_note = "The work to fund is adding this feature, or improving what is there."
+
+    prompt = f"""You are a grant analyst helping a municipality fund one specific
+improvement on a city block in Prince George's County, Maryland.
 
 BLOCK CONTEXT:
 - Census Tract: {block_context.get('tract_geoid')}
 - Median household income: {income_str}
 - State of Place walkability score (normalized): {block_context.get('sop_index_norm', 'unknown')}/100
-- Recommended improvements for this block: {', '.join(block_context.get('top_recs', [])) or 'none recorded'}
 - Transit commuter share: {block_context.get('transit_share', 'unknown')}%
 
-VERIFIED ELIGIBILITY DETERMINATIONS (authoritative — treat as established fact):
-{json.dumps(determinations or {}, indent=2, default=str)}
+THE IMPROVEMENT TO FUND:
+- {intent}
+- {intent_note}
+- Urban design dimension: {recommendation.get('dimension') or 'unspecified'}
+- Predicted walkability gain if done: {f'+{gain}' if gain is not None else 'not estimated'}
 
-PROGRAMS TO ASSESS (each carries its own verified_eligibility):
-{json.dumps(program_digest, indent=2)}
+FUNDING OPPORTUNITIES:
+{json.dumps(_program_digest(programs), indent=2)}
 
-Score each program's relevance for THIS block's recommended improvements.
+Score how well each opportunity could fund THIS improvement — not the block in
+general, and not the block's other needs.
 
 Rules:
-- Do not second-guess verified_eligibility. Where it says NOT ELIGIBLE, score
-  relevance at or below 0.1 and say the block does not qualify. Where it says
-  CONFIRMED ELIGIBLE, treat qualification as settled and judge only topical fit.
-- Penalise geographic mismatch. A program restricted to another region (for example
-  a Great Lakes initiative) is not relevant to Maryland however well the topic fits.
-- Weigh whether the program funds what this block actually needs.
-- The applicant is a city or county government, not an individual.
+- Judge what the money can actually be spent on. A programme that funds exactly
+  this kind of improvement scores high even if the block is unremarkable.
+- Respect the direction above. A programme that funds building more of a feature
+  the block needs less of is a poor fit, not a good one.
+- Penalise geographic mismatch. A programme restricted to another region (for
+  example a Great Lakes initiative) cannot fund work in Maryland however well the
+  topic fits. Treat geo_scope as a hint, not as proof — reason from the notes too.
+- The applicant is a city or county government, not an individual or a nonprofit.
+- Where the notes are too thin to tell, say so in the narrative and score in the
+  middle. Do not invent eligibility criteria that are not stated.
+- In each narrative, name the specific connection or the specific mismatch. The
+  reviewer will adjust your score, so give them the reason, not a summary.
 
-Return one entry per program, with program_name matching the input exactly."""
+Return one entry per opportunity, with program_name matching the input exactly."""
 
     try:
         response = client.messages.create(
             model=MODEL,
-            max_tokens=2048,
+            # ~50 programmes × a two-sentence narrative each. Too low and the run
+            # dies at the last few programmes rather than the first.
+            max_tokens=8192,
             # Scoring, not writing. Without this the same block scored 70 then 95
             # across runs, because relevance values straddled a scoring tier
             # boundary — bad for a live demo and worse for evaluation.
@@ -261,7 +269,7 @@ Return one entry per program, with program_name matching the input exactly."""
             # model is ever swapped for Opus 4.7+ or Sonnet 5, remove it — those
             # reject sampling parameters with a 400.
             extra_body={"temperature": 0},
-            output_config={"format": {"type": "json_schema", "schema": ASSESSMENT_SCHEMA}},
+            output_config={"format": {"type": "json_schema", "schema": FIT_SCHEMA}},
             messages=[{"role": "user", "content": prompt}],
         )
     except AuthenticationError as e:
@@ -272,62 +280,57 @@ Return one entry per program, with program_name matching the input exactly."""
         log.error("Anthropic API error %s: %s", e.status_code, e.message)
         raise
 
-    # The deterministic verdict is attached regardless of what the model returns —
-    # it comes from a rule or a dataset, so an LLM failure must not lose it.
-    def with_determination(row: dict, program: dict) -> dict:
-        confirmed, basis, _ = status_by_name[program.get("program_name")]
-        return {**row, "eligibility_confirmed": confirmed, "determination_basis": basis}
-
     if response.stop_reason == "refusal":
-        return [with_determination(r, r) for r in _fallback(programs, "model declined the request")]
+        return _fallback(programs, recommendation, "model declined the request")
     if response.stop_reason == "max_tokens":
-        return [with_determination(r, r) for r in _fallback(programs, "response truncated at max_tokens")]
+        return _fallback(programs, recommendation, "response truncated at max_tokens")
 
     try:
         text = next(b.text for b in response.content if b.type == "text")
-        by_name = {
-            a["program_name"]: a for a in json.loads(text)["assessments"]
-        }
+        by_name = {f["program_name"]: f for f in json.loads(text)["fits"]}
     except (json.JSONDecodeError, KeyError, TypeError, StopIteration) as e:
-        return [
-            with_determination(r, r)
-            for r in _fallback(programs, f"unparseable response: {type(e).__name__}")
-        ]
+        return _fallback(programs, recommendation, f"unparseable response: {type(e).__name__}")
 
-    assessed = []
+    fits = []
     unmatched = []
     for p in programs:
-        a = by_name.get(p.get("program_name"))
-        if a is None:
-            # Model dropped or renamed this program — keep it, flagged, rather
+        f = by_name.get(p.get("program_name"))
+        # rec_dimension is spelled out rather than reusing the programme row's own
+        # keys — `dimension` would collide with a funding_programs field of the
+        # same name if one is ever added, and silently win or lose.
+        base = {
+            **p,
+            "rec_id": recommendation.get("id"),
+            "rec_label": recommendation.get("rec_label"),
+            "rec_dimension": recommendation.get("dimension"),
+            "rec_direction": recommendation.get("direction"),
+        }
+        if f is None:
+            # Model dropped or renamed this programme — keep it, flagged, rather
             # than silently shrinking the candidate list.
             unmatched.append(p.get("program_name"))
-            assessed.append(
-                with_determination(
-                    {
-                        **p,
-                        "relevance_score": 0.5,
-                        "eligibility_assessment": "Not assessed by model. Manual review required.",
-                        "recommended_action": "Investigate further",
-                        "assessment_failed": True,
-                    },
-                    p,
-                )
-            )
+            fits.append({
+                **base,
+                "fit_score": 0.5,
+                "narrative": "Not assessed by model. Manual review required.",
+                "recommended_action": "Investigate further",
+                "assessment_failed": True,
+            })
             continue
-        assessed.append(
-            with_determination(
-                {
-                    **p,
-                    "relevance_score": _clamp_relevance(a.get("relevance_score")),
-                    "eligibility_assessment": a.get("eligibility_assessment"),
-                    "recommended_action": a.get("recommended_action"),
-                },
-                p,
-            )
-        )
+        fits.append({
+            **base,
+            "fit_score": _clamp_score(f.get("fit_score")),
+            "narrative": f.get("narrative"),
+            "recommended_action": f.get("recommended_action"),
+        })
 
     if unmatched:
-        log.warning("Model returned no assessment for: %s", ", ".join(map(str, unmatched)))
+        log.warning(
+            "Model returned no fit for rec %s: %s",
+            recommendation.get("rec_label"), ", ".join(map(str, unmatched)),
+        )
 
-    return assessed
+    # Strongest fit first — the reviewer reads top-down and the weak tail sinks.
+    fits.sort(key=lambda f: f["fit_score"], reverse=True)
+    return fits
+

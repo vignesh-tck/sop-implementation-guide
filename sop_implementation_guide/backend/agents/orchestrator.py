@@ -7,6 +7,8 @@ placeholder scores so the gold layer can still be computed end-to-end.
 """
 
 import uuid
+from typing import Any
+
 from backend.config import settings
 from backend.agents.funding import FundingAgent
 from backend.agents.zoning import ZoningAgent
@@ -28,12 +30,12 @@ class OrchestratorAgent:
         result = self.funding_agent.run(block_id, thread_id)
         return {"thread_id": thread_id, "state": result}
 
-    def approve_funding(self, thread_id: str, feedback: str = "approved") -> dict:
+    def approve_funding(self, thread_id: str, feedback: Any = "approved") -> dict:
         """Resume FundingAgent after human review."""
         return self.funding_agent.apply_feedback(thread_id, feedback)
 
     def get_funding_review(self, thread_id: str) -> dict:
-        """Get funding signals awaiting review."""
+        """Get per-recommendation funding fits awaiting review."""
         return self.funding_agent.get_pending_review(thread_id)
 
     def resolve_block_id(self, thread_id: str, db=None) -> int | None:
@@ -104,63 +106,66 @@ class OrchestratorAgent:
 
         return gold_repo.upsert_profile(profile)
 
+    @staticmethod
+    def _best_per_program(signals: list[dict]) -> list[dict]:
+        """
+        Collapse to one row per programme, keeping its strongest fit.
+
+        Signals are per (recommendation, programme), so one programme approved
+        against four recommendations is four rows. Counting rows would let a single
+        versatile programme cap the funding score on its own, so the block-level
+        view dedupes first. The per-recommendation detail stays in the table.
+        """
+        best: dict[str, dict] = {}
+        for s in signals:
+            name = s.get("program_name") or ""
+            current = best.get(name)
+            if current is None or (s.get("relevance_score") or 0) > (
+                current.get("relevance_score") or 0
+            ):
+                best[name] = s
+        return list(best.values())
+
     def _score_funding(self, signals: list[dict]) -> float:
         """
         Score 0–100 from the funding signals on a block.
 
-        Confirmed eligibility outweighs LLM-rated relevance: a program a published
-        dataset or rule says the block qualifies for is stronger evidence than one
-        the model merely found topically relevant. Point values live in config.py.
+        Scored on reviewer-approved fit alone: every row here is one a human kept,
+        so the score reflects how strong those matches are, not how many rows the
+        model emitted. Point values live in config.py.
         """
         if not signals:
             return 0.0
 
-        confirmed = relevant = marginal = 0
-        for s in signals:
-            relevance = s.get("relevance_score") or 0.0
-            verdict = s.get("eligibility_confirmed")
-
-            if verdict is False:
-                # Block does not qualify — contributes nothing, however relevant.
-                continue
-            if relevance >= settings.relevance_high:
-                if verdict is True:
-                    confirmed += 1
-                else:
-                    relevant += 1
-            elif relevance >= settings.relevance_floor:
+        strong = marginal = 0
+        for s in self._best_per_program(signals):
+            fit = s.get("relevance_score") or 0.0
+            if fit >= settings.relevance_high:
+                strong += 1
+            elif fit >= settings.relevance_floor:
                 marginal += 1
 
         cap = settings.max_counted_per_tier
         total = (
-            settings.points_confirmed_eligible * min(confirmed, cap)
-            + settings.points_relevant * min(relevant, cap)
+            settings.points_strong_fit * min(strong, cap)
             + settings.points_marginal * min(marginal, cap)
         )
         return float(min(total, 100.0))
 
     def _derive_actions(self, signals: list[dict]) -> list[str]:
         """
-        Turn top funding signals into concrete action steps.
+        Turn the strongest fits into concrete action steps.
 
-        Confirmed-eligible programs are ranked first, then by relevance. A real
-        deadline is included where we have one — that is the difference between an
-        action a planner can schedule and a suggestion.
+        Each action names the recommendation the money would pay for — "apply for
+        X" is not actionable until you know which improvement it funds. A real
+        deadline is included where we have one.
         """
-        ranked = sorted(
-            signals,
-            key=lambda s: (
-                s.get("eligibility_confirmed") is True,
-                s.get("relevance_score") or 0,
-            ),
-            reverse=True,
-        )
+        ranked = sorted(signals, key=lambda s: s.get("relevance_score") or 0, reverse=True)
         actions = []
         for s in ranked[:3]:
-            name = s.get("program_name", "")
-            parts = [f"Apply for {name}"]
-            if s.get("eligibility_confirmed") is True:
-                parts.append("(eligibility confirmed)")
+            parts = [f"Apply for {s.get('program_name', '')}"]
+            if s.get("rec_label"):
+                parts.append(f"to fund {s['rec_label']}")
             if s.get("deadline"):
                 parts.append(f"— deadline {s['deadline']}")
             if s.get("application_url"):
@@ -171,28 +176,25 @@ class OrchestratorAgent:
     def _build_narrative(
         self, block_id: int, signals: list[dict], funding_score: float, feasibility: float
     ) -> str:
-        count = len(signals)
-        confirmed = [s for s in signals if s.get("eligibility_confirmed") is True]
+        programs = self._best_per_program(signals)
+        covered = {s.get("rec_label") for s in signals if s.get("rec_label")}
         dated = [s for s in signals if s.get("deadline")]
         # Rank before naming a "top" opportunity — the DB returns rows in arbitrary
         # order, which previously surfaced a stale signal as the headline.
-        ranked = sorted(
-            signals,
-            key=lambda s: (
-                s.get("eligibility_confirmed") is True,
-                s.get("relevance_score") or 0,
-            ),
-            reverse=True,
-        )
-        top = ranked[0].get("program_name", "") if ranked else "none identified"
+        ranked = sorted(signals, key=lambda s: s.get("relevance_score") or 0, reverse=True)
+        top = ranked[0] if ranked else None
 
-        parts = [
-            f"Block {block_id} has a feasibility score of {feasibility:.0f}/100.",
-            f"{count} funding program(s) identified; top opportunity: {top}.",
-        ]
-        if confirmed:
-            names = ", ".join(s.get("program_name", "") for s in confirmed[:2])
-            parts.append(f"Eligibility is confirmed for {len(confirmed)} of them ({names}).")
+        parts = [f"Block {block_id} has a feasibility score of {feasibility:.0f}/100."]
+        if top:
+            headline = f"{len(programs)} funding program(s) matched to "
+            headline += f"{len(covered)} recommendation(s); strongest fit: "
+            headline += f"{top.get('program_name', '')}"
+            headline += f" for {top['rec_label']}." if top.get("rec_label") else "."
+            parts.append(headline)
+        else:
+            parts.append("No funding programs were approved for this block.")
+        if covered:
+            parts.append("Recommendations with funding identified: " + ", ".join(sorted(covered)) + ".")
         if dated:
             soonest = min(s["deadline"] for s in dated)
             parts.append(f"Nearest application deadline is {soonest}.")

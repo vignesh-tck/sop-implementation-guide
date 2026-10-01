@@ -18,14 +18,21 @@ class Settings(BaseSettings):
     weight_zoning: float = 0.35
     weight_policy: float = 0.25
 
-    # Funding sub-score points per signal. A program whose eligibility is CONFIRMED
-    # by a rule or published dataset counts for more than one the LLM merely rated
-    # relevant — verified eligibility is stronger evidence than topical fit.
-    points_confirmed_eligible: float = 30.0   # confirmed eligible AND relevance >= 0.6
-    points_relevant: float = 15.0             # relevance >= 0.6, no hard test
-    points_marginal: float = 5.0              # 0.3 <= relevance < 0.6
+    # Funding sub-score points per approved programme. Every signal counted here is
+    # one a reviewer kept, so the score rates how well the money matches the block's
+    # recommendations rather than how many candidates the model emitted.
+    points_strong_fit: float = 40.0           # fit >= relevance_high
+    points_marginal: float = 5.0              # relevance_floor <= fit < relevance_high
+    # relevance_floor doubles as the cut-off for a blanket 'approved': fits below it
+    # are proposals nobody chose, so they are not written.
     relevance_high: float = 0.6
     relevance_floor: float = 0.3
+
+    # DEPRECATED — the two-tier eligibility scoring these fed was removed when
+    # eligibility stopped being determined deterministically. Left in place so an
+    # existing .env carrying them still loads; nothing reads them.
+    points_confirmed_eligible: float = 30.0
+    points_relevant: float = 15.0
 
     # Each tier contributes at most this many signals. Without per-tier caps an
     # uncapped sum hits the 100 ceiling on almost any block — every block scored
