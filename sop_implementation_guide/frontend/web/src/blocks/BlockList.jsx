@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { money, num } from "../api.js";
 
-export default function BlockList({ blocks, selectedId, onSelect }) {
+export default function BlockList({ blocks, selectedId, onSelect, showMap, onToggleMap }) {
   const [filter, setFilter] = useState("");
   const q = filter.trim().toLowerCase();
   const rows = blocks.filter((b) => !q || (b.street_name || "").toLowerCase().includes(q));
@@ -9,7 +9,12 @@ export default function BlockList({ blocks, selectedId, onSelect }) {
   return (
     <aside>
       <div className="aside-head">
-        <h2>Blocks ({blocks.length})</h2>
+        <div className="aside-head-row">
+          <h2>Blocks ({blocks.length})</h2>
+          <button type="button" className="map-toggle" aria-pressed={showMap} onClick={onToggleMap}>
+            {showMap ? "Hide map" : "Show map"}
+          </button>
+        </div>
         <input placeholder="Filter by street…" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>
       <div className="blocks">

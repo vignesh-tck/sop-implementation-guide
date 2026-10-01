@@ -376,7 +376,7 @@
   }
   .source-bucket.funding { color: var(--gold); }
   .source-bucket.zoning  { color: var(--silver); }
-  .source-bucket.policy  { color: var(--accent); }
+  .source-bucket.policy  { color: var(--app); }
 
   .source-name {
     font-family: 'Sora', sans-serif;
@@ -563,6 +563,7 @@
   .agent-card.funding      { border-top-color: var(--gold); }
   .agent-card.policy       { border-top-color: #A78BFA; }
   .agent-card.scorer       { border-top-color: var(--bronze); }
+  .agent-card.scaffold     { border-top-color: var(--text-faint); opacity: .72; }
 
   .agent-role {
     font-family: 'JetBrains Mono', monospace;
@@ -577,6 +578,7 @@
   .agent-card.funding      .agent-role { color: var(--gold); }
   .agent-card.policy       .agent-role { color: #A78BFA; }
   .agent-card.scorer       .agent-role { color: var(--bronze); }
+  .agent-card.scaffold     .agent-role { color: var(--text-faint); }
 
   .agent-name {
     font-family: 'Sora', sans-serif;
@@ -850,6 +852,7 @@
   .status-locked   { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(32,197,181,.25); }
   .status-open     { background: var(--gold-dim);   color: var(--gold);   border: 1px solid rgba(221,169,32,.25); }
   .status-confirm  { background: var(--app-dim);    color: var(--app);    border: 1px solid rgba(139,130,232,.25); }
+  .status-risk     { background: rgba(224,92,92,.1); color: #E05C5C; border: 1px solid rgba(224,92,92,.25); }
 
   .open-q-list {
     display: flex;
@@ -1010,6 +1013,7 @@
     padding: 16px;
     box-shadow: var(--shadow);
   }
+  .pattern-card.gap { border-style: dashed; opacity: .85; }
 
   .pattern-name {
     font-family: 'Sora', sans-serif;
@@ -1187,15 +1191,17 @@
 <!-- Sticky nav -->
 <nav class="top-nav">
   <div class="top-nav-inner">
+    <a class="nav-link" href="#purpose">purpose &amp; scope</a>
+    <span class="nav-sep">›</span>
     <a class="nav-link" href="#overview">overview</a>
     <span class="nav-sep">›</span>
     <a class="nav-link" href="#sources">sources</a>
     <span class="nav-sep">›</span>
-    <a class="nav-link" href="#bronze">bronze</a>
+    <a class="nav-link" href="#pattern">specialist pattern</a>
     <span class="nav-sep">›</span>
-    <a class="nav-link" href="#silver">silver</a>
+    <a class="nav-link" href="#discovery">stage a · discovery</a>
     <span class="nav-sep">›</span>
-    <a class="nav-link" href="#lookup">geo lookup</a>
+    <a class="nav-link" href="#analysis">stage b · analysis</a>
     <span class="nav-sep">›</span>
     <a class="nav-link" href="#gold">gold</a>
     <span class="nav-sep">›</span>
@@ -1203,15 +1209,17 @@
     <span class="nav-sep">›</span>
     <a class="nav-link" href="#llm-roles">llm roles</a>
     <span class="nav-sep">›</span>
-    <a class="nav-link" href="#scalability">scalability</a>
-    <span class="nav-sep">›</span>
     <a class="nav-link" href="#agents">agents</a>
-    <span class="nav-sep">›</span>
-    <a class="nav-link" href="#decisions">decisions</a>
     <span class="nav-sep">›</span>
     <a class="nav-link" href="#codedesign">code design</a>
     <span class="nav-sep">›</span>
+    <a class="nav-link" href="#limitations">limitations</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#decisions">decisions</a>
+    <span class="nav-sep">›</span>
     <a class="nav-link" href="#evaluation">evaluation</a>
+    <span class="nav-sep">›</span>
+    <a class="nav-link" href="#midterm">midterm status</a>
   </div>
 </nav>
 
@@ -1221,409 +1229,311 @@
   <header class="doc-header">
     <div class="doc-eyebrow">GA Tech OMSA Practicum · State of Place</div>
     <h1 class="doc-title">Implementation Engine<br>Solution Architecture</h1>
-    <p class="doc-subtitle">A medallion data pipeline that takes block-level urban design recommendations and enriches them with real-world implementation signals — funding opportunities, zoning constraints, and policy context — to produce a feasibility score and actionable next steps for each block.</p>
+    <p class="doc-subtitle">This document defines the solution architecture for the SoP Implementation Engine — a human-in-the-loop system that converts block-level urban-design recommendations into fundable, actionable next steps. Analysis is organized by domain — Funding, Zoning, and Policy — each following a common two-phase pattern: an interactive discovery process that builds a domain catalogue from external sources, and a recommendation-level analysis process that scores catalogued items against a block's individual recommendations. A deterministic scoring layer combines the resulting domain signals into a composite feasibility score for each block.</p>
     <div class="doc-meta">
-      <span class="meta-tag">Geography: Bowie, MD</span>
-      <span class="meta-tag">Focus: Parks / Public Garden (anchor)</span>
-      <span class="meta-tag">Pattern: Bronze → Silver → Gold</span>
-      <span class="meta-tag">Version: 0.1 · Sep 2026</span>
+      <span class="meta-tag">Geography: Bowie, MD · 68 blocks / 1,506 recommendations</span>
+      <span class="meta-tag">Domains: Funding · Zoning · Policy</span>
+      <span class="meta-tag">Pattern: Discovery → Recommendation-Level Fit → Gold</span>
+      <span class="meta-tag">Version: 0.4 · Sep 2026</span>
     </div>
   </header>
 
-  <!-- Overview -->
-  <section class="section" id="overview">
-    <div class="section-label">01 · Architecture Overview</div>
-    <h2 class="section-title">End-to-End Pipeline</h2>
-    <p class="section-body">Public data from three focus areas is ingested raw, cleaned and geo-tagged, then spatially joined to SoP recommendation blocks. The gold layer assembles the final implementation profile per block — used by both the scoring engine and the natural-language front end.</p>
+  <!-- Purpose, Scope & Principles -->
+  <section class="section" id="purpose">
+    <div class="section-label">01 · Purpose, Scope &amp; Principles</div>
+    <h2 class="section-title">Purpose, Scope and Architecture Principles</h2>
+    <p class="section-body"><strong>Purpose.</strong> This document describes the solution architecture of the SoP Implementation Engine: a system that converts block-level urban-design recommendations into fundable, actionable next steps for municipal planners. Analysis is organized by domain — Funding, Zoning, and Policy — each following a common two-phase pattern of interactive catalogue discovery followed by recommendation-level fit scoring, with a deterministic layer aggregating domain signals into a per-block feasibility profile. This document defines that architecture and the decisions behind it.</p>
 
-    <div class="diagram-wrap">
-      <div class="mermaid">
-flowchart TD
-    subgraph SRC["  SOURCE LAYER  "]
-        S1[SoP Recommendation Summaries]
-        S2[Public Funding Datasets]
-        S3[Zoning GIS Layers]
-        S4[Plans & Policy Documents]
-    end
-
-    subgraph BRZ["  BRONZE — Raw Ingestion  "]
-        B1[(recommendations_raw)]
-        B2[(funding_raw)]
-        B3[(zoning_raw)]
-        B4[(policies_raw)]
-    end
-
-    subgraph SLV["  SILVER — Cleaned & Geo-Tagged  "]
-        V1[(recommendations_clean)]
-        V2[(funding_signals)]
-        V3[(zoning_signals)]
-        V4[(policy_signals)]
-        VL[(geo_lookup)]
-    end
-
-    subgraph GLD["  GOLD — Implementation Profiles  "]
-        G1[(block_implementation_profile)]
-    end
-
-    subgraph APP["  APPLICATION LAYER  "]
-        A1[Vector Store]
-        A2[REST API]
-        A3[Frontend + NL Chat]
-    end
-
-    S1 --> B1
-    S2 --> B2
-    S3 --> B3
-    S4 --> B4
-
-    B1 --> V1
-    B2 --> V2
-    B3 --> V3
-    B4 --> V4
-
-    V1 --> VL
-    V2 --> VL
-    V3 --> VL
-    V4 --> VL
-    VL --> G1
-
-    G1 --> A1
-    A1 --> A2
-    A2 --> A3
-
-    style SRC fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
-    style BRZ fill:#2A1A0A,stroke:#D4924A,color:#E8C49A
-    style SLV fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
-    style GLD fill:#2A1F06,stroke:#DDA920,color:#EDD490
-    style APP fill:#1A1640,stroke:#8B82E8,color:#BDB8F4
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:24px 0 12px;letter-spacing:-.01em">Scope</h3>
+    <div class="framework-compare">
+      <div class="framework-card recommended">
+        <div class="framework-tag">In scope</div>
+        <ul class="framework-pros">
+          <li>Domain-based recommendation analysis across Funding, Zoning, and Policy, per the two-phase specialist pattern (Section 04)</li>
+          <li>Interactive, source-agnostic catalogue discovery per domain</li>
+          <li>Recommendation-level fit scoring per domain</li>
+          <li>Deterministic aggregation into a composite feasibility score and implementation profile</li>
+          <li>Human review and approval gating on every persistence path</li>
+        </ul>
+      </div>
+      <div class="framework-card">
+        <div class="framework-tag">Out of scope</div>
+        <ul class="framework-cons">
+          <li>Natural-language chat interface and vector-based retrieval</li>
+          <li>Multi-jurisdiction / multi-city deployment</li>
+          <li>Authentication, authorization, and multi-tenant access control</li>
+        </ul>
       </div>
     </div>
 
     <div class="callout">
-      <strong>Design principle:</strong> Each layer is independently queryable and reusable. The geo_lookup table is the only join point between the SoP data and the public data — which means swapping in a different city or state only requires rebuilding that one table and re-running the silver transforms for the new geography.
+      <strong>On delivery status:</strong> this document describes the architecture independent of how much of it is currently built. What is implemented, partially implemented, or not yet started as of a given date is tracked separately in <a href="#midterm" style="color:inherit">Section 15</a>.
     </div>
+
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 8px;letter-spacing:-.01em">Architecture Principles</h3>
+    <p class="section-body" style="margin-bottom:16px">These principles are binding on any change to the system. Where a proposed change conflicts with one, the principle governs unless explicitly revised here.</p>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="pillar-icon">①</div>
+        <div class="pillar-title">Human authorization precedes persistence</div>
+        <div class="pillar-body">No write to the data store occurs without an explicit human confirmation. Every agent graph pauses at each decision point before committing state.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">②</div>
+        <div class="pillar-title">Deterministic computation for decision-bearing scores</div>
+        <div class="pillar-body">The feasibility score and its sub-scores are computed by structured logic, never proposed by a language model. The model informs; it does not decide.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">③</div>
+        <div class="pillar-title">Provenance accompanies every derived fact</div>
+        <div class="pillar-body">Source URL, verbatim excerpt, and extraction confidence are recorded alongside any value the system derives from an external source.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">④</div>
+        <div class="pillar-title">Control logic lives in configuration and prompts</div>
+        <div class="pillar-body">Scoring thresholds and extraction instructions are externally editable constants, not embedded in conditional branching.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">⑤</div>
+        <div class="pillar-title">Idempotent persistence</div>
+        <div class="pillar-body">Every write operation is safe to re-execute; re-running an agent updates existing state rather than duplicating it.</div>
+      </div>
+    </div>
+
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 8px;letter-spacing:-.01em">Assumptions and Dependencies</h3>
+    <p class="section-body">The architecture assumes continued availability of the Anthropic API for language-model calls, a managed Supabase PostgreSQL instance as the system of record, and a single-jurisdiction pilot (Bowie, Maryland, within Prince George's County) as the current deployment target. Delivery is scoped to a two-person engineering team. These assumptions are revisited in <a href="#limitations" style="color:inherit">Section 12</a>.</p>
   </section>
 
   <hr>
 
-  <!-- Source Layer -->
-  <section class="section" id="sources">
-    <div class="section-label">02 · Source Layer</div>
-    <h2 class="section-title">Data Sources</h2>
-    <p class="section-body">Two categories of source data: SoP's own outputs (already in structured form) and public datasets across three focus areas, gathered in raw form before any processing. Priority sources are chosen for quality, spatial precision, and relevance to the top recommendation types in Bowie (Public Garden, Sport Field, Arcades).</p>
-
-    <div class="source-grid">
-      <div class="source-item">
-        <div class="source-bucket" style="color:var(--accent)">SoP Data</div>
-        <div class="source-name">Recommendation Summaries</div>
-        <div class="source-desc">Block-level recs from Bowie CSV/XLSX — features to change, before/after SoP scores, block geometry.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket funding">Funding</div>
-        <div class="source-name">EPA Brownfields</div>
-        <div class="source-desc">Federal grants for contaminated site assessment/cleanup — often converted to parks. Spatial dataset available via ArcGIS.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket funding">Funding</div>
-        <div class="source-name">HUD CDBG Grants</div>
-        <div class="source-desc">Community Development Block Grants — flexible federal funding, frequently used for parks and green space. Searchable via HUD eGIS.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket funding">Funding</div>
-        <div class="source-name">MD Program Open Space</div>
-        <div class="source-desc">State-level park acquisition and development funding. Maryland DNR publishes funded projects spatially. Updated annually.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket funding">Funding</div>
-        <div class="source-name">New Markets Tax Credits</div>
-        <div class="source-desc">Census-tract-level federal tax credit designations. Available on ArcGIS Open Data. Relevant for mixed-use development recs.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket zoning">Zoning</div>
-        <div class="source-name">PG County Zoning GIS</div>
-        <div class="source-desc">Official parcel-level zoning designations for Prince George's County. Available as shapefile/GeoJSON on county open data portal.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket zoning">Zoning</div>
-        <div class="source-name">Maryland iMAP Parcels</div>
-        <div class="source-desc">Statewide parcel layer with land use codes. Useful for cross-validating PG County zoning and identifying vacant/underused land.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket policy">Plans & Policy</div>
-        <div class="source-name">PG County Master Plan</div>
-        <div class="source-desc">Official long-range land use plan. PDF — requires NLP extraction. Bowie Town Center is designated Mixed-Use Revitalization.</div>
-      </div>
-      <div class="source-item">
-        <div class="source-bucket policy">Plans & Policy</div>
-        <div class="source-name">EPA Brownfield Policy Docs</div>
-        <div class="source-desc">Federal policy documents on brownfield redevelopment incentives, eligible activities, and community benefit requirements.</div>
-      </div>
-    </div>
-  </section>
-
-  <hr>
-
-  <!-- Bronze Layer -->
-  <section class="section" id="bronze">
-    <div class="section-label">03 · Bronze Layer</div>
-    <h2 class="section-title">Raw Ingestion</h2>
-    <p class="section-body">Data lands here in original form — no transforms, no cleaning. The goal is fast, complete ingestion with provenance tracking. Every row knows where it came from and when it was collected.</p>
-
-    <div class="layer-stack">
-
-      <div class="layer-card source open">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">SoP</span>
-          <span class="layer-card-title">recommendations_raw</span>
-          <span class="layer-card-desc">43 Bowie blocks · XLSX/CSV</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>sgmntid</code></td><td>integer</td><td>Block segment ID</td></tr>
-                <tr><td class="field-name"><code>neighborhood</code></td><td>string</td><td>e.g. Bowie Town Center</td></tr>
-                <tr><td class="field-name"><code>street_name</code></td><td>string</td><td>Street name</td></tr>
-                <tr><td class="field-name"><code>intersection_a / b</code></td><td>string</td><td>Block boundary intersections</td></tr>
-                <tr><td class="field-name"><code>features_to_change</code></td><td>string[]</td><td>Raw recommendation list (pipe-delimited)</td></tr>
-                <tr><td class="field-name"><code>score_before</code></td><td>float</td><td>Current SoP Index score</td></tr>
-                <tr><td class="field-name"><code>score_after</code></td><td>float</td><td>Projected SoP Index score</td></tr>
-                <tr><td class="field-name"><code>priority_tier</code></td><td>string</td><td>50pct / 75pct / 90pct threshold</td></tr>
-                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td>Load timestamp</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="layer-card bronze">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">Bronze</span>
-          <span class="layer-card-title">funding_raw</span>
-          <span class="layer-card-desc">EPA, HUD CDBG, MD POS, NMTC · raw API/shapefile dumps</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>source_id</code></td><td>string</td><td>e.g. epa_brownfields, hud_cdbg</td></tr>
-                <tr><td class="field-name"><code>program_name</code></td><td>string</td><td>As-is from source</td></tr>
-                <tr><td class="field-name"><code>raw_json</code></td><td>JSON</td><td>Full raw API or shapefile record</td></tr>
-                <tr><td class="field-name"><code>geometry_raw</code></td><td>geometry</td><td>WKT/GeoJSON as received</td></tr>
-                <tr><td class="field-name"><code>source_url</code></td><td>string</td><td>Origin URL for provenance</td></tr>
-                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="layer-card bronze">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">Bronze</span>
-          <span class="layer-card-title">zoning_raw</span>
-          <span class="layer-card-desc">PG County GIS · Maryland iMAP parcels · raw shapefiles</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>parcel_id</code></td><td>string</td><td>County parcel identifier</td></tr>
-                <tr><td class="field-name"><code>zoning_code_raw</code></td><td>string</td><td>Raw code e.g. C-S-C, R-80, M-U-TC</td></tr>
-                <tr><td class="field-name"><code>land_use_raw</code></td><td>string</td><td>Raw land use description</td></tr>
-                <tr><td class="field-name"><code>geometry_raw</code></td><td>geometry</td><td>Parcel polygon</td></tr>
-                <tr><td class="field-name"><code>source_id</code></td><td>string</td><td>pg_county_gis / md_imap</td></tr>
-                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="layer-card bronze">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">Bronze</span>
-          <span class="layer-card-title">policies_raw</span>
-          <span class="layer-card-desc">PG Master Plan · EPA policy docs · MD health ordinances · PDFs</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>doc_id</code></td><td>string</td><td>Unique document identifier</td></tr>
-                <tr><td class="field-name"><code>doc_name</code></td><td>string</td><td>Document title</td></tr>
-                <tr><td class="field-name"><code>doc_type</code></td><td>string</td><td>master_plan / ordinance / federal_policy</td></tr>
-                <tr><td class="field-name"><code>raw_text</code></td><td>text</td><td>Full extracted text (PDF → text)</td></tr>
-                <tr><td class="field-name"><code>jurisdiction</code></td><td>string</td><td>federal / state / county / city</td></tr>
-                <tr><td class="field-name"><code>source_url</code></td><td>string</td><td></td></tr>
-                <tr><td class="field-name"><code>ingested_at</code></td><td>timestamp</td><td></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-    </div>
-  </section>
-
-  <hr>
-
-  <!-- Silver Layer -->
-  <section class="section" id="silver">
-    <div class="section-label">04 · Silver Layer</div>
-    <h2 class="section-title">Cleaned &amp; Geo-Tagged</h2>
-    <p class="section-body">Bronze data is cleaned, standardized, and spatially enriched. Unstructured documents are parsed with NLP/LLM to extract structured signals. Everything is projected into a common coordinate system (WGS84) and tagged with consistent vocabulary that works across geographies.</p>
-
-    <div class="layer-stack">
-
-      <div class="layer-card silver open">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">Silver</span>
-          <span class="layer-card-title">recommendations_clean</span>
-          <span class="layer-card-desc">Geocoded block segments with parsed recommendation arrays</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>block_id</code></td><td>string</td><td>Stable identifier, carries through to gold</td></tr>
-                <tr><td class="field-name"><code>geometry</code></td><td>geometry</td><td>Line segment geocoded from street + intersections</td></tr>
-                <tr><td class="field-name"><code>rec_features</code></td><td>string[]</td><td>Parsed and normalized recommendation labels</td></tr>
-                <tr><td class="field-name"><code>rec_categories</code></td><td>string[]</td><td>Mapped to SoP dimension (Parks, Safety, Aesthetics…)</td></tr>
-                <tr><td class="field-name"><code>score_before</code></td><td>float</td><td></td></tr>
-                <tr><td class="field-name"><code>score_after</code></td><td>float</td><td></td></tr>
-                <tr><td class="field-name"><code>priority_tier</code></td><td>string</td><td></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="layer-card silver">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">Silver</span>
-          <span class="layer-card-title">funding_signals</span>
-          <span class="layer-card-desc">Standardized funding opportunities with eligibility and geographic boundaries</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>funding_id</code></td><td>string</td><td></td></tr>
-                <tr><td class="field-name"><code>program_name</code></td><td>string</td><td>Cleaned, standardized name</td></tr>
-                <tr><td class="field-name"><code>funding_type</code></td><td>string</td><td>grant / tax_credit / loan / subsidy</td></tr>
-                <tr><td class="field-name"><code>jurisdiction</code></td><td>string</td><td>federal / state / county / city</td></tr>
-                <tr><td class="field-name"><code>applicable_features</code></td><td>string[]</td><td>Which recommendation types this applies to</td></tr>
-                <tr><td class="field-name"><code>max_amount</code></td><td>float</td><td>USD</td></tr>
-                <tr><td class="field-name"><code>eligibility_criteria</code></td><td>string</td><td>LLM-extracted eligibility summary</td></tr>
-                <tr><td class="field-name"><code>deadline</code></td><td>date</td><td>Next application deadline</td></tr>
-                <tr><td class="field-name"><code>geometry</code></td><td>geometry</td><td>Eligible zone boundary (census tract, county, etc.)</td></tr>
-                <tr><td class="field-name"><code>source_id</code></td><td>string</td><td>Back-reference to bronze</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="layer-card silver">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">Silver</span>
-          <span class="layer-card-title">zoning_signals</span>
-          <span class="layer-card-desc">Parcel zoning normalized to standard categories with park/mixed-use flags</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>parcel_id</code></td><td>string</td><td></td></tr>
-                <tr><td class="field-name"><code>zoning_category</code></td><td>string</td><td>Normalized: commercial / residential / mixed_use / open_space</td></tr>
-                <tr><td class="field-name"><code>allows_park</code></td><td>boolean</td><td>Derived from zoning category</td></tr>
-                <tr><td class="field-name"><code>allows_mixed_use</code></td><td>boolean</td><td></td></tr>
-                <tr><td class="field-name"><code>variance_required</code></td><td>boolean</td><td>If rec type doesn't match current zone</td></tr>
-                <tr><td class="field-name"><code>geometry</code></td><td>geometry</td><td>Parcel polygon, reprojected to WGS84</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="layer-card silver">
-        <div class="layer-card-header" onclick="toggleCard(this)">
-          <span class="layer-badge">Silver</span>
-          <span class="layer-card-title">policy_signals</span>
-          <span class="layer-card-desc">LLM-extracted structured signals from raw policy documents</span>
-          <span class="layer-chevron">›</span>
-        </div>
-        <div class="layer-card-body">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
-              <tbody>
-                <tr><td class="field-name"><code>policy_id</code></td><td>string</td><td></td></tr>
-                <tr><td class="field-name"><code>policy_name</code></td><td>string</td><td></td></tr>
-                <tr><td class="field-name"><code>signal_type</code></td><td>string</td><td>support / barrier / requirement / incentive</td></tr>
-                <tr><td class="field-name"><code>applicable_features</code></td><td>string[]</td><td>Which recommendation types this applies to</td></tr>
-                <tr><td class="field-name"><code>geographic_scope</code></td><td>string</td><td>federal / state / county / city / neighborhood</td></tr>
-                <tr><td class="field-name"><code>extracted_text</code></td><td>string</td><td>Relevant excerpt for provenance</td></tr>
-                <tr><td class="field-name"><code>confidence</code></td><td>float</td><td>LLM confidence 0–1</td></tr>
-                <tr><td class="field-name"><code>doc_id</code></td><td>string</td><td>Back-reference to bronze doc</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-    </div>
-  </section>
-
-  <hr>
-
-  <!-- Geo Lookup -->
-  <section class="section" id="lookup">
-    <div class="section-label">05 · Geo Lookup</div>
-    <h2 class="section-title">Block ↔ Geography Mapping</h2>
-    <p class="section-body">The geo_lookup table is the critical junction dataset. It spatially joins each SoP block segment to all relevant geographic boundaries — census tracts, zoning districts, funding eligibility zones, and policy areas. This is what makes the gold layer possible, and what makes the system portable to new cities.</p>
+  <!-- Overview -->
+  <section class="section" id="overview">
+    <div class="section-label">02 · Solution Overview</div>
+    <h2 class="section-title">Two-Stage, Human-in-the-Loop Process Architecture</h2>
+    <p class="section-body">The system is built around two purpose-built LangGraph agents. <strong>Stage A</strong> is a live, interactive session that fills a funding catalogue from whatever sources a planner brings — it runs independently of any block. <strong>Stage B</strong> then matches that catalogue against one block's specific recommendations, with one LLM judgement per (recommendation, programme) pair. Nothing reaches the database in either stage without an explicit human confirmation.</p>
 
     <div class="diagram-wrap">
       <div class="mermaid">
-flowchart LR
-    B[("block_id\n(line segment\ngeometry)")]
+flowchart TD
+    subgraph SOP["SoP Block Data (loaded once from Bowie GeoJSON/CSV)"]
+        B1[("blocks (68 rows)")]
+        B2[("block_recommendations (1,506 rows)")]
+    end
 
-    B -->|ST_Intersects| CT["Census Tract\nfunding_signals"]
-    B -->|ST_Within| ZD["Zoning Parcel\nzoning_signals"]
-    B -->|ST_Intersects| FZ["Funding Zone\n(NMTC, Brownfield,\nEnergy Community)"]
-    B -->|Attribute match| PA["Policy Area\n(county, state, federal)"]
+    subgraph STA["Stage A: Funding Discovery (interactive, block-agnostic)"]
+        A0["Planner: goal plus source URLs"] --> A1["load_sources"]
+        A1 --> A2{{"Interrupt: clarify"}}
+        A2 --> A3{{"Interrupt: research"}}
+        A3 --> A4{{"Interrupt: extract"}}
+        A4 --> A5{{"Interrupt: geo_tie"}}
+        A5 --> A6[("funding_programs catalog")]
+    end
 
-    CT --> LK[("geo_lookup\nrow")]
-    ZD --> LK
-    FZ --> LK
-    PA --> LK
+    subgraph STB["Stage B: Recommendation-Level Analysis"]
+        C0["Planner selects a block"] --> C1["load_block plus load_programs"]
+        C1 --> C2["assess_fit: one LLM call per recommendation"]
+        C2 --> C3{{"Interrupt: human_review"}}
+        C3 --> C4[("funding_signals")]
+    end
 
-    style B fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
-    style LK fill:#2A1F06,stroke:#DDA920,color:#EDD490
+    subgraph GLD["Gold Layer (deterministic compute, no LLM)"]
+        G1["compute_gold"]
+        G2[("block_implementation_profiles")]
+    end
+
+    subgraph PLN["Planned (scaffolds, not wired)"]
+        Z1["ZoningAgent"]
+        P1["PolicyAgent"]
+    end
+
+    B2 --> C0
+    A6 --> C1
+    C4 --> G1
+    G1 --> G2
+    Z1 -.->|"placeholder score"| G1
+    P1 -.->|"placeholder score"| G1
+
+    style SOP fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
+    style STA fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
+    style STB fill:#2A1F06,stroke:#DDA920,color:#EDD490
+    style GLD fill:#1A1640,stroke:#8B82E8,color:#BDB8F4
+    style PLN fill:#1F1F1F,stroke:#3D5E7A,color:#8FA8BF
       </div>
+    </div>
+
+    <div class="callout">
+      <strong>Design rule that must survive:</strong> logic lives in prompts and user input, not in Python branching. Every Stage A prompt is a module constant at the top of <code>funding_discovery.py</code>, editable without touching graph nodes. The moment a node starts growing keyword lists or scoring rules again, the black box this design replaced is coming back.
+    </div>
+
+    <div class="callout" style="background:var(--gold-dim);border-left-color:var(--gold)">
+      <strong>Honesty about the score:</strong> the feasibility score is currently <strong>~40% real, 60% placeholder</strong> by weight — funding is genuinely computed from reviewed signals, zoning and policy are hardcoded <code>50.0</code> until their agents are built. See <a href="#gold" style="color:inherit">Gold Layer</a> and <a href="#limitations" style="color:inherit">Limitations</a>.
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Data Sources -->
+  <section class="section" id="sources">
+    <div class="section-label">03 · Data Sources &amp; Domain Data Model</div>
+    <h2 class="section-title">Source Data Classification: Static Ingestion vs. Dynamic Discovery</h2>
+    <p class="section-body">SoP's own block data is loaded once, up front, by a script — it never goes through an agent. Funding data is the opposite: nothing is pre-loaded, and every programme in the catalogue was found, read and verified during a live session. Zoning and policy sources are named here as the intended targets for the scaffold agents, not as anything currently ingested.</p>
+
+    <div class="source-grid">
+      <div class="source-item">
+        <div class="source-bucket" style="color:var(--accent)">SoP Data · loaded once</div>
+        <div class="source-name">Bowie Blocks &amp; Recommendations</div>
+        <div class="source-desc"><code>scripts/load_bowie_data.py</code> reads the Bowie GeoJSON + <code>OrderedBlockwiseRecs</code> CSV into <code>blocks</code> (68 rows, ACS tract demographics pre-joined) and <code>block_recommendations</code> (1,506 ranked rows). No agent touches this path.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket funding">Funding · live, per session</div>
+        <div class="source-name">Whatever URL the planner pastes</div>
+        <div class="source-desc">Any government funding page — state DNR programs, municipal grant pages, agency notices. Fetched as plain text (<code>tools/web_source.py</code>), read and extracted by the LLM in the same session. No fixed source list exists in code.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket funding">Funding · live, per session</div>
+        <div class="source-name">Grants.gov</div>
+        <div class="source-desc">A protocol adapter only (<code>tools/grants_gov.py</code>) — Grants.gov needs a POST search, so the generic GET fetcher can't read it. It has no keyword list or relevance filter of its own; the session's distilled search term drives it.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket funding">Funding · live, per session</div>
+        <div class="source-name">Claude web search</div>
+        <div class="source-desc">Anthropic's native <code>web_search</code> tool, used in the <code>research</code> stage to surface additional official sources the planner didn't paste. Reported honestly as unavailable if the configured model doesn't support it.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket zoning">Zoning · planned, not ingested</div>
+        <div class="source-name">PG County Parcel GIS · Maryland iMAP</div>
+        <div class="source-desc">Named as <code>ZoningAgent</code>'s target sources in code comments. No connector exists yet — <code>zoning.py</code> is a scaffold that returns <code>not_implemented</code>.</div>
+      </div>
+      <div class="source-item">
+        <div class="source-bucket policy">Policy · planned, not ingested</div>
+        <div class="source-name">PG County Master Plan · local ordinances</div>
+        <div class="source-desc">Named as <code>PolicyAgent</code>'s target sources. Same scaffold status as zoning — no PDF parsing or extraction pipeline exists for this bucket yet.</div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Not used as fixed, pre-ingested sources:</strong> EPA Brownfields, HUD CDBG, MD Program Open Space and NMTC were evaluated as candidate bronze sources but are not part of the current ingestion path. HUD CDBG income rules and NMTC tract designation logic exist in the codebase (<code>tools/cdbg.py</code>, <code>tools/tract_eligibility.py</code>) but are disconnected from scoring — see <a href="#limitations" style="color:inherit">Limitations</a>.
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Domain Specialist Pattern -->
+  <section class="section" id="pattern">
+    <div class="section-label">04 · Domain Specialist Pattern</div>
+    <h2 class="section-title">The Two-Phase Specialist Pattern</h2>
+    <p class="section-body">Analysis in this system is organized by domain — Funding, Zoning, and Policy each answer a different question about a block's recommendations, but all three are architected to follow the same two-phase pattern. Funding is the domain currently built end-to-end; Zoning and Policy are defined against the identical pattern and share its data-model shape, but their logic has not been implemented. This section describes the pattern generically; <a href="#discovery" style="color:inherit">Sections 05–06</a> present Funding as its reference implementation.</p>
+
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:24px 0 12px;letter-spacing:-.01em">Phase 1 — Discovery (block-agnostic)</h3>
+    <p class="section-body">An interactive session that builds a domain catalogue from external sources: a source is fetched, the agent asks what it cannot determine from the text, reports honestly what the source actually contains, extracts structured items with verbatim excerpts checked against the source, and confirms each item's geographic reach. A human confirms every stage before anything is persisted. The output is a domain catalogue table, independent of any specific block.</p>
+
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:24px 0 12px;letter-spacing:-.01em">Phase 2 — Recommendation-Level Fit Analysis (block-scoped)</h3>
+    <p class="section-body">A block-scoped process that loads the domain catalogue and scores every catalogued item against each of that block's individual recommendations — one LLM judgement per (recommendation, item) pair, each carrying a score and a narrative. A human reviews the proposed fits, may adjust or reject any of them, and only approved fits are persisted as domain signals. Every specialist agent implements the same <code>SpecialistAgent</code> contract for this phase: <code>run()</code>, <code>get_pending_review()</code>, <code>apply_feedback()</code>.</p>
+
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 12px;letter-spacing:-.01em">Pattern Instantiation by Domain</h3>
+    <div class="table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:20px">
+      <table>
+        <thead><tr><th>Domain</th><th>Phase 1 target sources</th><th>Catalogue table</th><th>Signal table</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span style="color:var(--gold);font-weight:600">Funding</span></td>
+            <td style="color:var(--text-muted)">Any government funding page a planner supplies; Grants.gov</td>
+            <td><code>funding_programs</code></td>
+            <td><code>funding_signals</code></td>
+            <td><span class="decision-status status-locked">✓ Phase 1 + Phase 2 implemented</span></td>
+          </tr>
+          <tr>
+            <td><span style="color:var(--silver);font-weight:600">Zoning</span></td>
+            <td style="color:var(--text-muted)">PG County Parcel GIS, Maryland iMAP</td>
+            <td style="color:var(--text-faint)">not yet defined</td>
+            <td><code>zoning_signals</code> <span style="color:var(--text-faint)">(schema exists, unused)</span></td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ scaffold — contract only</span></td>
+          </tr>
+          <tr>
+            <td><span style="color:#A78BFA;font-weight:600">Policy</span></td>
+            <td style="color:var(--text-muted)">PG County Master Plan, local ordinances</td>
+            <td style="color:var(--text-faint)">not yet defined</td>
+            <td><code>policy_signals</code> <span style="color:var(--text-faint)">(schema exists, unused)</span></td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ scaffold — contract only</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <strong>Why this matters architecturally:</strong> building Zoning or Policy to completion means implementing the same two LangGraph phases already proven by Funding — a discovery graph over a new source type, and a fit-analysis graph over a new catalogue — not designing a new pattern. The risk in delivering them is domain-specific extraction quality (parcel GIS and plan PDFs are harder to parse than funding notices), not architectural novelty.
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Stage A -->
+  <section class="section" id="discovery">
+    <div class="section-label">05 · Reference Implementation — Funding, Phase 1</div>
+    <h2 class="section-title">Funding Discovery Process</h2>
+    <p class="section-body">This section instantiates <a href="#pattern" style="color:inherit">the Phase 1 pattern</a> for the Funding domain — the only domain in which Phase 1 has been implemented. A planner states a funding goal in their own words and pastes source URLs. <code>FundingDiscoveryAgent</code> reads them, asks what it genuinely cannot determine, reports what the sources actually contain, drafts programmes with verified excerpts, and recommends a geographic reach — pausing for a human decision at every stage. This session is not tied to any block; it fills <code>funding_programs</code>, which Phase 2 later reads.</p>
+
+    <div class="workflow-steps">
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot start">→</div><div class="step-line"></div></div>
+        <div class="step-content">
+          <div class="step-title">load_sources</div>
+          <div class="step-desc">Distils the goal into a short keyword phrase (a separate LLM call — a keyword index doesn't understand prose), then fetches each URL. Grants.gov URLs route through the POST adapter; everything else is a plain GET reduced to text.</div>
+          <div class="step-tools"><span class="step-tool">_search_keyword(goal)</span><span class="step-tool">web_source.fetch()</span><span class="step-tool">grants_gov.as_source_text()</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot interrupt">⏸</div><div class="step-line interrupt"></div></div>
+        <div class="step-content">
+          <div class="step-title" style="color:#F59E0B">clarify</div>
+          <div class="step-desc">Asks up to 4 questions it genuinely can't answer from the fetched text — scope, applicant type, whether closed rounds matter. If the sources are sufficient it asks nothing. The planner answers free text, or sends <code>skip</code>.</div>
+          <div class="step-tools" style="border-color:rgba(245,158,11,.4)"><span class="step-tool" style="color:#F59E0B">CLARIFY_SCHEMA</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot interrupt">⏸</div><div class="step-line interrupt"></div></div>
+        <div class="step-content">
+          <div class="step-title" style="color:#F59E0B">research</div>
+          <div class="step-desc">Reports honestly what each source contains and what it doesn't — a navigation page with no programme detail is named as such, not padded. Runs a web search for additional official sources. The planner can replace the source list entirely before extraction.</div>
+          <div class="step-tools"><span class="step-tool">web_source.search()</span><span class="step-tool" style="color:#F59E0B">'sources' override or 'approved'</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot interrupt">⏸</div><div class="step-line interrupt"></div></div>
+        <div class="step-content">
+          <div class="step-title" style="color:#F59E0B">extract</div>
+          <div class="step-desc">Extracts programmes with a null left where the text doesn't support a value, rather than a guess. Every <code>source_excerpt</code> is checked against the fetched text by <code>excerpt_is_genuine()</code> — the line between extraction and invention. Unverified excerpts are flagged for the reviewer, not hidden.</div>
+          <div class="step-tools"><span class="step-tool">EXTRACT_SCHEMA</span><span class="step-tool">web_source.excerpt_is_genuine()</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot interrupt">⏸</div><div class="step-line interrupt"></div></div>
+        <div class="step-content">
+          <div class="step-title" style="color:#F59E0B">geo_tie</div>
+          <div class="step-desc">Recommends a <code>geo_scope</code> per programme (<code>federal</code> / <code>state:MD</code> / <code>county:24033</code> / <code>tract:NMTC</code> / <code>unknown</code>) with a one-sentence reason, based on what the source said rather than what's convenient. The planner can override any recommendation before anything is written.</div>
+          <div class="step-tools"><span class="step-tool">GEO_SCHEMA</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot end">✓</div><div class="step-line" style="opacity:0"></div></div>
+        <div class="step-content">
+          <div class="step-title">write_silver</div>
+          <div class="step-desc">Upserts confirmed programmes into <code>funding_programs</code> keyed on a stable <code>program_key</code>, and records the session in <code>discovery_sessions</code> — even a session that extracted nothing is kept, so nobody re-runs a dead source next month.</div>
+          <div class="step-tools"><span class="step-tool">FundingProgramRepository.upsert_program()</span><span class="step-tool">DiscoverySessionRepository.record()</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Already demonstrated, verified Sep 29:</strong> two live sessions against a Maryland DNR funding page produced <code>sustainablemaryland.com:sm-action-grants-program</code> and <code>mta.maryland.gov:statewide-transit-innovation-grant</code> — both <code>is_extracted=true</code>, <code>reviewed_by_user=true</code>. The catalogue's 4 hand-typed rows and 6 keyword-synced rows from the previous design were deleted; every row in it now came through this session. The excerpt guard has already caught and flagged one programme whose draft excerpt didn't match the fetched text.
     </div>
 
     <div class="layer-stack">
       <div class="layer-card silver open">
         <div class="layer-card-header" onclick="toggleCard(this)">
           <span class="layer-badge">Silver</span>
-          <span class="layer-card-title">geo_lookup</span>
-          <span class="layer-card-desc">One row per block — all geographic identifiers resolved</span>
+          <span class="layer-card-title">funding_programs</span>
+          <span class="layer-card-desc">The catalogue — written only by discovery sessions, read only by Stage B</span>
           <span class="layer-chevron">›</span>
         </div>
         <div class="layer-card-body">
@@ -1631,16 +1541,103 @@ flowchart LR
             <table>
               <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
               <tbody>
-                <tr><td class="field-name"><code>block_id</code></td><td>string</td><td>PK — joins to recommendations_clean</td></tr>
-                <tr><td class="field-name"><code>census_tract</code></td><td>string</td><td>FIPS census tract</td></tr>
-                <tr><td class="field-name"><code>county_fips</code></td><td>string</td><td>e.g. 24033 for Prince George's County</td></tr>
-                <tr><td class="field-name"><code>state_fips</code></td><td>string</td><td>e.g. 24 for Maryland</td></tr>
-                <tr><td class="field-name"><code>zoning_parcel_ids</code></td><td>string[]</td><td>Overlapping parcels from zoning_signals</td></tr>
-                <tr><td class="field-name"><code>funding_signal_ids</code></td><td>string[]</td><td>Applicable funding programs by spatial match</td></tr>
-                <tr><td class="field-name"><code>policy_signal_ids</code></td><td>string[]</td><td>Applicable policy signals by jurisdiction scope</td></tr>
-                <tr><td class="field-name"><code>is_nmtc_eligible</code></td><td>boolean</td><td>New Markets Tax Credit zone flag</td></tr>
-                <tr><td class="field-name"><code>is_brownfield_site</code></td><td>boolean</td><td>EPA brownfield designation flag</td></tr>
-                <tr><td class="field-name"><code>is_energy_community</code></td><td>boolean</td><td>IRA Energy Community designation flag</td></tr>
+                <tr><td class="field-name"><code>program_key</code></td><td>text</td><td>Stable upsert key, e.g. <code>sustainablemaryland.com:sm-action-grants-program</code> — re-extracting the same programme updates rather than duplicates</td></tr>
+                <tr><td class="field-name"><code>program_name / program_type / source_agency</code></td><td>text</td><td>As the source states them, left null rather than guessed</td></tr>
+                <tr><td class="field-name"><code>award_amount_min / max</code></td><td>numeric</td><td>Null when the source gives no figure</td></tr>
+                <tr><td class="field-name"><code>deadline</code></td><td>date</td><td></td></tr>
+                <tr><td class="field-name"><code>eligibility_notes / application_url</code></td><td>text</td><td></td></tr>
+                <tr><td class="field-name"><code>is_extracted</code></td><td>boolean</td><td>True for every row today — the hand-typed and keyword-synced eras are gone</td></tr>
+                <tr><td class="field-name"><code>extraction_confidence</code></td><td>numeric 0–1</td><td>Model's own estimate — a prompt to check the excerpt, not an error</td></tr>
+                <tr><td class="field-name"><code>source_excerpt</code></td><td>text</td><td>Verbatim span, checked against the fetched text at extraction time</td></tr>
+                <tr><td class="field-name"><code>geo_scope</code></td><td>text</td><td><code>federal</code> / <code>state:MD</code> / <code>county:24033</code> / <code>tract:NMTC</code> / <code>unknown</code></td></tr>
+                <tr><td class="field-name"><code>requires_tract_designation</code></td><td>text</td><td>Set when <code>geo_scope</code> is <code>tract:*</code> — currently unused downstream, see Limitations</td></tr>
+                <tr><td class="field-name"><code>reviewed_by_user</code></td><td>boolean</td><td>The discovery flow cannot produce <code>false</code> — doubles as an invariant check</td></tr>
+                <tr><td class="field-name"><code>discovery_thread_id</code></td><td>text</td><td>Links back to the session that wrote it</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Stage B -->
+  <section class="section" id="analysis">
+    <div class="section-label">06 · Reference Implementation — Funding, Phase 2</div>
+    <h2 class="section-title">Recommendation-Level Funding Fit Analysis</h2>
+    <p class="section-body">This section instantiates <a href="#pattern" style="color:inherit">the Phase 2 pattern</a> for the Funding domain. A planner selects a block. <code>FundingAgent</code> — an implementation of the <code>SpecialistAgent</code> contract — scores every catalogued programme against each of that block's individual recommendations, not the block as a whole. Scoring a programme against a whole block produced narratives too vague to act on ("supports community development"); scoring it against one recommendation gives the reviewer something concrete to agree or disagree with.</p>
+
+    <div class="workflow-steps">
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot start">→</div><div class="step-line"></div></div>
+        <div class="step-content">
+          <div class="step-title">load_block + load_programs</div>
+          <div class="step-desc">Fetches the block and its recommendations, then picks the top 5 by predicted score gain — deduped on (label, direction), since the same improvement recurs under multiple SoP dimensions. Loads the full <code>funding_programs</code> catalogue.</div>
+          <div class="step-tools"><span class="step-tool">BlockRepository.get_with_recs()</span><span class="step-tool">FundingProgramRepository.list_candidates()</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot">1</div><div class="step-line"></div></div>
+        <div class="step-content">
+          <div class="step-title">assess_fit</div>
+          <div class="step-desc">One LLM call per recommendation, scoring every programme in the catalogue against it. <code>direction</code> is load-bearing: a <code>Decrease</code> recommendation (e.g. "Surface parking lot / Decrease") means fund removal, not construction — without this the model went looking for grants to build one.</div>
+          <div class="step-tools"><span class="step-tool">assess_recommendation_fit()</span><span class="step-tool">FIT_SCHEMA · structured output</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot interrupt">⏸</div><div class="step-line interrupt"></div></div>
+        <div class="step-content">
+          <div class="step-title" style="color:#F59E0B">human_review</div>
+          <div class="step-desc">Grouped by recommendation, each fit carries a <code>fit_score</code> (0–1) and a narrative naming the concrete connection or mismatch. The reviewer approves, adjusts any score, or rejects per (recommendation, programme) pair. Sending plain <code>approved</code> keeps every fit at or above <code>relevance_floor</code> (0.3).</div>
+          <div class="step-tools" style="border-color:rgba(245,158,11,.4)"><span class="step-tool" style="color:#F59E0B">GET /threads/{id}/review</span><span class="step-tool" style="color:#F59E0B">POST /threads/{id}/approve</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot">2</div><div class="step-line"></div></div>
+        <div class="step-content">
+          <div class="step-title">apply_feedback</div>
+          <div class="step-desc">Keeps only what the reviewer approved, at the score the reviewer settled on. Every pair assessed and not kept is recorded as a rejection — an earlier review's row is deleted, not left standing, so unticking a fit on re-review actually takes.</div>
+          <div class="step-tools"><span class="step-tool">score_adjusted_by_reviewer flag</span></div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot end">✓</div><div class="step-line" style="opacity:0"></div></div>
+        <div class="step-content">
+          <div class="step-title">write_signals</div>
+          <div class="step-desc">Writes one row per (recommendation, programme) to <code>funding_signals</code>, deletes the rejected pairs, and stamps <code>thread_id</code> on every row — the fallback that lets <code>compute_gold</code> recover a block from a thread after the in-memory checkpointer is wiped.</div>
+          <div class="step-tools"><span class="step-tool">FundingRepository.upsert_signal()</span><span class="step-tool">on_conflict: block_id,rec_id,program_name</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout" style="background:var(--gold-dim);border-left-color:var(--gold)">
+      <strong>Geography today:</strong> there is no spatial join layer. Blocks already carry <code>tract_geoid</code> from the ACS pre-join, and programmes carry a planner-confirmed <code>geo_scope</code> string — matching between the two is a design intention for the fit prompt, not a hard filter. The <code>tract_eligibility</code> table (the minimal <code>geo_lookup</code>) exists in schema but was unwired from scoring on Sep 29 when the unit of analysis moved from block to recommendation. Details and the re-enable path are in <a href="#limitations" style="color:inherit">Limitations</a>.
+    </div>
+
+    <div class="layer-stack">
+      <div class="layer-card silver open">
+        <div class="layer-card-header" onclick="toggleCard(this)">
+          <span class="layer-badge">Silver</span>
+          <span class="layer-card-title">funding_signals</span>
+          <span class="layer-card-desc">One row per (block, recommendation, programme) that a reviewer kept</span>
+          <span class="layer-chevron">›</span>
+        </div>
+        <div class="layer-card-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="field-name"><code>block_id / rec_id / rec_label</code></td><td>—</td><td>Unit of analysis — <code>rec_label</code> denormalised so the row reads even if the recommendation is later re-ranked</td></tr>
+                <tr><td class="field-name"><code>program_name / program_type / source_agency</code></td><td>text</td><td>Copied from the matched <code>funding_programs</code> row</td></tr>
+                <tr><td class="field-name"><code>relevance_score</code></td><td>numeric 0–1</td><td>The reviewer's settled fit score — model's proposal unless overridden</td></tr>
+                <tr><td class="field-name"><code>eligibility_notes</code></td><td>text</td><td>Holds the per-recommendation narrative — why this money suits this improvement</td></tr>
+                <tr><td class="field-name"><code>source_name / source_url / source_vintage / fetched_at</code></td><td>—</td><td>Provenance travels with the signal, not just the catalogue row</td></tr>
+                <tr><td class="field-name"><code>raw_data.score_adjusted_by_reviewer</code></td><td>boolean</td><td>True only when the reviewer's number differs from the model's — a corrected score reads differently from an untouched one</td></tr>
+                <tr><td class="field-name"><code>raw_data.assessment_failed</code></td><td>boolean</td><td>True when the LLM call failed and a 0.5 default was substituted — visible, not silent</td></tr>
+                <tr><td class="field-name"><code>eligibility_confirmed / determination_basis</code></td><td>—</td><td>Columns still exist; nothing writes them since deterministic eligibility was unwired</td></tr>
+                <tr><td class="field-name">unique constraint</td><td>—</td><td><code>(block_id, rec_id, program_name)</code> — same programme can legitimately match several recommendations</td></tr>
               </tbody>
             </table>
           </div>
@@ -1653,46 +1650,79 @@ flowchart LR
 
   <!-- Gold Layer -->
   <section class="section" id="gold">
-    <div class="section-label">06 · Gold Layer</div>
-    <h2 class="section-title">Implementation Profiles</h2>
-    <p class="section-body">The gold table is the final enriched output — one row per block, assembling everything needed to answer the question: <em>"Can this recommendation actually get done, and how?"</em> It includes a computed feasibility score and an LLM-generated action summary.</p>
+    <div class="section-label">07 · Data Architecture — Implementation Profile</div>
+    <h2 class="section-title">Gold Layer: The Implementation Profile</h2>
+    <p class="section-body">One row per block, computed by the Orchestrator once Phase 2 signals are approved. Two distinct layers combine to produce it, and they are easy to conflate: an LLM-proposed judgement at the individual-signal level, followed by deterministic arithmetic at the aggregation level. Neither layer does the other's job.</p>
+
+    <div class="workflow-steps" style="margin:20px 0">
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot start">1</div><div class="step-line"></div></div>
+        <div class="step-content">
+          <div class="step-title">LLM proposes a fit_score — one signal at a time</div>
+          <div class="step-desc">For each (recommendation, programme) pair, the model outputs a <code>fit_score</code> (0–1) and a narrative. This is a judgement, not a fact, and it is the only point in the pipeline where a language model outputs a number that can end up in the data store.</div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot">2</div><div class="step-line"></div></div>
+        <div class="step-content">
+          <div class="step-title">A human reviews, adjusts, or rejects each proposal</div>
+          <div class="step-desc">Only fits a reviewer approves are persisted to <code>funding_signals</code>, at the score the reviewer settled on. An unreviewed model output never reaches this table.</div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot">3</div><div class="step-line"></div></div>
+        <div class="step-content">
+          <div class="step-title">Deterministic aggregation produces the domain sub-score</div>
+          <div class="step-desc">Fixed Python arithmetic counts how many <em>approved</em> signals fall into each fit tier and applies a fixed point value per tier (below). No model call happens at this step.</div>
+        </div>
+      </div>
+      <div class="workflow-step">
+        <div class="step-spine"><div class="step-dot end">4</div><div class="step-line" style="opacity:0"></div></div>
+        <div class="step-content">
+          <div class="step-title">Deterministic weighted composite produces the feasibility score</div>
+          <div class="step-desc">The three domain sub-scores are combined by a fixed weighted sum. This is the number written to <code>feasibility_score</code> — again, no model call.</div>
+        </div>
+      </div>
+    </div>
 
     <div class="score-formula">
-      <div class="score-term">
-        <span class="score-value">Feasibility</span>
-        <span class="score-label">score 0–100</span>
-      </div>
+      <div class="score-term"><span class="score-value">Feasibility</span><span class="score-label">score 0–100</span></div>
       <span class="score-op">=</span>
-      <div class="score-term">
-        <span class="score-value">0.4 ×</span>
-        <span class="score-label">funding score</span>
-      </div>
+      <div class="score-term"><span class="score-value">0.40 ×</span><span class="score-label">funding score</span></div>
       <span class="score-op">+</span>
-      <div class="score-term">
-        <span class="score-value">0.35 ×</span>
-        <span class="score-label">zoning score</span>
-      </div>
+      <div class="score-term"><span class="score-value">0.35 ×</span><span class="score-label">zoning score*</span></div>
       <span class="score-op">+</span>
-      <div class="score-term">
-        <span class="score-value">0.25 ×</span>
-        <span class="score-label">policy score</span>
-      </div>
+      <div class="score-term"><span class="score-value">0.25 ×</span><span class="score-label">policy score*</span></div>
+    </div>
+    <p class="section-body" style="margin-top:-16px;font-size:0.8rem">* zoning and policy are a hardcoded <code>50.0</code> today — <code>ZoningAgent</code> and <code>PolicyAgent</code> are scaffolds. See <a href="#limitations" style="color:inherit">Limitations</a>.</p>
+
+    <div class="callout" style="background:var(--gold-dim);border-left-color:var(--gold)">
+      <strong>The gold layer is ~40% real, 60% placeholder by weight.</strong> Funding is a genuinely computed score over reviewer-approved signals. Zoning and policy contribute their configured weight against a constant. The dev console marks the placeholder sub-scores with an asterisk — the honest claim is "reasoned, reviewable funding matching," not "a fully-scored feasibility index."
     </div>
 
-    <div class="callout" style="background:var(--app-dim);border-left-color:var(--app)">
-      <strong>LLM boundary:</strong> The feasibility score (0–100) is computed <em>deterministically</em> from structured silver table data — never by an LLM. The LLM only generates the plain-English <code>summary_narrative</code> on top of that already-computed score. This keeps the gold layer auditable and the source of truth grounded in real data, not model inference.
-    </div>
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 12px;letter-spacing:-.01em">Funding sub-score: tiered, not summed</h3>
+    <p class="section-body">Scored on reviewer-approved fits alone, deduped to the strongest fit per programme first (a block-level view can't let one versatile programme cap the score by counting its rows under four different recommendations).</p>
 
-    <div class="callout">
-      <strong>Weights are configurable.</strong> The 0.4 / 0.35 / 0.25 split is a starting point — funding is weighted highest because it's the most binary constraint (either money exists or it doesn't). These weights can be tuned per recommendation type, city, or user preference.
+    <div class="code-block">
+      <div class="code-block-label"><span class="code-block-filename">agents/orchestrator.py — _score_funding()</span><span class="code-block-tag">deterministic</span></div>
+      <pre class="code"><span class="c-cm"># strong  = fit_score >= relevance_high   (0.6)</span>
+<span class="c-cm"># marginal = relevance_floor <= fit_score < relevance_high  (0.3–0.6)</span>
+<span class="c-cm"># each tier capped at max_counted_per_tier (2) — an uncapped sum</span>
+<span class="c-cm"># hit the 100 ceiling on almost every block and stopped discriminating</span>
+
+score = <span class="c-fn">min</span>(
+    points_strong_fit * <span class="c-fn">min</span>(strong_count, cap) +
+    points_marginal   * <span class="c-fn">min</span>(marginal_count, cap),
+    <span class="c-str">100.0</span>
+)</pre>
     </div>
 
     <div class="layer-stack">
       <div class="layer-card gold open">
         <div class="layer-card-header" onclick="toggleCard(this)">
           <span class="layer-badge">Gold</span>
-          <span class="layer-card-title">block_implementation_profile</span>
-          <span class="layer-card-desc">One row per block per recommendation — the final deliverable dataset</span>
+          <span class="layer-card-title">block_implementation_profiles</span>
+          <span class="layer-card-desc">One row per block — the deliverable dataset</span>
           <span class="layer-chevron">›</span>
         </div>
         <div class="layer-card-body">
@@ -1700,23 +1730,13 @@ flowchart LR
             <table>
               <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
               <tbody>
-                <tr><td class="field-name"><code>block_id</code></td><td>string</td><td>PK</td></tr>
-                <tr><td class="field-name"><code>rec_features</code></td><td>string[]</td><td>The SoP recommendations for this block</td></tr>
-                <tr><td class="field-name"><code>score_lift</code></td><td>float</td><td>SoP projected score improvement</td></tr>
-                <tr><td class="field-name"><code>funding_opportunities</code></td><td>JSON[]</td><td>Matched programs: name, amount, deadline, eligibility</td></tr>
-                <tr><td class="field-name"><code>zoning_context</code></td><td>JSON</td><td>Current zone, allows_park, variance_required</td></tr>
-                <tr><td class="field-name"><code>policy_support</code></td><td>JSON[]</td><td>Supporting and blocking policies with excerpts</td></tr>
-                <tr><td class="field-name"><code>feasibility_score</code></td><td>float</td><td>0–100 composite score</td></tr>
-                <tr><td class="field-name"><code>funding_subscore</code></td><td>float</td><td>Component score 0–100</td></tr>
-                <tr><td class="field-name"><code>zoning_subscore</code></td><td>float</td><td>Component score 0–100</td></tr>
-                <tr><td class="field-name"><code>policy_subscore</code></td><td>float</td><td>Component score 0–100</td></tr>
-                <tr><td class="field-name"><code>top_actions</code></td><td>string[]</td><td>Ranked next steps (e.g. "Apply for EPA brownfield grant")</td></tr>
-                <tr><td class="field-name"><code>barriers</code></td><td>string[]</td><td>Key blockers (e.g. "Commercial zoning — variance required")</td></tr>
-                <tr><td class="field-name"><code>effort_estimate</code></td><td>JSON</td><td><code>{level: "Medium", factors: ["zoning variance", "community approval"], estimated_months: 6}</code></td></tr>
-                <tr><td class="field-name"><code>timing_context</code></td><td>JSON</td><td><code>{nearest_deadline: "2025-03-15", source: "EPA Brownfield Grant", actionable_within_12mo: true, seasonal_constraints: []}</code></td></tr>
-                <tr><td class="field-name"><code>summary_narrative</code></td><td>text</td><td>LLM-generated plain-English implementation summary</td></tr>
-                <tr><td class="field-name"><code>confidence</code></td><td>float</td><td>Overall confidence in signal quality</td></tr>
-                <tr><td class="field-name"><code>updated_at</code></td><td>timestamp</td><td></td></tr>
+                <tr><td class="field-name"><code>block_id</code></td><td>bigint</td><td>Unique — one profile per block</td></tr>
+                <tr><td class="field-name"><code>feasibility_score</code></td><td>numeric 0–100</td><td>Weighted composite</td></tr>
+                <tr><td class="field-name"><code>funding_score / zoning_score / policy_score</code></td><td>numeric</td><td>Only <code>funding_score</code> is computed from real signals today</td></tr>
+                <tr><td class="field-name"><code>top_actions</code></td><td>jsonb</td><td>Ranked action strings, e.g. "Apply for &lt;programme&gt; to fund &lt;rec_label&gt; — deadline &lt;date&gt;"</td></tr>
+                <tr><td class="field-name"><code>narrative</code></td><td>text</td><td><strong>Deterministic Python string template</strong> (<code>_build_narrative()</code>) — not LLM-generated. Named top opportunity, covered recommendations, nearest deadline, sub-score.</td></tr>
+                <tr><td class="field-name"><code>funding_signal_ids / zoning_signal_ids / policy_signal_ids</code></td><td>jsonb</td><td>Zoning/policy arrays are always empty today</td></tr>
+                <tr><td class="field-name"><code>thread_id</code></td><td>text</td><td>The Stage B thread that produced this profile</td></tr>
               </tbody>
             </table>
           </div>
@@ -1729,21 +1749,20 @@ flowchart LR
 
   <!-- Application Layer -->
   <section class="section" id="app">
-    <div class="section-label">07 · Application Layer</div>
-    <h2 class="section-title">Vector Store, API &amp; Frontend</h2>
-    <p class="section-body">The gold layer feeds two parallel outputs: a vector store for semantic search and natural-language Q&amp;A, and a REST API that powers the map-based front end. Users can explore blocks spatially, drill into implementation profiles, and refine plans through a chat interface.</p>
+    <div class="section-label">08 · Presentation &amp; Integration Layer</div>
+    <h2 class="section-title">Presentation Layer: Current State and Target Architecture</h2>
+    <p class="section-body">The intended frontend is still React on Vercel with a map view, block panel and RAG chat — that decision hasn't changed. What exists today is a single-file plain-HTML dev console, built so both agents could be clicked through end-to-end without waiting on frontend tooling. No vector store and no <code>/chat</code> endpoint exist yet; every current route serves structured JSON to a human reviewer, not a chat model.</p>
 
     <div class="app-stack">
       <div class="app-block">
-        <div class="app-block-label">Vector Store</div>
-        <div class="app-block-title">Semantic Retrieval</div>
+        <div class="app-block-label" style="color:var(--accent)">Live today</div>
+        <div class="app-block-title">Dev Console <span class="decision-status status-locked" style="margin-left:6px">✓ in use</span></div>
         <div class="app-block-body">
-          Gold profiles + source document chunks embedded and stored (e.g. Chroma, Pinecone, pgvector). Enables RAG for Q&amp;A.
+          <code>frontend/dev-console/index.html</code> — no build step, no framework. Two panels:
           <ul>
-            <li>Gold profile embeddings (one per block)</li>
-            <li>Policy doc chunks with block metadata</li>
-            <li>Grant eligibility text chunks</li>
-            <li>Query: "What funding exists for parks near Harbour Way?"</li>
+            <li>Block list + analysis — trigger Stage B, review fits, approve, compute gold</li>
+            <li>Discovery panel (added in <code>e400d11</code>) — start Stage A, answer each interrupt</li>
+            <li>The discovery panel renders whatever <code>stage_payload.stage</code> returns via one generic renderer — adding or reordering a stage needs no frontend change</li>
           </ul>
         </div>
       </div>
@@ -1751,25 +1770,24 @@ flowchart LR
         <div class="app-block-label">REST API</div>
         <div class="app-block-title">Data Access Layer</div>
         <div class="app-block-body">
-          Exposes gold layer and vector store to the frontend. Key endpoints:
+          11 routes across 3 routers, all resolved and verified:
           <ul>
-            <li><code>/blocks</code> — list blocks with scores</li>
-            <li><code>/blocks/{id}</code> — full profile</li>
-            <li><code>/blocks/{id}/actions</code> — ranked next steps</li>
-            <li><code>/chat</code> — NL query → RAG response</li>
+            <li><code>/blocks</code>, <code>/blocks/{id}</code>, <code>/blocks/{id}/signals</code>, <code>/blocks/{id}/profile</code></li>
+            <li><code>POST /blocks/{id}/analyze</code> — starts Stage B</li>
+            <li><code>/threads/{id}/review</code>, <code>/threads/{id}/approve</code>, <code>/threads/{id}/gold</code></li>
+            <li><code>/funding/discovery</code>, <code>/funding/discovery/{thread_id}</code>, <code>/funding/discovery/{thread_id}/respond</code>, <code>/funding/discovery/sessions</code></li>
           </ul>
         </div>
       </div>
-      <div class="app-block">
-        <div class="app-block-label">Frontend</div>
-        <div class="app-block-title">Map + Chat Interface</div>
+      <div class="app-block" style="opacity:.75">
+        <div class="app-block-label">Planned target</div>
+        <div class="app-block-title">React + Vercel <span class="decision-status status-open" style="margin-left:6px">~ not started</span></div>
         <div class="app-block-body">
-          Map view of Bowie blocks color-coded by feasibility score. Click a block → implementation profile panel. Chat input for follow-up queries.
+          Map view of blocks colored by feasibility score, click-through profile panel, chat interface over a vector store.
           <ul>
-            <li>Map: blocks colored by feasibility score</li>
-            <li>Panel: funding opps, zoning flags, policy signals</li>
-            <li>Chat: "What can we build in 12 months?"</li>
-            <li>Provenance: every signal links to source</li>
+            <li>Map + panel: same data the dev console already serves, restyled</li>
+            <li>Chat: requires a vector store (pgvector on Supabase is provisioned but nothing embeds into it yet) and a <code>/chat</code> endpoint — neither exists</li>
+            <li>Node.js availability on the primary dev machine is still an open question — see <a href="#decisions" style="color:inherit">Decisions</a></li>
           </ul>
         </div>
       </div>
@@ -1780,196 +1798,44 @@ flowchart LR
 
   <!-- LLM Roles -->
   <section class="section" id="llm-roles">
-    <div class="section-label">08 · LLM Roles</div>
-    <h2 class="section-title">Where LLMs Fit — and Where They Don't</h2>
-    <p class="section-body">From the sponsor kickoff: <em>"SoP Models + Structured Data = Source of Truth. LLMs = Extraction, Interpretation, and Interaction Layer."</em> This is a hard architectural constraint — LLMs are never the source of truth, only the layer that extracts, interprets, and surfaces it.</p>
+    <div class="section-label">09 · AI / LLM Integration Architecture</div>
+    <h2 class="section-title">Large Language Model Integration Boundaries</h2>
+    <p class="section-body">The LLM produces two kinds of output: extracted facts (read from a source, with a verifiable excerpt) and proposed judgements (a <code>fit_score</code> and narrative scoring one recommendation against one catalogued item). Both are reviewable by a human before persistence — a <code>fit_score</code> is a genuine model output, not a deterministic value, but it never reaches a table unreviewed. What the LLM is never asked for, and never produces, is an aggregate: no model call computes a domain sub-score or the composite feasibility score. Those are fixed arithmetic over the set of human-approved judgements — see <a href="#gold" style="color:inherit">Section 07</a>.</p>
 
-    <!-- Two-role split from slide -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:24px 0">
-
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:var(--shadow)">
-        <div style="background:var(--silver-dim);border-bottom:1px solid var(--border);padding:14px 18px">
-          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--silver);margin-bottom:4px">Back-end</div>
-          <div style="font-family:'Sora',sans-serif;font-size:1rem;font-weight:700;color:var(--text)">Extract &amp; Structure</div>
-        </div>
-        <div style="padding:16px 18px">
-          <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:0.85rem;color:var(--text-muted);line-height:1.5">
-            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Find relevant information from public sources</li>
-            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Parse unstructured documents (grant PDFs, policy docs)</li>
-            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Extract rules, eligibility, opportunities, constraints, deadlines</li>
-            <li style="display:flex;gap:8px"><span style="color:var(--silver);flex-shrink:0">→</span>Convert into structured implementation signals the gold layer can use</li>
-          </ul>
-          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);margin-bottom:6px">In our architecture</div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px">
-              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--accent);background:var(--accent-dim);border:1px solid rgba(32,197,181,.2);border-radius:3px;padding:2px 7px">PolicyAgent.extract_signals()</span>
-              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--gold);background:var(--gold-dim);border:1px solid rgba(221,169,32,.2);border-radius:3px;padding:2px 7px">FundingAgent.extract_eligibility()</span>
-              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--bronze);background:var(--bronze-dim);border:1px solid rgba(192,122,58,.2);border-radius:3px;padding:2px 7px">generate_narrative()</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:var(--shadow)">
-        <div style="background:var(--gold-dim);border-bottom:1px solid var(--border);padding:14px 18px">
-          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:4px">Front-end</div>
-          <div style="font-family:'Sora',sans-serif;font-size:1rem;font-weight:700;color:var(--text)">Interact &amp; Query</div>
-        </div>
-        <div style="padding:16px 18px">
-          <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:0.85rem;color:var(--text-muted);line-height:1.5">
-            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span>Query the contextualized recommendation system</li>
-            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"What could we implement in the next year?"</em></li>
-            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"Which recommendations have funding available?"</em></li>
-            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"Why is this scenario now higher priority?"</em></li>
-            <li style="display:flex;gap:8px"><span style="color:var(--gold);flex-shrink:0">→</span><em>"What should we do next?"</em></li>
-          </ul>
-          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);margin-bottom:6px">In our architecture</div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px">
-              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--app);background:var(--app-dim);border:1px solid rgba(139,130,232,.2);border-radius:3px;padding:2px 7px">ChatPanel (RAG)</span>
-              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--app);background:var(--app-dim);border:1px solid rgba(139,130,232,.2);border-radius:3px;padding:2px 7px">POST /chat</span>
-              <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--app);background:var(--app-dim);border:1px solid rgba(139,130,232,.2);border-radius:3px;padding:2px 7px">pgvector similarity search</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- Source of truth principle -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">The Source of Truth Principle</h3>
-
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 22px;box-shadow:var(--shadow);margin-bottom:20px">
-      <div style="text-align:center;font-family:'Sora',sans-serif;font-size:0.95rem;font-weight:600;color:var(--text);margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)">
-        SoP Models &nbsp;+&nbsp; Structured Gold Layer Data &nbsp;=&nbsp; <span style="color:var(--accent)">Source of Truth</span>
-      </div>
-      <div style="text-align:center;font-family:'Sora',sans-serif;font-size:0.95rem;font-weight:600;color:var(--text-muted)">
-        LLMs &nbsp;=&nbsp; <span style="color:var(--silver)">Extraction</span> &nbsp;+&nbsp; <span style="color:var(--bronze)">Interpretation</span> &nbsp;+&nbsp; <span style="color:var(--gold)">Interaction</span> &nbsp;&nbsp;layer only
-      </div>
-    </div>
-
-    <!-- Correct vs wrong -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 14px;letter-spacing:-.01em">Scoring: Deterministic vs LLM</h3>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">
-      <div class="code-block" style="margin:0;border-color:rgba(32,197,181,.3)">
-        <div class="code-block-label">
-          <span class="code-block-filename">✓ Correct</span>
-          <span class="code-block-tag">score is deterministic</span>
-        </div>
-        <pre class="code"><span class="c-cm"># Score computed from structured data</span>
-score = (
-  <span class="c-fn">score_funding</span>(funding_signals) * <span class="c-str">0.40</span> +
-  <span class="c-fn">score_zoning</span>(zoning_signals)  * <span class="c-str">0.35</span> +
-  <span class="c-fn">score_policy</span>(policy_signals)  * <span class="c-str">0.25</span>
-)
-
-<span class="c-cm"># LLM only writes the narrative on top</span>
-narrative = llm.<span class="c-fn">generate</span>(
-  prompt=<span class="c-str">"Summarise this profile"</span>,
-  context={score, signals, actions}
-)</pre>
-      </div>
-
-      <div class="code-block" style="margin:0;border-color:rgba(224,92,92,.3)">
-        <div class="code-block-label" style="background:rgba(224,92,92,.08)">
-          <span class="code-block-filename" style="color:#E05C5C">✗ Wrong</span>
-          <span class="code-block-tag" style="color:#E05C5C;background:rgba(224,92,92,.1);border-color:rgba(224,92,92,.3)">LLM as source of truth</span>
-        </div>
-        <pre class="code"><span class="c-cm"># Never do this</span>
-result = llm.<span class="c-fn">generate</span>(
-  prompt=<span class="c-str">"Given these signals, what is the
-  feasibility score for this block?"</span>
-)
-
-<span class="c-cm"># score = result["score"]  ← hallucination risk</span>
-<span class="c-cm"># LLM invented a number, not computed one</span></pre>
-      </div>
-    </div>
-
-    <!-- LLM usage map -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 14px;letter-spacing:-.01em">Where LLMs Are Used in This System</h3>
-
-    <div class="table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);overflow:hidden">
+    <div class="table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:20px">
       <table>
-        <thead>
-          <tr>
-            <th>Role</th>
-            <th>Where</th>
-            <th>What the LLM does</th>
-            <th>Grounded in</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Role</th><th>Where</th><th>What it does</th><th>Grounded in</th></tr></thead>
         <tbody>
           <tr>
             <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--silver)">Extraction</span></td>
-            <td><code>PolicyAgent</code> · <code>FundingAgent</code></td>
-            <td style="color:var(--text-muted)">Parses unstructured PDFs and grant docs into structured fields (eligibility, deadlines, constraints)</td>
-            <td style="color:var(--text-muted)">Raw document text from bronze layer</td>
+            <td><code>FundingDiscoveryAgent.extract</code></td>
+            <td style="color:var(--text-muted)">Draft programmes from fetched source text — every <code>source_excerpt</code> checked against the raw text before the reviewer sees it</td>
+            <td style="color:var(--text-muted)">Raw page text fetched in <code>load_sources</code></td>
           </tr>
           <tr>
             <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--bronze)">Interpretation</span></td>
-            <td><code>generate_narrative()</code></td>
-            <td style="color:var(--text-muted)">Writes plain-English summary of the implementation profile — what the score means, what to do next</td>
-            <td style="color:var(--text-muted)">Deterministically computed score + structured signals from gold layer</td>
+            <td><code>clarify</code> / <code>research</code> / <code>geo_tie</code></td>
+            <td style="color:var(--text-muted)">Asks what it can't determine, reports what sources actually contain, recommends geographic reach with a stated reason</td>
+            <td style="color:var(--text-muted)">Fetched text + the planner's own answers</td>
           </tr>
           <tr>
-            <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--gold)">Interaction</span></td>
-            <td><code>ChatPanel</code> · <code>POST /chat</code></td>
-            <td style="color:var(--text-muted)">Answers NL queries by retrieving relevant gold layer records via pgvector, then generating a grounded response</td>
-            <td style="color:var(--text-muted)">pgvector similarity search over gold layer embeddings — never free-form generation</td>
+            <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--gold)">Judgment</span></td>
+            <td><code>assess_recommendation_fit()</code></td>
+            <td style="color:var(--text-muted)">Scores every programme 0–1 against one recommendation, with a narrative naming the concrete connection or mismatch</td>
+            <td style="color:var(--text-muted)">The catalogued programme's own fields — never invents eligibility criteria not stated</td>
           </tr>
           <tr>
             <td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#E05C5C">Never</span></td>
-            <td>Feasibility score computation</td>
-            <td style="color:var(--text-muted)">LLMs do not produce the 0–100 score or its sub-components</td>
-            <td style="color:var(--text-muted)">N/A — score is deterministic formula only</td>
+            <td>Feasibility score · sub-scores · gold <code>narrative</code></td>
+            <td style="color:var(--text-muted)">All deterministic Python — <code>_score_funding()</code> and <code>_build_narrative()</code> template known values, no generation call</td>
+            <td style="color:var(--text-muted)">N/A</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-  </section>
-
-  <hr>
-
-  <!-- Scalability -->
-  <section class="section" id="scalability">
-    <div class="section-label">09 · Scalability Design</div>
-    <h2 class="section-title">Built for Multiple Cities</h2>
-    <p class="section-body">The architecture is designed from the start to work across geographies. Bowie is the prototype — but adding Philadelphia, Baltimore, or any USDOT partner city should require configuration, not code rewrites.</p>
-
-    <div class="pillars">
-      <div class="pillar">
-        <div class="pillar-icon">⚙</div>
-        <div class="pillar-title">Config-Driven Geography</div>
-        <div class="pillar-body">State, county, and city are parameters, not hardcoded values. A geography config object drives which data sources to pull, which zoning schema to use, and which policy documents to ingest.</div>
-      </div>
-      <div class="pillar">
-        <div class="pillar-icon">⬡</div>
-        <div class="pillar-title">Pluggable Source Connectors</div>
-        <div class="pillar-body">Each data source implements a standard interface: <code>fetch() → bronze_row[]</code>. Adding a new funding program means writing one connector, not touching the pipeline. Sources are registered in a config catalog.</div>
-      </div>
-      <div class="pillar">
-        <div class="pillar-icon">⊞</div>
-        <div class="pillar-title">Standardized Silver Schemas</div>
-        <div class="pillar-body">funding_signals, zoning_signals, and policy_signals have fixed schemas regardless of source geography. A Maryland grant and a Pennsylvania grant map to the same fields — only the values differ.</div>
-      </div>
-      <div class="pillar">
-        <div class="pillar-icon">⊕</div>
-        <div class="pillar-title">Geo Lookup is Rebuilt per City</div>
-        <div class="pillar-body">The geo_lookup table is the only geography-specific artifact. Rebuilding it for Philadelphia means running the same spatial joins against Philadelphia block geometries — the gold layer logic is unchanged.</div>
-      </div>
-      <div class="pillar">
-        <div class="pillar-icon">◎</div>
-        <div class="pillar-title">Configurable Score Weights</div>
-        <div class="pillar-body">Feasibility score weights (funding / zoning / policy) are stored in config, not code. Different cities or recommendation types can use different weights without a pipeline change.</div>
-      </div>
-      <div class="pillar">
-        <div class="pillar-icon">↻</div>
-        <div class="pillar-title">Incremental Updates</div>
-        <div class="pillar-body">Bronze tables carry <code>ingested_at</code> timestamps. Silver and gold transforms are incremental — only reprocess rows where the source changed. Grant deadlines and policy updates propagate automatically.</div>
-      </div>
+    <div class="callout">
+      <strong>Model in use:</strong> <code>claude-haiku-4-5-20251001</code> via the Anthropic SDK, using structured outputs (<code>output_config: {"format": {"type": "json_schema"}}</code>) so a response can't be wrapped in markdown fences or drift in shape. <code>temperature=0</code> is sent through <code>extra_body</code> because SDK 1.9.0 removed it from <code>messages.create()</code>'s own signature — without it the same block scored 70 then 95 across runs. That workaround must be removed if the model is ever swapped to Opus 4.7+ or Sonnet 5, which reject sampling parameters entirely.
     </div>
   </section>
 
@@ -1977,806 +1843,684 @@ result = llm.<span class="c-fn">generate</span>(
 
   <!-- Agentic Architecture -->
   <section class="section" id="agents">
-    <div class="section-label">10 · Agentic Architecture</div>
-    <h2 class="section-title">Multi-Agent Workflow Design</h2>
-    <p class="section-body">Each focus area is owned by a dedicated specialist agent with its own tools and scope. An Orchestrator agent coordinates them, aggregates signals, and manages the final gold-layer write. Every agent is a small, resumable LangGraph workflow with explicit human interrupt points — nothing writes to the database without user approval.</p>
+    <div class="section-label">10 · Agent Orchestration Architecture</div>
+    <h2 class="section-title">Agent Orchestration Architecture (LangGraph)</h2>
+    <p class="section-body">The framework choice hasn't changed — LangGraph's <code>interrupt()</code> and checkpointing are exactly what a human-approves-everything design needs. What changed is the topology: instead of fanning out to three parallel specialists, there are two independent graphs (Stage A and Stage B) and a thin coordinator, plus two scaffold agents that satisfy the same interface but don't run.</p>
 
-    <!-- Framework choice -->
     <div class="framework-compare">
       <div class="framework-card recommended">
-        <div class="framework-tag">Recommended</div>
+        <div class="framework-tag">In use</div>
         <div class="framework-name">LangGraph</div>
         <ul class="framework-pros">
-          <li>Built-in <code>interrupt_before/after</code> nodes</li>
-          <li>Checkpointing via <code>MemorySaver</code> — resume after human feedback</li>
-          <li>Explicit state graph — debuggable, observable</li>
-          <li>Parallel subgraph execution (fan-out to 3 agents)</li>
-          <li>LangSmith tracing out of the box</li>
+          <li><code>interrupt()</code> pauses a graph mid-run for exactly the review payload the console needs</li>
+          <li><code>Command(resume=...)</code> continues from that exact point — no restart</li>
+          <li>Both agents compile independently; the Orchestrator only calls their public methods</li>
         </ul>
         <ul class="framework-cons" style="margin-top:8px">
-          <li>More boilerplate than PydanticAI</li>
+          <li>Checkpointer is <code>MemorySaver</code> (in-memory) on both agents — see the risk callout below</li>
         </ul>
       </div>
       <div class="framework-card">
-        <div class="framework-tag">Alternative</div>
+        <div class="framework-tag">Considered, not used</div>
         <div class="framework-name">PydanticAI</div>
         <ul class="framework-pros">
-          <li>Cleaner, more Pythonic API</li>
-          <li>Strong type safety throughout</li>
-          <li>Lower overhead for simple tool use</li>
+          <li>Cleaner API for simple tool-calling agents</li>
         </ul>
         <ul class="framework-cons" style="margin-top:8px">
-          <li>Human-in-the-loop interrupts not native</li>
-          <li>Checkpointing / resume not built in</li>
-          <li>Harder to fan-out to parallel agents</li>
+          <li>No native interrupt/resume — would have to be hand-rolled for a design where every stage pauses</li>
         </ul>
       </div>
     </div>
 
-    <div class="callout">
-      <strong>Verdict:</strong> Use LangGraph for the orchestrator and all agent graphs. The interrupt/checkpoint pattern is exactly what you need — a user approves signals mid-run, and the graph resumes from that exact point rather than restarting. PydanticAI shines for defining typed tool inputs/outputs within each agent node, so the two can coexist.
+    <div class="callout" style="background:rgba(224,92,92,.08);border-left-color:#E05C5C">
+      <strong>Key operational risk:</strong> <code>MemorySaver</code> is in-memory, and <code>uvicorn --reload</code> fires on every file save — any edit while a session is paused destroys its state. Stage B has a fallback (<code>resolve_block_id</code> reads <code>funding_signals.thread_id</code> if the checkpointer is empty), so an approved analysis survives a restart. Stage A has no such fallback — an interrupted discovery session is simply lost. <code>langgraph-checkpoint</code> 4.2.0 is already installed for a Postgres-backed swap; see <a href="#limitations" style="color:inherit">Limitations</a>.
     </div>
 
-    <!-- Agent topology -->
     <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 8px;letter-spacing:-.01em">Agent Topology</h3>
 
     <div class="diagram-wrap">
       <div class="mermaid">
 flowchart TD
-    U([User / Frontend]) -->|block_id + rec_features| ORC
+    U1(["Planner: goal and URLs"]) --> FDA
+    U2(["Planner: selects block"]) --> ORC
 
-    subgraph ORC["Orchestrator Agent"]
-        O1[Load Block Context] --> O2[Fan-out to Specialists]
-        O2 --> O5[Aggregate Signals]
-        O5 --> O6[Compute Feasibility Score]
-        O6 --> O7{{"⏸ Interrupt: Review Profile"}}
-        O7 -->|approved| O8[Write Gold Layer]
+    subgraph FDA["FundingDiscoveryAgent (not a SpecialistAgent)"]
+        D1["load_sources"] --> D2{{"Interrupt: clarify"}}
+        D2 --> D3{{"Interrupt: research"}}
+        D3 --> D4{{"Interrupt: extract"}}
+        D4 --> D5{{"Interrupt: geo_tie"}}
+        D5 --> D6["write_silver"]
     end
 
-    O2 --> ZA
-    O2 --> FA
-    O2 --> PA
+    D6 --> FP[("funding_programs")]
 
-    subgraph ZA["Zoning Agent"]
-        Z1[Lookup Parcels GIS] --> Z2[Classify Barriers]
-        Z2 --> Z3{{"⏸ Interrupt: Confirm Zoning"}}
-        Z3 -->|approved| Z4[Write zoning_signals]
+    subgraph ORC["OrchestratorAgent (thin coordinator)"]
+        O1["run_funding"] --> O2["approve_funding"]
+        O2 --> O3["compute_gold"]
     end
 
-    subgraph FA["Funding Agent"]
-        F1[Search Funding Programs] --> F2[Check Eligibility]
-        F2 --> F3[Check ArcGIS Zones]
-        F3 --> F4{{"⏸ Interrupt: Review Matches"}}
-        F4 -->|approved| F5[Write funding_signals]
+    O1 --> FA
+    FP --> FA
+
+    subgraph FA["FundingAgent (SpecialistAgent)"]
+        F1["load_block / load_programs"] --> F2["assess_fit"]
+        F2 --> F3{{"Interrupt: human_review"}}
+        F3 --> F4["write_signals"]
     end
 
-    subgraph PA["Policy Agent"]
-        P1[Search Policy Docs] --> P2[Fetch & Chunk PDFs]
-        P2 --> P3[LLM Extraction]
-        P3 --> P4{{"⏸ Interrupt: Review Signals"}}
-        P4 -->|approved| P5[Write policy_signals]
+    F4 --> O3
+    O3 --> GP[("block_implementation_profiles")]
+
+    subgraph PLN["ZoningAgent / PolicyAgent (scaffolds, not invoked)"]
+        Z["returns not_implemented"]
     end
 
-    Z4 --> O5
-    F5 --> O5
-    P5 --> O5
-
-    style ORC fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
-    style ZA  fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
+    style FDA fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
     style FA  fill:#2A1F06,stroke:#DDA920,color:#EDD490
-    style PA  fill:#1A1040,stroke:#A78BFA,color:#C9C4F8
+    style ORC fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
+    style PLN fill:#1F1F1F,stroke:#3D5E7A,color:#8FA8BF
       </div>
     </div>
 
-    <!-- Agent cards -->
     <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 12px;letter-spacing:-.01em">Agent Definitions</h3>
 
     <div class="agent-grid">
-
       <div class="agent-card orchestrator">
-        <div class="agent-role">Orchestrator</div>
-        <div class="agent-name">CoordinatorAgent</div>
+        <div class="agent-role">Coordinator</div>
+        <div class="agent-name">OrchestratorAgent</div>
         <ul class="tool-list">
-          <li class="tool-item">db_read(block_id)</li>
-          <li class="tool-item">dispatch_agents()</li>
-          <li class="tool-item">aggregate_signals()</li>
-          <li class="tool-item">score_feasibility()</li>
-          <li class="tool-item">generate_narrative(llm)</li>
-          <li class="tool-item">db_write(gold)</li>
+          <li class="tool-item">run_funding(block_id)</li>
+          <li class="tool-item">approve_funding(thread_id, fb)</li>
+          <li class="tool-item">get_funding_review(thread_id)</li>
+          <li class="tool-item">resolve_block_id(thread_id)</li>
+          <li class="tool-item">compute_gold(thread_id)</li>
         </ul>
-        <div class="interrupt-label">⏸ final profile approval</div>
+        <div class="interrupt-label" style="color:var(--bronze);background:rgba(192,122,58,.1);border-color:rgba(192,122,58,.3)">▸ no graph of its own — calls FundingAgent</div>
       </div>
-
-      <div class="agent-card zoning">
-        <div class="agent-role">Specialist · Zoning</div>
-        <div class="agent-name">ZoningAgent</div>
-        <ul class="tool-list">
-          <li class="tool-item">gis_parcel_lookup(geometry)</li>
-          <li class="tool-item">classify_zoning(code, rec_type)</li>
-          <li class="tool-item">web_search(ordinance query)</li>
-          <li class="tool-item">db_read(zoning_raw)</li>
-          <li class="tool-item">db_write(zoning_signals)</li>
-        </ul>
-        <div class="interrupt-label">⏸ confirm parcel mapping</div>
-      </div>
-
       <div class="agent-card funding">
-        <div class="agent-role">Specialist · Funding</div>
+        <div class="agent-role">Graph · Block-scoped</div>
         <div class="agent-name">FundingAgent</div>
         <ul class="tool-list">
-          <li class="tool-item">web_search(grants query)</li>
-          <li class="tool-item">fetch_document(url)</li>
-          <li class="tool-item">arcgis_zone_check(geometry)</li>
-          <li class="tool-item">extract_eligibility(text, llm)</li>
-          <li class="tool-item">db_read(funding_raw)</li>
-          <li class="tool-item">db_write(funding_signals)</li>
+          <li class="tool-item">load_block()</li>
+          <li class="tool-item">load_programs()</li>
+          <li class="tool-item">assess_fit() — LLM</li>
+          <li class="tool-item">apply_feedback()</li>
+          <li class="tool-item">write_signals()</li>
         </ul>
-        <div class="interrupt-label">⏸ review matched programs</div>
+        <div class="interrupt-label">⏸ human_review — per recommendation</div>
       </div>
-
-      <div class="agent-card policy">
-        <div class="agent-role">Specialist · Policy</div>
+      <div class="agent-card" style="border-top-color:var(--accent)">
+        <div class="agent-role" style="color:var(--accent)">Graph · Block-agnostic</div>
+        <div class="agent-name">FundingDiscoveryAgent</div>
+        <ul class="tool-list">
+          <li class="tool-item">load_sources()</li>
+          <li class="tool-item">clarify() / research() — LLM</li>
+          <li class="tool-item">extract() — LLM + verify</li>
+          <li class="tool-item">geo_tie() — LLM</li>
+          <li class="tool-item">write_silver()</li>
+        </ul>
+        <div class="interrupt-label">⏸ 4 interrupts — deliberately not a SpecialistAgent</div>
+      </div>
+      <div class="agent-card scaffold">
+        <div class="agent-role">Scaffold</div>
+        <div class="agent-name">ZoningAgent</div>
+        <ul class="tool-list">
+          <li class="tool-item">build_graph() → NotImplementedError</li>
+          <li class="tool-item">run() → {"status": "not_implemented"}</li>
+        </ul>
+        <div class="interrupt-label" style="color:var(--text-faint);background:var(--tag-bg);border-color:var(--border)">▸ satisfies SpecialistAgent, never invoked</div>
+      </div>
+      <div class="agent-card scaffold">
+        <div class="agent-role">Scaffold</div>
         <div class="agent-name">PolicyAgent</div>
         <ul class="tool-list">
-          <li class="tool-item">web_search(policy query)</li>
-          <li class="tool-item">fetch_pdf(url)</li>
-          <li class="tool-item">chunk_and_embed(text)</li>
-          <li class="tool-item">extract_signals(chunks, llm)</li>
-          <li class="tool-item">db_read(policies_raw)</li>
-          <li class="tool-item">db_write(policy_signals)</li>
+          <li class="tool-item">build_graph() → NotImplementedError</li>
+          <li class="tool-item">run() → {"status": "not_implemented"}</li>
         </ul>
-        <div class="interrupt-label">⏸ review signal confidence</div>
+        <div class="interrupt-label" style="color:var(--text-faint);background:var(--tag-bg);border-color:var(--border)">▸ satisfies SpecialistAgent, never invoked</div>
       </div>
-
-      <div class="agent-card scorer">
-        <div class="agent-role">Scorer</div>
-        <div class="agent-name">FeasibilityScorer</div>
-        <ul class="tool-list">
-          <li class="tool-item">score_funding(signals)</li>
-          <li class="tool-item">score_zoning(signals)</li>
-          <li class="tool-item">score_policy(signals)</li>
-          <li class="tool-item">composite_score(weights)</li>
-          <li class="tool-item">rank_actions(signals)</li>
-        </ul>
-        <div class="interrupt-label" style="color:var(--bronze);background:rgba(192,122,58,.1);border-color:rgba(192,122,58,.3)">▸ no interrupt — pure compute</div>
-      </div>
-
     </div>
 
-    <!-- Workflow walkthrough for Funding Agent -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:36px 0 8px;letter-spacing:-.01em">Example Workflow — Funding Agent</h3>
-    <p class="section-body" style="margin-bottom:20px">The same interrupt/approve/resume pattern applies to all three specialist agents. Here it is walked through for the Funding Agent as the reference implementation.</p>
-
-    <div class="workflow-steps">
-
-      <div class="workflow-step">
-        <div class="step-spine">
-          <div class="step-dot start">→</div>
-          <div class="step-line"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-title">Receive task</div>
-          <div class="step-desc">Orchestrator dispatches <code>block_id</code>, <code>rec_features</code>, and <code>geo_context</code> (census tract, county FIPS, spatial flags). Agent initialises LangGraph state.</div>
-          <div class="step-tools">
-            <span class="step-tool">StateGraph init</span>
-            <span class="step-tool">MemorySaver checkpoint</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="workflow-step">
-        <div class="step-spine">
-          <div class="step-dot">1</div>
-          <div class="step-line"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-title">Search funding programs</div>
-          <div class="step-desc">Web search + ArcGIS API calls for programs matching the recommendation type and geography. Pulls EPA Brownfields, HUD CDBG, MD Program Open Space, NMTC eligibility.</div>
-          <div class="step-tools">
-            <span class="step-tool">web_search()</span>
-            <span class="step-tool">arcgis_zone_check()</span>
-            <span class="step-tool">db_read(funding_raw)</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="workflow-step">
-        <div class="step-spine">
-          <div class="step-dot">2</div>
-          <div class="step-line"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-title">Fetch &amp; extract eligibility</div>
-          <div class="step-desc">Downloads grant documents and policy pages. LLM extracts eligibility criteria, award amounts, deadlines, and geographic constraints into structured fields.</div>
-          <div class="step-tools">
-            <span class="step-tool">fetch_document()</span>
-            <span class="step-tool">extract_eligibility(llm)</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="workflow-step">
-        <div class="step-spine">
-          <div class="step-dot interrupt">⏸</div>
-          <div class="step-line interrupt"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-title" style="color:#F59E0B">Interrupt — User reviews matched programs</div>
-          <div class="step-desc">Graph pauses. Frontend shows the candidate funding matches with confidence scores and source links. User can approve, reject individual programs, or add a manual override. Graph state is checkpointed — resume picks up exactly here.</div>
-          <div class="step-tools">
-            <span class="step-tool" style="border-color:rgba(245,158,11,.4);color:#F59E0B">interrupt_before(review_node)</span>
-            <span class="step-tool" style="border-color:rgba(245,158,11,.4);color:#F59E0B">human_feedback: approve | reject | override</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="workflow-step">
-        <div class="step-spine">
-          <div class="step-dot">3</div>
-          <div class="step-line"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-title">Apply user feedback</div>
-          <div class="step-desc">Approved programs are retained. Rejected ones are flagged with reason. Manual overrides are merged in. Confidence scores are adjusted based on user signal.</div>
-          <div class="step-tools">
-            <span class="step-tool">merge_feedback(state)</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="workflow-step">
-        <div class="step-spine">
-          <div class="step-dot end">✓</div>
-          <div class="step-line" style="opacity:0"></div>
-        </div>
-        <div class="step-content">
-          <div class="step-title">Write to silver table</div>
-          <div class="step-desc">Approved funding signals written to <code>funding_signals</code>. Agent emits completion event to orchestrator. Bronze raw records written first if not already present.</div>
-          <div class="step-tools">
-            <span class="step-tool">db_write(funding_signals)</span>
-            <span class="step-tool">emit: agent_complete</span>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- State schema -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 12px;letter-spacing:-.01em">LangGraph State Schema</h3>
-    <p class="section-body" style="margin-bottom:16px">Each agent carries its own typed state object. The orchestrator state wraps all three agent outputs.</p>
-
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 12px;letter-spacing:-.01em">State Schemas</h3>
     <div class="layer-stack">
       <div class="layer-card app open">
         <div class="layer-card-header" onclick="toggleCard(this)">
           <span class="layer-badge" style="background:var(--app-dim);color:var(--app)">State</span>
-          <span class="layer-card-title">OrchestratorState</span>
-          <span class="layer-card-desc">Top-level graph state — wraps all agent outputs</span>
+          <span class="layer-card-title">DiscoveryState</span>
+          <span class="layer-card-desc">FundingDiscoveryAgent's TypedDict</span>
           <span class="layer-chevron">›</span>
         </div>
         <div class="layer-card-body">
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <thead><tr><th>Field</th><th>Notes</th></tr></thead>
               <tbody>
-                <tr><td class="field-name"><code>block_id</code></td><td>str</td><td>Input — stays immutable throughout</td></tr>
-                <tr><td class="field-name"><code>rec_features</code></td><td>list[str]</td><td>Recommendation labels for this block</td></tr>
-                <tr><td class="field-name"><code>geo_context</code></td><td>GeoContext</td><td>Census tract, county FIPS, spatial flags</td></tr>
-                <tr><td class="field-name"><code>zoning_result</code></td><td>ZoningResult | None</td><td>Set by ZoningAgent on completion</td></tr>
-                <tr><td class="field-name"><code>funding_result</code></td><td>FundingResult | None</td><td>Set by FundingAgent on completion</td></tr>
-                <tr><td class="field-name"><code>policy_result</code></td><td>PolicyResult | None</td><td>Set by PolicyAgent on completion</td></tr>
-                <tr><td class="field-name"><code>feasibility_score</code></td><td>float | None</td><td>Set by FeasibilityScorer</td></tr>
-                <tr><td class="field-name"><code>top_actions</code></td><td>list[str]</td><td>Ranked action list</td></tr>
-                <tr><td class="field-name"><code>user_approval</code></td><td>Approval | None</td><td>Final human sign-off</td></tr>
-                <tr><td class="field-name"><code>status</code></td><td>str</td><td>running | awaiting_human | approved | written</td></tr>
+                <tr><td class="field-name"><code>goal / requested_sources</code></td><td>Input, immutable</td></tr>
+                <tr><td class="field-name"><code>search_keyword</code></td><td>Distilled from <code>goal</code> for Grants.gov / web search</td></tr>
+                <tr><td class="field-name"><code>fetched / fetch_failures</code></td><td>Every source read, and every one that failed, reported not dropped</td></tr>
+                <tr><td class="field-name"><code>questions / answers</code></td><td>Set by <code>clarify</code></td></tr>
+                <tr><td class="field-name"><code>research / search_result</code></td><td>Set by <code>research</code></td></tr>
+                <tr><td class="field-name"><code>drafts</code></td><td>Reviewer-edited programmes after <code>extract</code></td></tr>
+                <tr><td class="field-name"><code>geo_recommendations</code></td><td>Set by <code>geo_tie</code>, includes <code>overridden</code> flag per programme</td></tr>
+                <tr><td class="field-name"><code>written</code></td><td>What actually reached <code>funding_programs</code></td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </div>
-
       <div class="layer-card app">
         <div class="layer-card-header" onclick="toggleCard(this)">
           <span class="layer-badge" style="background:var(--app-dim);color:var(--app)">State</span>
-          <span class="layer-card-title">FundingAgentState</span>
-          <span class="layer-card-desc">Internal state for FundingAgent subgraph</span>
+          <span class="layer-card-title">FundingState</span>
+          <span class="layer-card-desc">FundingAgent's TypedDict</span>
           <span class="layer-chevron">›</span>
         </div>
         <div class="layer-card-body">
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+              <thead><tr><th>Field</th><th>Notes</th></tr></thead>
               <tbody>
-                <tr><td class="field-name"><code>block_id</code></td><td>str</td><td></td></tr>
-                <tr><td class="field-name"><code>rec_features</code></td><td>list[str]</td><td></td></tr>
-                <tr><td class="field-name"><code>geo_context</code></td><td>GeoContext</td><td></td></tr>
-                <tr><td class="field-name"><code>candidate_programs</code></td><td>list[FundingProgram]</td><td>Raw search results before user review</td></tr>
-                <tr><td class="field-name"><code>approved_programs</code></td><td>list[FundingProgram]</td><td>Post-approval subset</td></tr>
-                <tr><td class="field-name"><code>rejected_ids</code></td><td>list[str]</td><td>User-rejected program IDs with reasons</td></tr>
-                <tr><td class="field-name"><code>manual_overrides</code></td><td>list[FundingProgram]</td><td>User-added programs not found by search</td></tr>
-                <tr><td class="field-name"><code>messages</code></td><td>list[AnyMessage]</td><td>LLM message history (LangGraph standard)</td></tr>
+                <tr><td class="field-name"><code>block_id / thread_id</code></td><td>Input, immutable</td></tr>
+                <tr><td class="field-name"><code>recommendations</code></td><td>Top 5 by predicted gain, deduped on (label, direction)</td></tr>
+                <tr><td class="field-name"><code>candidate_programs</code></td><td>Full <code>funding_programs</code> catalogue at run time</td></tr>
+                <tr><td class="field-name"><code>fits</code></td><td>One row per (recommendation, programme) from <code>assess_fit</code></td></tr>
+                <tr><td class="field-name"><code>human_feedback</code></td><td>Set after the <code>human_review</code> interrupt resumes</td></tr>
+                <tr><td class="field-name"><code>final_signals / rejected_signals</code></td><td>Post-<code>apply_feedback</code> split</td></tr>
+                <tr><td class="field-name"><code>written_signal_ids / removed_signal_ids</code></td><td>Result of <code>write_signals</code></td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </div>
     </div>
-
   </section>
 
   <hr>
 
   <!-- Code Design -->
   <section class="section" id="codedesign">
-    <div class="section-label">11 · Code Design</div>
-    <h2 class="section-title">Design Principles &amp; Patterns</h2>
-    <p class="section-body">LangGraph and the code design patterns are two separate layers — LangGraph controls how the workflow runs, the patterns control what lives inside each node. They don't compete; they stack. This layering is also what makes parallel development between two teammates clean.</p>
-
-    <!-- Two-layer mental model -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:0 0 14px;letter-spacing:-.01em">The Two-Layer Mental Model</h3>
+    <div class="section-label">11 · Software Design Patterns &amp; Code Architecture</div>
+    <h2 class="section-title">Design Patterns and Code Organization</h2>
+    <p class="section-body">LangGraph governs workflow orchestration; the patterns below govern what each node contains internally. Most of the previously documented pattern set remains accurate. One does not: the typed Pydantic model layer was removed as dead code on September 29, because no component in the system imported it.</p>
 
     <div class="layer-model">
       <div class="layer-model-row" style="border-color:var(--accent)">
         <div class="layer-model-header" style="background:var(--accent-dim)">
           <span class="layer-model-badge" style="background:rgba(32,197,181,.15);color:var(--accent);border:1px solid rgba(32,197,181,.3)">LangGraph Layer</span>
           <span class="layer-model-title">Workflow orchestration</span>
-          <span class="layer-model-desc">StateGraph · nodes · edges · checkpoints · interrupt/resume · parallel fan-out</span>
+          <span class="layer-model-desc">StateGraph · nodes · edges · interrupt/resume · MemorySaver checkpoints</span>
         </div>
       </div>
-
       <div class="layer-model-connector">each node calls ↓</div>
-
       <div class="layer-model-row" style="border-color:var(--gold)">
         <div class="layer-model-header" style="background:var(--gold-dim)">
           <span class="layer-model-badge" style="background:rgba(221,169,32,.15);color:var(--gold);border:1px solid rgba(221,169,32,.3)">Code Design Layer</span>
           <span class="layer-model-title">What lives inside each node</span>
-          <span class="layer-model-desc">Repository · ABC · Pydantic models · Dependency injection</span>
+          <span class="layer-model-desc">Repository · ABC · Dependency injection · plain dicts (no typed layer today)</span>
         </div>
       </div>
-
       <div class="layer-model-connector">reads and writes ↓</div>
-
       <div class="layer-model-row" style="border-color:var(--silver)">
         <div class="layer-model-header" style="background:var(--silver-dim)">
           <span class="layer-model-badge" style="background:rgba(90,136,173,.15);color:var(--silver);border:1px solid rgba(90,136,173,.3)">Data Layer</span>
-          <span class="layer-model-title">Supabase (PostgreSQL + pgvector)</span>
-          <span class="layer-model-desc">Bronze · Silver · Gold tables · geo_lookup · vector embeddings</span>
+          <span class="layer-model-title">Supabase (PostgreSQL)</span>
+          <span class="layer-model-desc">funding_programs · funding_signals · block_implementation_profiles — PostGIS/pgvector provisioned, unused</span>
         </div>
       </div>
     </div>
 
-    <div class="callout">
-      <strong>Key insight:</strong> A LangGraph node is just a Python function. The design patterns govern what that function looks like inside — clean, testable, independently developable. LangGraph never cares about your repositories or ABCs. Your agent code never cares about graph state transitions.
-    </div>
-
-    <!-- Patterns -->
     <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">Patterns Applied</h3>
 
     <div class="pattern-grid">
       <div class="pattern-card">
         <div class="pattern-name">Repository Pattern</div>
         <div class="pattern-applies">agents → DB</div>
-        <div class="pattern-desc">Every table gets a Repository class. Agents never write SQL directly. Swap the real DB for a mock in tests without touching agent logic.</div>
+        <div class="pattern-desc"><code>FundingRepository</code>, <code>FundingProgramRepository</code>, <code>GoldRepository</code>, <code>BlockRepository</code>. Agents never write SQL; all confirmed still true.</div>
       </div>
       <div class="pattern-card">
         <div class="pattern-name">Abstract Base Class</div>
-        <div class="pattern-applies">agent contract</div>
-        <div class="pattern-desc">All specialist agents implement one ABC: <code>run()</code>, <code>get_pending_review()</code>, <code>apply_feedback()</code>. Orchestrator dispatches to any agent without knowing which one.</div>
+        <div class="pattern-applies">specialist contract</div>
+        <div class="pattern-desc"><code>SpecialistAgent</code> defines <code>run() / get_pending_review() / apply_feedback()</code>. <code>FundingDiscoveryAgent</code> deliberately does <em>not</em> implement it — it fills a catalogue, it doesn't score a block, so it gets its own contract.</div>
       </div>
       <div class="pattern-card">
         <div class="pattern-name">Dependency Injection</div>
-        <div class="pattern-applies">tools → agents</div>
-        <div class="pattern-desc">Tools (web search, GIS, LLM) are injected into agents, not hardcoded. FastAPI's <code>Depends()</code> wires everything at request time. Easy to swap in mocks for testing.</div>
-      </div>
-      <div class="pattern-card">
-        <div class="pattern-name">Pydantic Models</div>
-        <div class="pattern-applies">layer contracts</div>
-        <div class="pattern-desc">Every table has a corresponding Pydantic model. These are the shared contracts between agents and the DB. If the schema changes, both sides know at import time — not at runtime.</div>
+        <div class="pattern-applies">FastAPI Depends()</div>
+        <div class="pattern-desc"><code>get_orchestrator()</code> and <code>get_discovery_agent()</code> are <code>lru_cache</code>'d singletons — one instance app-wide so the in-memory checkpointer is actually shared across requests, not recreated per call.</div>
       </div>
       <div class="pattern-card">
         <div class="pattern-name">Upsert / Idempotency</div>
-        <div class="pattern-applies">DB writes</div>
-        <div class="pattern-desc">All agent writes use <code>INSERT ... ON CONFLICT DO UPDATE</code>. Safe to re-run any agent — no duplicate rows, no partial state. Agents are stateless between runs.</div>
+        <div class="pattern-applies">every DB write</div>
+        <div class="pattern-desc"><code>program_key</code> is the catalogue's conflict target; <code>(block_id, rec_id, program_name)</code> is the signal's. Safe to re-run either agent.</div>
       </div>
       <div class="pattern-card">
         <div class="pattern-name">Read Model (Gold)</div>
         <div class="pattern-applies">gold layer</div>
-        <div class="pattern-desc">Specialist agents write only to their own silver table. The gold layer is assembled exclusively by the Orchestrator. Gold is read-only from any agent's perspective.</div>
+        <div class="pattern-desc">Only the Orchestrator writes <code>block_implementation_profiles</code>. Still true, though today only one specialist feeds it real data.</div>
+      </div>
+      <div class="pattern-card gap">
+        <div class="pattern-name">No Typed Schema Layer</div>
+        <div class="pattern-applies" style="color:#E05C5C">known gap</div>
+        <div class="pattern-desc"><code>backend/models/</code> (6 Pydantic files) was deleted Sep 29 — it had already silently drifted from <code>schema.sql</code> because nothing validated against it. Every layer now passes raw Supabase dicts. Restoring validation means wiring it into the API layer deliberately, not resurrecting the old files.</div>
       </div>
     </div>
 
-    <!-- How it connects to LangGraph -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">How a LangGraph Node Uses These Patterns</h3>
-
-    <div class="code-block">
-      <div class="code-block-label">
-        <span class="code-block-filename">agents/funding.py</span>
-        <span class="code-block-tag">LangGraph node + Repository + DI</span>
-      </div>
-      <pre class="code"><span class="c-cm"># ── LangGraph node function ───────────────────────────────────</span>
-<span class="c-kw">async def</span> <span class="c-fn">search_funding_node</span>(state: <span class="c-tp">FundingAgentState</span>) -> <span class="c-tp">dict</span>:
-    <span class="c-cm"># agent injected via FastAPI Depends() — no hardcoded tools</span>
-    signals = <span class="c-kw">await</span> state.agent.<span class="c-fn">search</span>(
-        block_id = state.block_id,
-        features = state.rec_features,
-        geo      = state.geo_context,
-    )
-    <span class="c-kw">return</span> {<span class="c-str">"candidate_programs"</span>: signals}
-
-
-<span class="c-cm"># ── LangGraph wires nodes — knows nothing about repositories ──</span>
-graph = <span class="c-fn">StateGraph</span>(<span class="c-tp">FundingAgentState</span>)
-graph.<span class="c-fn">add_node</span>(<span class="c-str">"search"</span>,  search_funding_node)
-graph.<span class="c-fn">add_node</span>(<span class="c-str">"review"</span>,  review_node)         <span class="c-cm"># interrupt here</span>
-graph.<span class="c-fn">add_node</span>(<span class="c-str">"write"</span>,   write_signals_node)  <span class="c-cm"># repo.upsert()</span>
-graph.<span class="c-fn">add_edge</span>(<span class="c-str">"search"</span>,  <span class="c-str">"review"</span>)
-graph.<span class="c-fn">add_edge</span>(<span class="c-str">"review"</span>,  <span class="c-str">"write"</span>)
-graph.<span class="c-fn">compile</span>(interrupt_before=[<span class="c-str">"review"</span>], checkpointer=<span class="c-fn">MemorySaver</span>())</pre>
-    </div>
-
-    <div class="code-block">
-      <div class="code-block-label">
-        <span class="code-block-filename">agents/base.py</span>
-        <span class="code-block-tag">ABC — shared contract for all specialist agents</span>
-      </div>
-      <pre class="code"><span class="c-kw">from</span> abc <span class="c-kw">import</span> ABC, abstractmethod
-
-<span class="c-kw">class</span> <span class="c-cl">SpecialistAgent</span>(ABC):
-
-    <span class="c-dec">@abstractmethod</span>
-    <span class="c-kw">async def</span> <span class="c-fn">run</span>(<span class="c-kw">self</span>, block_id: <span class="c-tp">str</span>, ctx: <span class="c-tp">BlockContext</span>) -> <span class="c-tp">AgentResult</span>: ...
-
-    <span class="c-dec">@abstractmethod</span>
-    <span class="c-kw">async def</span> <span class="c-fn">get_pending_review</span>(<span class="c-kw">self</span>, thread_id: <span class="c-tp">str</span>) -> <span class="c-tp">ReviewPayload</span>: ...
-
-    <span class="c-dec">@abstractmethod</span>
-    <span class="c-kw">async def</span> <span class="c-fn">apply_feedback</span>(<span class="c-kw">self</span>, thread_id: <span class="c-tp">str</span>, fb: <span class="c-tp">UserFeedback</span>) -> <span class="c-tp">None</span>: ...
-
-
-<span class="c-cm"># Orchestrator dispatches to any agent — never imports FundingAgent directly</span>
-<span class="c-kw">class</span> <span class="c-cl">OrchestratorAgent</span>:
-    <span class="c-kw">def</span> <span class="c-fn">__init__</span>(<span class="c-kw">self</span>, specialists: <span class="c-tp">list</span>[<span class="c-tp">SpecialistAgent</span>]):
-        <span class="c-kw">self</span>.specialists = specialists
-
-    <span class="c-kw">async def</span> <span class="c-fn">run_all</span>(<span class="c-kw">self</span>, block_id: <span class="c-tp">str</span>, ctx: <span class="c-tp">BlockContext</span>):
-        <span class="c-kw">return await</span> asyncio.<span class="c-fn">gather</span>(*[
-            agent.<span class="c-fn">run</span>(block_id, ctx) <span class="c-kw">for</span> agent <span class="c-kw">in</span> <span class="c-kw">self</span>.specialists
-        ])</pre>
-    </div>
-
-    <div class="code-block">
-      <div class="code-block-label">
-        <span class="code-block-filename">repositories/funding.py</span>
-        <span class="code-block-tag">Repository — agents never write SQL directly</span>
-      </div>
-      <pre class="code"><span class="c-kw">class</span> <span class="c-cl">FundingRepository</span>(<span class="c-cl">BaseRepository</span>):
-
-    <span class="c-kw">async def</span> <span class="c-fn">upsert</span>(<span class="c-kw">self</span>, signal: <span class="c-tp">FundingSignal</span>) -> <span class="c-tp">None</span>:
-        <span class="c-cm"># INSERT INTO funding_signals ... ON CONFLICT (funding_id) DO UPDATE</span>
-        <span class="c-kw">await</span> <span class="c-kw">self</span>.session.<span class="c-fn">execute</span>(<span class="c-fn">insert</span>(<span class="c-tp">FundingSignalORM</span>)
-            .<span class="c-fn">values</span>(**signal.<span class="c-fn">model_dump</span>())
-            .<span class="c-fn">on_conflict_do_update</span>(
-                index_elements=[<span class="c-str">"funding_id"</span>],
-                set_=signal.<span class="c-fn">model_dump</span>(exclude={<span class="c-str">"funding_id"</span>})
-            ))
-
-    <span class="c-kw">async def</span> <span class="c-fn">get_by_block</span>(<span class="c-kw">self</span>, block_id: <span class="c-tp">str</span>) -> <span class="c-tp">list</span>[<span class="c-tp">FundingSignal</span>]:
-        rows = <span class="c-kw">await</span> <span class="c-kw">self</span>.session.<span class="c-fn">execute</span>(
-            <span class="c-fn">select</span>(<span class="c-tp">FundingSignalORM</span>).<span class="c-fn">where</span>(<span class="c-tp">FundingSignalORM</span>.block_id == block_id)
-        )
-        <span class="c-kw">return</span> [<span class="c-tp">FundingSignal</span>.<span class="c-fn">model_validate</span>(r) <span class="c-kw">for</span> r <span class="c-kw">in</span> rows.<span class="c-fn">scalars</span>()]</pre>
-    </div>
-
-    <!-- Folder structure -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">Project Structure &amp; Team Ownership</h3>
-    <p class="section-body" style="margin-bottom:16px">The folder boundaries map directly to who owns what. The only shared files that both teammates must agree on upfront are <code>agents/base.py</code> and everything in <code>models/</code> — these are the contracts.</p>
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">Project Structure</h3>
 
     <div class="folder-tree">
 <span class="tree-dir">backend/</span>
+├── <span class="tree-file">main.py</span>              <span class="tree-note">registers 3 routers</span>
+├── <span class="tree-file">config.py</span>            <span class="tree-note">pydantic-settings — scoring weights + thresholds</span>
 ├── <span class="tree-dir">agents/</span>
-│   ├── <span class="tree-file">base.py</span>         <span class="tree-shared">← shared contract (ABC) — agree upfront</span>
-│   ├── <span class="tree-file">orchestrator.py</span> <span class="tree-owner">← person A</span>
-│   ├── <span class="tree-file">funding.py</span>      <span class="tree-owner">← person A</span>
-│   ├── <span class="tree-file">zoning.py</span>       <span class="tree-note">← person B</span>
-│   └── <span class="tree-file">policy.py</span>       <span class="tree-note">← person B</span>
-├── <span class="tree-dir">repositories/</span>
-│   ├── <span class="tree-file">base.py</span>         <span class="tree-shared">← shared BaseRepository</span>
-│   ├── <span class="tree-file">funding.py</span>      <span class="tree-owner">← person A</span>
-│   ├── <span class="tree-file">zoning.py</span>       <span class="tree-note">← person B</span>
-│   ├── <span class="tree-file">policy.py</span>       <span class="tree-note">← person B</span>
-│   └── <span class="tree-file">gold.py</span>         <span class="tree-owner">← person A</span>
-├── <span class="tree-dir">models/</span>          <span class="tree-shared">← ALL shared — agree on schemas first</span>
-│   ├── <span class="tree-file">funding.py</span>
-│   ├── <span class="tree-file">zoning.py</span>
-│   ├── <span class="tree-file">policy.py</span>
-│   └── <span class="tree-file">gold.py</span>
-├── <span class="tree-dir">tools/</span>           <span class="tree-shared">← shared utilities</span>
-│   ├── <span class="tree-file">web_search.py</span>
-│   ├── <span class="tree-file">gis.py</span>
-│   └── <span class="tree-file">llm_extractor.py</span>
+│   ├── <span class="tree-file">base.py</span>          <span class="tree-shared">SpecialistAgent ABC</span>
+│   ├── <span class="tree-file">orchestrator.py</span>  <span class="tree-owner">thin coordinator — fan-out, score, gold</span>
+│   ├── <span class="tree-file">funding_discovery.py</span> <span class="tree-owner">Stage A — ALL PROMPTS AT TOP</span>
+│   ├── <span class="tree-file">funding.py</span>       <span class="tree-owner">Stage B — SpecialistAgent</span>
+│   ├── <span class="tree-file">zoning.py / policy.py</span> <span class="tree-note">scaffolds — return not_implemented</span>
+│   └── <span class="tree-file">deps.py</span>          <span class="tree-shared">lru_cache singletons</span>
+├── <span class="tree-dir">tools/</span>
+│   ├── <span class="tree-file">web_source.py</span>    <span class="tree-owner">fetch() / search() / excerpt_is_genuine()</span>
+│   ├── <span class="tree-file">grants_gov.py</span>    <span class="tree-note">protocol adapter only — no keywords, no ranking</span>
+│   ├── <span class="tree-file">llm_extractor.py</span> <span class="tree-owner">structured_call() + assess_recommendation_fit()</span>
+│   ├── <span class="tree-file">cdbg.py</span>          <span class="tree-note">UNWIRED Sep 29 — still on disk</span>
+│   └── <span class="tree-file">tract_eligibility.py</span> <span class="tree-note">UNWIRED Sep 29 — still on disk</span>
+├── <span class="tree-dir">repositories/</span>        <span class="tree-shared">all DB access — agents never write SQL</span>
 ├── <span class="tree-dir">api/</span>
-│   ├── <span class="tree-file">blocks.py</span>       <span class="tree-owner">← person A</span>
-│   └── <span class="tree-file">threads.py</span>      <span class="tree-owner">← person A</span>
+│   ├── <span class="tree-file">discovery.py</span>     <span class="tree-note">Stage A — 3 generic endpoints, body untyped by design</span>
+│   ├── <span class="tree-file">blocks.py</span>        <span class="tree-note">Stage B — list / get / profile / analyze</span>
+│   └── <span class="tree-file">threads.py</span>       <span class="tree-note">Stage B — review / approve / gold</span>
 └── <span class="tree-dir">db/</span>
-    ├── <span class="tree-file">session.py</span>      <span class="tree-shared">← shared</span>
-    └── <span class="tree-dir">migrations/</span>     <span class="tree-shared">← shared (Alembic)</span>
+    └── <span class="tree-file">schema.sql</span>       <span class="tree-shared">re-runnable — every statement guarded</span>
 
-<span class="tree-dir">frontend/</span>          <span class="tree-note">← person B (React + Vercel)</span>
+<span class="tree-dir">frontend/dev-console/</span>    <span class="tree-note">single-file HTML, no build step</span>
+<span class="tree-dir">scripts/</span>
+├── <span class="tree-file">load_bowie_data.py</span>   <span class="tree-note">GeoJSON + CSV → blocks, block_recommendations</span>
+├── <span class="tree-file">sync_tract_eligibility.py</span> <span class="tree-note">still works, but nothing reads the table it fills</span>
+└── <span class="tree-file">reset_and_reload.py</span>  <span class="tree-note">wipe + reload, --confirm required</span>
     </div>
 
     <div class="callout" style="margin-top:20px">
-      <strong>How parallel dev works in practice:</strong> Lock <code>models/</code> and <code>agents/base.py</code> in week 1 — these are the contracts. After that, Person A and Person B work in completely separate files. The only merge conflicts will be on <code>db/migrations/</code> when you both add new tables, which Alembic handles cleanly.
+      <strong>Note on the folder tags:</strong> team-ownership annotations (e.g. per-engineer file splits) are intentionally not shown here, since they are organizational rather than architectural and change independently of the codebase. The tags above mark <span style="color:var(--gold)">shared contracts</span> and <span style="color:var(--text-faint)">known-dead-or-scaffold code</span> instead, which is what's verifiable directly from the repository.
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- Limitations -->
+  <section class="section" id="limitations">
+    <div class="section-label">12 · Architecture Constraints, Limitations &amp; Roadmap</div>
+    <h2 class="section-title">Known Constraints and Forward Roadmap</h2>
+    <p class="section-body">The current implementation is scoped to a single jurisdiction. A config-driven, multi-city geography abstraction — pluggable source connectors, a spatial <code>geo_lookup</code> rebuilt per city — does not exist today. This section states plainly what is hardcoded, what portability provisions already exist, and what building a second city would actually require.</p>
+
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:0 0 12px;letter-spacing:-.01em">Identified Constraints</h3>
+    <div class="pattern-grid">
+      <div class="pattern-card gap">
+        <div class="pattern-name">Bowie / PG County hardcoded</div>
+        <div class="pattern-desc"><code>GEO_PROMPT</code> in <code>funding_discovery.py</code> states "Prince George's County, Maryland (FIPS 24033)" directly. A second city needs a prompt edit, not a config change.</div>
+      </div>
+      <div class="pattern-card gap">
+        <div class="pattern-name">No spatial join layer</div>
+        <div class="pattern-desc">Geography matching is <code>tract_geoid</code> string equality plus an LLM-recommended <code>geo_scope</code> tag — no PostGIS <code>ST_Intersects</code>, despite PostGIS being provisioned on the Supabase instance.</div>
+      </div>
+      <div class="pattern-card gap">
+        <div class="pattern-name">In-memory checkpointer</div>
+        <div class="pattern-desc"><code>MemorySaver</code> on both agents. A server restart loses any paused session — Stage A has no recovery path at all.</div>
+      </div>
+      <div class="pattern-card gap">
+        <div class="pattern-name">Zoning / policy are placeholders</div>
+        <div class="pattern-desc">Constant <code>50.0</code>, not a score. 60% of the feasibility weight rides on two agents that have never run.</div>
+      </div>
+      <div class="pattern-card gap">
+        <div class="pattern-name">Deterministic eligibility unwired</div>
+        <div class="pattern-desc">CDBG income rule and NMTC tract lookup (<code>tools/cdbg.py</code>, <code>tools/tract_eligibility.py</code>) are intact but disconnected — <code>assess_fit</code> reasons from programme text alone, with no hard eligibility check behind it.</div>
+      </div>
+      <div class="pattern-card gap">
+        <div class="pattern-name">No PDF ingestion</div>
+        <div class="pattern-desc"><code>web_source.fetch()</code> raises rather than reads a PDF — a real limitation for master plans and many grant NOFOs, which are routinely PDF-only.</div>
+      </div>
     </div>
 
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 12px;letter-spacing:-.01em">Existing Portability Provisions</h3>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="pillar-icon">⚙</div>
+        <div class="pillar-title">Config-driven weights</div>
+        <div class="pillar-body">Feasibility weights and scoring thresholds live in <code>config.py</code>, not code — tunable per deployment without a redeploy of logic.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">⬡</div>
+        <div class="pillar-title">Source-agnostic discovery</div>
+        <div class="pillar-body">Stage A already accepts <em>any</em> government URL — it was exercised against Maryland DNR pages, not built specifically for them. A different city's funding pages need no code change to be read.</div>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">↻</div>
+        <div class="pillar-title">Geography-agnostic graph shape</div>
+        <div class="pillar-body">Neither LangGraph graph encodes Maryland anywhere in its structure — only the discovery agent's <code>GEO_PROMPT</code> string does, which is a one-line edit, not a rearchitecture.</div>
+      </div>
+    </div>
+
+    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 12px;letter-spacing:-.01em">Roadmap: Path to Multi-City Support (Not Currently Planned)</h3>
+    <div class="open-q-list">
+      <div class="open-q">
+        <div class="open-q-num">→</div>
+        <div class="open-q-text">Parameterize <code>GEO_PROMPT</code>'s state/county/FIPS instead of stating Maryland literally — the smallest change with the largest unlock.</div>
+      </div>
+      <div class="open-q">
+        <div class="open-q-num">→</div>
+        <div class="open-q-text">Re-wire <code>tract_eligibility</code> as a genuine cross-city <code>geo_lookup</code> once a second city's tract designations are loaded — the tri-state <code>True/False/None</code> shape is already correct for this.</div>
+      </div>
+      <div class="open-q">
+        <div class="open-q-num">→</div>
+        <div class="open-q-text">Swap <code>MemorySaver</code> for the already-installed Postgres checkpointer before scaling session volume beyond one demo city.</div>
+      </div>
+      <div class="open-q">
+        <div class="open-q-num">→</div>
+        <div class="open-q-text">Build <code>ZoningAgent</code> against a second city's real GIS source to prove the <code>SpecialistAgent</code> contract actually generalizes, rather than assuming it does from Funding alone.</div>
+      </div>
+    </div>
   </section>
 
   <hr>
 
   <!-- Key Technical Decisions -->
   <section class="section" id="decisions">
-    <div class="section-label">12 · Key Technical Decisions</div>
-    <h2 class="section-title">Decisions Log</h2>
-    <p class="section-body">A running record of the architectural and tooling choices made during project design, with the rationale behind each. Locked decisions are committed; open items still need confirmation.</p>
+    <div class="section-label">13 · Architecture Decision Record (ADR) Log</div>
+    <h2 class="section-title">Architecture Decision Records</h2>
+    <p class="section-body">Each row is a discrete architecture decision, identified for traceability and verified against the live codebase and Supabase instance as of September 29, 2026.</p>
 
     <div class="table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:32px">
       <table class="decision-table">
-        <thead>
-          <tr>
-            <th>Area</th>
-            <th>Decision</th>
-            <th>Rationale</th>
-            <th>Cost</th>
-            <th>Status</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Area</th><th>Decision</th><th>Rationale</th><th>Cost</th><th>Status</th></tr></thead>
         <tbody>
-
           <tr>
-            <td class="decision-area">Language</td>
+            <td class="decision-area">ADR-001<br>Language</td>
             <td><span class="decision-choice">Python</span></td>
-            <td class="decision-rationale">Entire AI/ML ecosystem (LangGraph, LLM SDKs, GeoPandas, SQLAlchemy) is Python-native. No context switching.</td>
+            <td class="decision-rationale">Entire AI/ML ecosystem (LangGraph, Anthropic SDK, SQLAlchemy-free Supabase client) is Python-native.</td>
             <td class="decision-cost cost-free">free</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Backend framework</td>
+            <td class="decision-area">ADR-002<br>Backend framework</td>
             <td><span class="decision-choice">FastAPI</span></td>
-            <td class="decision-rationale">Async-native, auto-generates OpenAPI docs (frontend contract), streaming responses for LLM output, plays well with LangGraph background tasks.</td>
+            <td class="decision-rationale">Auto-generated OpenAPI, async-native, plays well with LangGraph's async nodes. 11 routes, all resolved.</td>
             <td class="decision-cost cost-free">free</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Agent framework</td>
+            <td class="decision-area">ADR-003<br>Agent framework</td>
             <td><span class="decision-choice">LangGraph</span></td>
-            <td class="decision-rationale">Built-in <code>interrupt_before/after</code> and <code>MemorySaver</code> checkpointing make human-in-the-loop a first-class pattern. Parallel subgraph execution for fan-out to 3 specialist agents.</td>
+            <td class="decision-rationale"><code>interrupt()</code> / <code>Command(resume=...)</code> is in active use across 11 interrupt points total (5 in Stage A + 1 in Stage B) — not aspirational.</td>
             <td class="decision-cost cost-free">free</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">LLM API</td>
-            <td><span class="decision-choice">Personal credits</span></td>
-            <td class="decision-rationale">Used for NLP extraction (policy docs → structured signals), eligibility parsing, feasibility narrative generation, and RAG Q&A. Estimated ~$20–50 for full semester on 43 blocks.</td>
+            <td class="decision-area">ADR-004<br>Checkpointer</td>
+            <td><span class="decision-choice">LangGraph MemorySaver</span></td>
+            <td class="decision-rationale">In-memory, per process. A live-demo risk: <code>--reload</code> wipes any paused session. <code>langgraph-checkpoint</code> 4.2.0 is installed for a Postgres-backed swap, but that swap has not been made.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-risk">⚠ open — key operational risk</span></td>
+          </tr>
+          <tr>
+            <td class="decision-area">ADR-005<br>LLM</td>
+            <td><span class="decision-choice">Claude Haiku 4.5 via Anthropic API</span></td>
+            <td class="decision-rationale">Structured outputs + native <code>web_search</code> tool. Used for extraction, clarifying questions, geo-tie recommendations, and per-recommendation fit judgment — never for the composite score.</td>
             <td class="decision-cost cost-owned">owned</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Database</td>
-            <td><span class="decision-choice">Supabase (PostgreSQL + PostGIS + pgvector)</span></td>
-            <td class="decision-rationale">Single hosted DB covers relational tables (bronze/silver/gold), spatial joins (PostGIS for GIS layer queries), and vector embeddings (pgvector for RAG). No Docker needed. Both teammates share one instance — better for collaboration than local DBs.</td>
+            <td class="decision-area">ADR-006<br>Database</td>
+            <td><span class="decision-choice">Supabase (PostgreSQL)</span></td>
+            <td class="decision-rationale">Schema fully applied and verified live. PostGIS and pgvector are provisioned on the instance but neither is actively used by any current code path.</td>
             <td class="decision-cost cost-free">free tier</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Vector store</td>
+            <td class="decision-area">ADR-007<br>Vector store / RAG</td>
             <td><span class="decision-choice">pgvector on Supabase</span></td>
-            <td class="decision-rationale">Avoids running a separate Chroma or Pinecone instance. One connection string for all data. Sufficient for prototype scale (43 blocks, ~10 source docs).</td>
+            <td class="decision-rationale">Still the intended approach — no separate Chroma/Pinecone instance needed. Nothing embeds into it yet; no <code>/chat</code> endpoint exists.</td>
             <td class="decision-cost cost-free">free tier</td>
-            <td><span class="decision-status status-locked">✓ locked</span></td>
+            <td><span class="decision-status status-open">~ not started</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Frontend</td>
+            <td class="decision-area">ADR-008<br>Frontend (target)</td>
             <td><span class="decision-choice">React + Vercel</span></td>
-            <td class="decision-rationale">React for map view (Leaflet or Mapbox), block panel, and chat interface. Vercel for zero-config deployment from GitHub — shareable URL for sponsor demos.</td>
+            <td class="decision-rationale">Still the plan for the map view, block panel and chat UI. Not built yet — the dev console is the working interim.</td>
             <td class="decision-cost cost-free">free</td>
-            <td><span class="decision-status status-locked">✓ locked</span></td>
+            <td><span class="decision-status status-confirm">~ planned, not started</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Backend hosting</td>
-            <td><span class="decision-choice">Railway</span></td>
-            <td class="decision-rationale">FastAPI needs a always-on host for demo sessions — free tiers spin down and kill live demos. Railway stays up for ~$7–10/month. Only needed from October onward.</td>
-            <td class="decision-cost cost-low">~$15 total</td>
-            <td><span class="decision-status status-locked">✓ locked</span></td>
+            <td class="decision-area">ADR-009<br>Frontend (current)</td>
+            <td><span class="decision-choice">Single-file plain-HTML dev console</span></td>
+            <td class="decision-rationale">No build step, no framework decision needed to start clicking through both agents. Two panels, one generic stage renderer.</td>
+            <td class="decision-cost cost-free">free</td>
+            <td><span class="decision-status status-locked">✓ in active use</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Local dev</td>
+            <td class="decision-area">ADR-010<br>Local dev</td>
             <td><span class="decision-choice">Native Python, no Docker</span></td>
-            <td class="decision-rationale">Work machine restricts Docker. Supabase eliminates the need for a local DB container. FastAPI and agents run directly with <code>uvicorn</code>. Node.js for React to be confirmed.</td>
+            <td class="decision-rationale">Two working venvs exist (in-repo and external) because the repo lives in OneDrive, whose sync locks <code>site-packages</code> mid-install. Supabase removes any need for a local DB container.</td>
             <td class="decision-cost cost-free">free</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Collaboration</td>
-            <td><span class="decision-choice">GitHub private repo</span></td>
-            <td class="decision-rationale">2-person team. Split: backend/agents (person A) and frontend (person B). FastAPI's auto-generated OpenAPI spec acts as the interface contract. Shared Supabase instance means no data sync issues.</td>
-            <td class="decision-cost cost-free">free</td>
-            <td><span class="decision-status status-locked">✓ locked</span></td>
-          </tr>
-
-          <tr>
-            <td class="decision-area">Pilot geography</td>
-            <td><span class="decision-choice">Bowie, MD</span></td>
-            <td class="decision-rationale">Rec summary data already provided (43 blocks). Philadelphia is the broader SoP dataset but Bowie has the concrete recommendation CSVs needed to build and test the implementation layer. Expand to Philly post-midterm.</td>
+            <td class="decision-area">ADR-011<br>Pilot geography</td>
+            <td><span class="decision-choice">Bowie, MD — 68 blocks, 1,506 recommendations</span></td>
+            <td class="decision-rationale">Data loaded and verified live against Supabase Sep 29 (68 blocks, 1,506 recommendations). Confirmed, not an open question.</td>
             <td class="decision-cost cost-free">—</td>
-            <td><span class="decision-status status-confirm">? confirm w/ sponsor</span></td>
+            <td><span class="decision-status status-locked">✓ confirmed</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Anchor rec type</td>
-            <td><span class="decision-choice">Public Garden / Parks</span></td>
-            <td class="decision-rationale">Appears on 39/43 blocks — broadest coverage. Exercises all three buckets (funding: EPA/CDBG/POS; zoning: land use change; policy: health ordinances, master plan). Best signal-to-effort ratio for prototype.</td>
+            <td class="decision-area">ADR-012<br>Recommendation selection</td>
+            <td><span class="decision-choice">Top 5 per block by predicted score gain, any dimension</span></td>
+            <td class="decision-rationale">Generalized away from a single anchor type (Parks) — <code>MAX_RECS = 5</code>, deduped on (label, direction) since one improvement often recurs under multiple SoP dimensions.</td>
             <td class="decision-cost cost-free">—</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">First data source</td>
-            <td><span class="decision-choice">EPA Brownfields</span></td>
-            <td class="decision-rationale">Clean federal API, spatially tagged, updated annually. Directly relevant to park recs (contaminated sites → green space). Good first ingestion target to validate the bronze → silver pipeline.</td>
+            <td class="decision-area">ADR-013<br>Funding sourcing</td>
+            <td><span class="decision-choice">Live discovery sessions, no fixed first source</span></td>
+            <td class="decision-rationale">A fixed first-source connector (e.g. a single federal API) was evaluated and rejected in favor of a general-purpose discovery process: whatever government source a planner brings is the source, without a code change per programme.</td>
             <td class="decision-cost cost-free">free</td>
             <td><span class="decision-status status-locked">✓ locked</span></td>
           </tr>
-
           <tr>
-            <td class="decision-area">Feasibility weights</td>
+            <td class="decision-area">ADR-014<br>Feasibility weights</td>
             <td><span class="decision-choice">0.40 funding / 0.35 zoning / 0.25 policy</span></td>
-            <td class="decision-rationale">Funding weighted highest — it's the most binary constraint (money exists or it doesn't). Weights are config-driven, not hardcoded, so they can be tuned per rec type or city without a code change.</td>
+            <td class="decision-rationale">Config-driven in <code>config.py</code>, not hardcoded. Zoning and policy currently multiply a constant <code>50.0</code>, not a computed score — see Limitations.</td>
             <td class="decision-cost cost-free">—</td>
-            <td><span class="decision-status status-open">~ to be validated</span></td>
+            <td><span class="decision-status status-open">~ 40% real, 60% placeholder</span></td>
           </tr>
-
+          <tr>
+            <td class="decision-area">ADR-015<br>Funding sub-score formula</td>
+            <td><span class="decision-choice">Tiered fit-score buckets, capped per tier</span></td>
+            <td class="decision-rationale">Replaced the original eligibility+relevance point system. Deduped to strongest fit per programme first; each tier capped at 2 counted signals to keep the score discriminating past a handful of strong matches.</td>
+            <td class="decision-cost cost-free">—</td>
+            <td><span class="decision-status status-locked">✓ locked</span></td>
+          </tr>
         </tbody>
       </table>
     </div>
 
-    <!-- Open questions -->
     <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:0 0 12px;letter-spacing:-.01em">Open Questions</h3>
-
     <div class="open-q-list">
       <div class="open-q">
         <div class="open-q-num">Q1</div>
-        <div class="open-q-text"><strong>Target geography:</strong> Should the prototype target Bowie (data already in hand) or Philadelphia (primary SoP dataset, ~8,000 blocks)? Or Bowie to prototype, Philadelphia to scale? <em>Needs sponsor confirmation from Mariela.</em></div>
+        <div class="open-q-text"><strong>Node.js availability:</strong> is Node.js installable on the primary work machine? Unresolved, and blocks starting the React frontend regardless of any other decision.</div>
       </div>
       <div class="open-q">
         <div class="open-q-num">Q2</div>
-        <div class="open-q-text"><strong>Node.js availability:</strong> Is Node.js installable on the work machine? Determines whether React dev can happen on the work machine or requires the home machine.</div>
+        <div class="open-q-text"><strong>Checkpointer timing:</strong> swap <code>MemorySaver</code> for a Postgres-backed checkpointer before or after the midterm demo? It's a contained change with the package already installed, but it's still a change made close to a live demo.</div>
       </div>
       <div class="open-q">
         <div class="open-q-num">Q3</div>
-        <div class="open-q-text"><strong>Feasibility score weights:</strong> The 0.40 / 0.35 / 0.25 split is a starting assumption. Needs validation against real block data once the pipeline is running — may differ by recommendation type.</div>
+        <div class="open-q-text"><strong>Re-enabling deterministic eligibility:</strong> feed CDBG/NMTC determinations back into <code>assess_fit</code> as prompt context, or leave fit purely LLM-judged? The tri-state <code>True/False/None</code> shape in <code>tools/tract_eligibility.py</code> is intact and ready either way.</div>
       </div>
       <div class="open-q">
         <div class="open-q-num">Q4</div>
-        <div class="open-q-text"><strong>Team split:</strong> Confirm which teammate owns backend/agents vs frontend. OpenAPI spec becomes the interface contract once the split is agreed.</div>
+        <div class="open-q-text"><strong>Build order for Zoning/Policy:</strong> implement them against Bowie's own PG County GIS and Master Plan first (deepens the existing city), or hold off and prove portability against a second city first (widens it)? These pull in different directions and haven't been decided.</div>
       </div>
     </div>
-
   </section>
 
   <hr>
 
   <!-- Evaluation Strategy -->
   <section class="section" id="evaluation">
-    <div class="section-label">13 · Evaluation Strategy</div>
-    <h2 class="section-title">Demonstrating Technical Accuracy</h2>
-    <p class="section-body">Accuracy here is not a traditional ML metric — it's closer to <strong>retrieval precision</strong>. The question is: when the system says a funding opportunity or zoning constraint applies to a block, is that true? Three complementary approaches address this, and the third is already baked into the architecture.</p>
+    <div class="section-label">14 · Quality Assurance &amp; Evaluation Strategy</div>
+    <h2 class="section-title">Quality Assurance and Evaluation Strategy</h2>
+    <p class="section-body">Accuracy here is closer to <strong>retrieval precision</strong> than a traditional ML metric: when the system says a funding programme fits a recommendation, is that judgment reasonable and traceable to a real source? Three complementary approaches — the third is already built into the schema, not bolted on for evaluation's sake.</p>
 
     <div class="eval-grid">
-
       <div class="eval-card">
         <div class="eval-card-top">
           <span class="eval-number" style="color:var(--silver)">01</span>
-          <div class="eval-card-titles">
-            <div class="eval-method" style="color:var(--silver)">Manual Spot-Check</div>
-            <div class="eval-name">Gold Standard Eval Set</div>
-          </div>
+          <div class="eval-card-titles"><div class="eval-method" style="color:var(--silver)">Manual Spot-Check</div><div class="eval-name">Gold Standard Eval Set</div></div>
         </div>
-        <div class="eval-desc">Pick 5 Bowie blocks. Manually research what funding, zoning, and policy actually applies to each. Compare to what the system produces. Report precision: <em>"System correctly identified X of Y funding opportunities."</em></div>
-        <span class="eval-tag" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">Simple · High credibility · Do in DISCOVER phase</span>
+        <div class="eval-desc">Pick a handful of Bowie blocks. Manually research what funding actually applies to their top recommendations. Compare to what Stage B produces, per recommendation, not per block.</div>
+        <span class="eval-tag" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">Simple · high credibility</span>
       </div>
-
       <div class="eval-card">
         <div class="eval-card-top">
           <span class="eval-number" style="color:var(--gold)">02</span>
-          <div class="eval-card-titles">
-            <div class="eval-method" style="color:var(--gold)">LLM-as-Judge</div>
-            <div class="eval-name">Faithfulness Evaluation</div>
-          </div>
+          <div class="eval-card-titles"><div class="eval-method" style="color:var(--gold)">LLM-as-Judge</div><div class="eval-name">Faithfulness Evaluation</div></div>
         </div>
-        <div class="eval-desc">A second LLM call evaluates whether each extracted signal is faithful to the source document. Ask: <em>"Does this extracted eligibility claim appear in this grant document?"</em> Returns a faithfulness score per signal. Scalable — runs automatically on all 43 blocks.</div>
-        <span class="eval-tag" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">Scalable · Increasingly accepted in AI evals</span>
+        <div class="eval-desc">A second model call could check whether each fit narrative is faithful to the programme's own eligibility notes. Not yet implemented — the excerpt-verification guard in Stage A is the closest thing running today, and it already caught one bad excerpt.</div>
+        <span class="eval-tag" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">Scalable · planned</span>
       </div>
-
       <div class="eval-card">
         <div class="eval-card-top">
           <span class="eval-number" style="color:var(--accent)">03</span>
-          <div class="eval-card-titles">
-            <div class="eval-method" style="color:var(--accent)">Self-Reporting</div>
-            <div class="eval-name">Confidence + Provenance</div>
-          </div>
+          <div class="eval-card-titles"><div class="eval-method" style="color:var(--accent)">Self-Reporting</div><div class="eval-name">Confidence + Provenance</div></div>
         </div>
-        <div class="eval-desc">Already built in. Every silver signal carries a <code>confidence</code> score (0–1) and an <code>extracted_text</code> field linking back to the source. The system is honest about what it doesn't know. Low-confidence signals are surfaced as such in the frontend — accuracy is communicated, not hidden.</div>
-        <span class="eval-tag" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Already in schema · Zero extra work</span>
+        <div class="eval-desc">Already built in and running. Every catalogue row carries <code>extraction_confidence</code> and a checked <code>source_excerpt</code>; every signal carries <code>source_url</code> and flags whether a score was reviewer-adjusted or an automated fallback. Nothing is hidden as more certain than it is.</div>
+        <span class="eval-tag" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Already in schema · zero extra work</span>
       </div>
-
     </div>
 
-    <div class="callout">
-      <strong>Scalability is argued architecturally, not demonstrated at scale.</strong> Agents run in parallel (LangGraph fan-out), deploy independently, and are config-driven per geography. Swapping Bowie for Philadelphia requires one config change, not a code rewrite. The architecture doc is the scalability evidence — no need to run all 8,000 Philadelphia blocks in a demo.
+    <div class="callout" style="background:var(--gold-dim);border-left-color:var(--gold)">
+      <strong>Multi-city scalability is not yet demonstrated or fully architected.</strong> Today's system is genuinely Bowie / Prince George's County-specific in several places (see <a href="#limitations" style="color:inherit">Limitations</a>). What can be argued honestly is that the funding-discovery flow is source-agnostic in practice — it was pointed at Maryland state pages without being built for Maryland specifically — and that the score weights are config-driven. A second city is a real next step, not a claim already earned.
     </div>
 
-    <!-- End of semester demo checklist -->
-    <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:32px 0 14px;letter-spacing:-.01em">End-of-Semester Demo Checklist</h3>
-    <p class="section-body" style="margin-bottom:16px">Every item the sponsor's kickoff deck listed as the ideal final demo — mapped to how our system delivers it.</p>
+  </section>
+
+  <hr>
+
+  <!-- Midterm Implementation Status -->
+  <section class="section" id="midterm">
+    <div class="section-label">15 · Implementation Status</div>
+    <h2 class="section-title">Midterm Implementation Status</h2>
+    <p class="section-body">The preceding sections describe the architecture — the generic pattern, its components, and the decisions behind them — independent of how much of it is built at any given point in time. This section is the one place that states, as of September 29, 2026, exactly what is implemented, what is partially implemented, and what is not yet started, so the architecture description above is not mistaken for a claim about current delivery.</p>
+
+    <div class="table-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;margin-bottom:24px">
+      <table>
+        <thead><tr><th>Component</th><th>Domain</th><th>Status</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Phase 1 — Discovery</td>
+            <td><span style="color:var(--gold)">Funding</span></td>
+            <td><span class="decision-status status-locked">✓ implemented</span></td>
+            <td style="color:var(--text-muted)">2 live sessions verified live against Supabase, both reviewer-confirmed</td>
+          </tr>
+          <tr>
+            <td>Phase 2 — Fit Analysis</td>
+            <td><span style="color:var(--gold)">Funding</span></td>
+            <td><span class="decision-status status-locked">✓ implemented</span></td>
+            <td style="color:var(--text-muted)">Written signals and computed gold profiles exist for reviewed blocks</td>
+          </tr>
+          <tr>
+            <td>Phase 1 — Discovery</td>
+            <td><span style="color:var(--silver)">Zoning</span></td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ not started</span></td>
+            <td style="color:var(--text-muted)">No connector or extraction logic exists</td>
+          </tr>
+          <tr>
+            <td>Phase 2 — Fit Analysis</td>
+            <td><span style="color:var(--silver)">Zoning</span></td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ scaffold only</span></td>
+            <td style="color:var(--text-muted)"><code>ZoningAgent</code> satisfies <code>SpecialistAgent</code>, returns <code>not_implemented</code></td>
+          </tr>
+          <tr>
+            <td>Phase 1 — Discovery</td>
+            <td><span style="color:#A78BFA">Policy</span></td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ not started</span></td>
+            <td style="color:var(--text-muted)">No connector or extraction logic exists</td>
+          </tr>
+          <tr>
+            <td>Phase 2 — Fit Analysis</td>
+            <td><span style="color:#A78BFA">Policy</span></td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ scaffold only</span></td>
+            <td style="color:var(--text-muted)"><code>PolicyAgent</code> satisfies <code>SpecialistAgent</code>, returns <code>not_implemented</code></td>
+          </tr>
+          <tr>
+            <td>Gold composite score</td>
+            <td>All domains</td>
+            <td><span class="decision-status status-open">~ partial</span></td>
+            <td style="color:var(--text-muted)">Funding sub-score is computed; zoning/policy sub-scores are a constant 50.0</td>
+          </tr>
+          <tr>
+            <td>Presentation layer</td>
+            <td>—</td>
+            <td><span class="decision-status status-confirm">~ interim</span></td>
+            <td style="color:var(--text-muted)">Dev console in active use; React/Vercel target not started</td>
+          </tr>
+          <tr>
+            <td>Vector store / RAG chat</td>
+            <td>—</td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ not started</span></td>
+            <td style="color:var(--text-muted)">pgvector provisioned; nothing embeds into it</td>
+          </tr>
+          <tr>
+            <td>Postgres-backed checkpointer</td>
+            <td>—</td>
+            <td><span class="decision-status status-risk">⚠ not started</span></td>
+            <td style="color:var(--text-muted)">Package installed; <code>MemorySaver</code> still in use — see Section 12</td>
+          </tr>
+          <tr>
+            <td>Typed schema validation layer</td>
+            <td>—</td>
+            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ removed</span></td>
+            <td style="color:var(--text-muted)">Prior Pydantic model layer deleted as dead code — see Section 11</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <div class="demo-checklist">
-      <div class="demo-checklist-header">Ideal Demo Requirements · Kickoff Deck</div>
-
+      <div class="demo-checklist-header">What can be demonstrated today</div>
       <div class="demo-checklist-item">
         <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Retrieves real public implementation data</strong> — EPA Brownfields API, HUD CDBG, PG County GIS, MD Program Open Space. Live data, not mocked.</span>
-        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">FundingAgent · ZoningAgent</span>
+        <span class="check-text"><strong>A live discovery session</strong> — planner pastes a government URL, the agent asks grounded clarifying questions, reports what the page actually contains, extracts programmes with verified excerpts, recommends a geographic tie, and the planner edits everything before it is saved.</span>
+        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Section 05</span>
       </div>
-
       <div class="demo-checklist-item">
         <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Converts it into structured recommendation signals</strong> — silver tables with typed Pydantic schemas. LLM extracts unstructured → structured fields.</span>
-        <span class="check-badge" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">Bronze → Silver pipeline</span>
+        <span class="check-text"><strong>Per-recommendation scored matching</strong> — every programme in the catalogue judged against each specific block recommendation, with a narrative naming why the money does or does not suit that improvement; reviewer adjusts any score and approves recommendation by recommendation.</span>
+        <span class="check-badge" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">Section 06</span>
       </div>
-
       <div class="demo-checklist-item">
         <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Connects those signals to relevant SoP data/recommendations</strong> — geo_lookup spatial join links every signal to its Bowie block. Gold layer joins to Bowie rec data via block_id.</span>
-        <span class="check-badge" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">geo_lookup · Gold layer</span>
+        <span class="check-text"><strong>A concrete direction bug already caught and fixed</strong> — a "Decrease" recommendation (remove a surface parking lot) is assessed as removal funding, not construction funding.</span>
+        <span class="check-badge" style="background:var(--silver-dim);color:var(--silver);border:1px solid rgba(90,136,173,.2)">assess_recommendation_fit()</span>
       </div>
-
       <div class="demo-checklist-item">
         <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Uses them to inform priority, feasibility, effort, and timing</strong> — feasibility score (0–100), effort_estimate, timing_context all in the gold layer. Score re-ranks blocks by actionability.</span>
-        <span class="check-badge" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">Gold layer schema</span>
+        <span class="check-text"><strong>Confidence and provenance on every signal</strong> — extraction confidence, verified excerpts, reviewer-adjustment flags. The system is explicit about what it does not know rather than concealing it.</span>
+        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Section 14</span>
       </div>
-
       <div class="demo-checklist-item">
-        <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Generates concrete implementation actions</strong> — top_actions field with specific, sourced next steps. e.g. "Apply for EPA Brownfield Assessment Grant by Mar 2025 — this block is eligible."</span>
-        <span class="check-badge" style="background:var(--gold-dim);color:var(--gold);border:1px solid rgba(221,169,32,.2)">top_actions · Orchestrator</span>
+        <span class="check-icon">⚠️</span>
+        <span class="check-text"><strong>The feasibility score is approximately 40% real.</strong> Funding is genuinely computed; zoning and policy are a hardcoded 50.0 until those agents are implemented. This should be stated explicitly in any presentation of the composite score.</span>
+        <span class="check-badge" style="background:rgba(224,92,92,.1);color:#E05C5C;border:1px solid rgba(224,92,92,.25)">Section 07</span>
       </div>
-
       <div class="demo-checklist-item">
-        <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Allows users to query in natural language</strong> — ChatPanel + RAG over pgvector. "What can we implement in 12 months?" returns grounded answers from the gold layer.</span>
-        <span class="check-badge" style="background:var(--app-dim);color:var(--app);border:1px solid rgba(139,130,232,.2)">ChatPanel · POST /chat</span>
+        <span class="check-icon">❌</span>
+        <span class="check-text"><strong>No natural-language chat, no map UI, no multi-city proof.</strong> These are part of the target architecture, not the current implementation — see Sections 08 and 12.</span>
+        <span class="check-badge" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">Planned</span>
       </div>
-
       <div class="demo-checklist-item">
-        <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Demonstrates technical accuracy</strong> — confidence + provenance on every signal (self-reporting), manual spot-check on 5 blocks (gold standard), optional LLM-as-judge for faithfulness scoring.</span>
-        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Eval strategy · Section 13</span>
+        <span class="check-icon">⚠️</span>
+        <span class="check-text"><strong>Do not edit files while a session is paused.</strong> <code>--reload</code> destroys in-memory checkpoint state. Rehearse the full discovery flow once before presenting it live.</span>
+        <span class="check-badge" style="background:rgba(224,92,92,.1);color:#E05C5C;border:1px solid rgba(224,92,92,.25)">Operational risk</span>
       </div>
-
-      <div class="demo-checklist-item">
-        <span class="check-icon">✅</span>
-        <span class="check-text"><strong>Demonstrates scalability</strong> — agents run in parallel, deploy independently, config-driven per geography. Bowie → Philadelphia = one config change. Architecture is the evidence.</span>
-        <span class="check-badge" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(32,197,181,.2)">Architecture doc · Section 09</span>
-      </div>
-
     </div>
   </section>
 

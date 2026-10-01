@@ -83,6 +83,7 @@ main.view { display: block; }
 
 /* ---- blocks view layout ---- */
 .blocks-top { display: grid; grid-template-columns: 300px 1fr; gap: 1px; background: var(--border); }
+.blocks-top.map-collapsed { grid-template-columns: 1fr; }
 @media (max-width: 900px) { .blocks-top { grid-template-columns: 1fr; } }
 
 aside {
@@ -90,10 +91,16 @@ aside {
   display: flex; flex-direction: column; max-height: 480px;
 }
 .aside-head { padding: .75rem; border-bottom: 1px solid var(--border); }
+.aside-head-row { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
 .aside-head h2 {
-  margin: 0 0 .5rem; font-size: .75rem; letter-spacing: .1em;
+  margin: 0; font-size: .75rem; letter-spacing: .1em;
   text-transform: uppercase; color: var(--muted);
 }
+.map-toggle {
+  font-size: .72rem; font-weight: 700; padding: .2rem .55rem; border-radius: 4px;
+  text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0;
+}
+.map-toggle[aria-pressed="true"] { color: var(--orange); border-color: var(--orange); background: color-mix(in srgb, var(--orange) 10%, transparent); }
 .aside-head input { width: 100%; }
 .blocks { overflow-y: auto; flex: 1; }
 .block-row {

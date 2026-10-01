@@ -115,6 +115,43 @@
   .narrative { color: var(--muted); font-style: italic; margin-top: .6rem; }
   .spin { color: var(--orange); }
 
+  /* ---- per-recommendation funding review ---- */
+  .rec-group { border: 1px solid var(--border); border-radius: 5px; margin-bottom: .9rem; }
+  .rec-head {
+    display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+    padding: .55rem .7rem; background: rgba(240,123,58,.08);
+    border-bottom: 1px solid var(--border);
+  }
+  .rec-head h5 { margin: 0; font-size: .95rem; color: var(--orange); }
+  .rec-head .dim { color: var(--muted); font-size: .78rem; }
+  .rec-head .spacer { flex: 1; }
+  .rec-head .count { color: var(--muted); font-size: .76rem; }
+  .rec-head button { font-size: .74rem; padding: .22rem .5rem; }
+  /* Collapsed by default below the floor — the weak tail is present but not in the way. */
+  .rec-group tr.weak { display: none; }
+  .rec-group.show-all tr.weak { display: table-row; }
+  input.score-edit {
+    width: 4.2rem; font-weight: 700; text-align: center;
+    font-variant-numeric: tabular-nums; padding: .25rem .3rem;
+  }
+  input.score-edit.edited { border-color: var(--orange); color: var(--orange); }
+  td.pick { white-space: nowrap; }
+  td.pick input { accent-color: var(--orange); width: 16px; height: 16px; }
+
+  /* ---- read-only drill-down into written signals ---- */
+  /* Collapsed by default: this card loads unprompted under the profile, so it
+     opens as a summary you choose to expand, not a wall of tables. */
+  .rec-group.ro .rec-head { cursor: pointer; user-select: none; }
+  .rec-group.ro .rec-head:hover { background: rgba(240,123,58,.15); }
+  .rec-group.ro .rec-head:focus-visible { outline: 2px solid var(--orange); outline-offset: -2px; }
+  .rec-group.ro .caret { color: var(--muted); font-size: .7rem; width: .7rem; }
+  .rec-group.ro .table-wrap[hidden] { display: none; }
+  .rec-group.ro td.fit { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .rec-group.ro td.fit .tag { display: block; margin-top: .2rem; }
+  .rec-group.unlinked .rec-head { background: rgba(224,168,92,.10); }
+  .rec-group.unlinked .rec-head h5 { color: var(--amber); }
+  .rec-group.ro a.apply { color: var(--teal); white-space: nowrap; }
+
   /* eligibility + provenance */
   .badges { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem; }
   .badge {
@@ -264,6 +301,43 @@
   .program-edit .drop-flag[hidden] { display: none; }
   .btn-row { display: flex; gap: .5rem; margin-top: 1rem; }
   .muted-note { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
+
+  /* ---- past discovery sessions ---- */
+  .session-item {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: .55rem .75rem; margin-bottom: .5rem;
+  }
+  .session-item .s-head {
+    display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+  }
+  .session-item .s-goal {
+    flex: 1; min-width: 12rem; font-weight: 600;
+  }
+  .session-item .s-meta {
+    color: var(--muted); font-size: .78rem; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .session-item .s-actions { display: flex; gap: .35rem; flex-shrink: 0; }
+  .session-item .s-actions button {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-size: .72rem; font-weight: 700; padding: .2rem .6rem; border-radius: 3px;
+    cursor: pointer; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .session-item .s-actions button:hover { color: var(--orange); border-color: var(--orange); }
+  .session-item .s-body { margin-top: .5rem; }
+  .session-item .s-body[hidden] { display: none; }
+  .session-item .s-sources {
+    font-family: ui-monospace, Consolas, monospace; font-size: .74rem;
+    color: var(--muted); word-break: break-all; margin-top: .3rem;
+  }
+  .tag {
+    display: inline-block; font-size: .68rem; padding: .05rem .35rem;
+    border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .tag.derived { border-color: var(--amber); color: var(--amber); }
+  .tag.gone    { border-color: var(--red);   color: var(--red); }
+  .tag.superseded { border-color: var(--amber); color: var(--amber); }
 </style>
 </head>
 <body>
@@ -364,7 +438,7 @@ function selectBlock(id) {
   thread = null;
   renderBlocks();
   renderDetail();
-  loadExistingProfile();
+  loadExistingState();
 }
 
 function renderDetail(extra = "") {
@@ -409,13 +483,25 @@ function restoreThreadButtons() {
 function stage(html) { $("stage").innerHTML = html; }
 function stageAppend(html) { $("stage").insertAdjacentHTML("beforeend", html); }
 
-async function loadExistingProfile() {
-  try {
-    const p = await call("GET", `/blocks/${selected.id}/profile`);
-    renderDetail(profileCard(p, "Existing profile (from a previous run)"));
-  } catch {
-    /* 404 = no profile yet, which is the normal first-run case */
-  }
+async function loadExistingState() {
+  if (!selected) return;
+  const id = selected.id;
+  const [profile, signals] = await Promise.all([
+    // 404 on either is the normal first-run case, not an error worth showing.
+    call("GET", `/blocks/${id}/profile`).catch(() => null),
+    fetchSignals(id),
+  ]);
+
+  // A block can be reselected while these are in flight. Dropping a late response
+  // is cheaper than rendering one block's funding under another block's heading.
+  if (!selected || selected.id !== id) return;
+
+  const html = (profile ? profileCard(profile, "Existing profile (from a previous run)") : "")
+             + (signals ? signalsCard(signals) : "");
+  if (!html) return;
+
+  renderDetail(html);
+  wireSignalGroups();
 }
 
 /* ---------- step 1: analyze ---------- */
@@ -423,7 +509,7 @@ async function loadExistingProfile() {
 async function analyze() {
   const btn = $("btn-analyze");
   btn.disabled = true;
-  stage(`<div class="card spin">Running FundingAgent — EPA lookup + LLM eligibility assessment. Takes ~10–25s…</div>`);
+  stage(`<div class="card spin">Running FundingAgent — one LLM pass per recommendation. Takes ~15–45s…</div>`);
   try {
     const r = await call("POST", `/blocks/${selected.id}/analyze`);
     thread = { id: r.thread_id, approved: false };
@@ -431,39 +517,12 @@ async function analyze() {
     const review = await call("GET", `/threads/${thread.id}/review`);
     stage(reviewCard(review));
     $("btn-approve").disabled = false;
-    wireFeedback();
+    wireReview();
   } catch (e) {
     stage(`<div class="banner err">Analyze failed — ${esc(e.message)}</div>`);
   } finally {
     btn.disabled = false;
   }
-}
-
-// Determinations are facts from a rule or published dataset, not model output —
-// shown separately from relevance so the distinction is visible in the demo.
-function determinationBadges(determinations) {
-  const entries = Object.entries(determinations || {});
-  if (!entries.length) return "";
-
-  const badges = entries.map(([key, d]) => {
-    const cls = d.eligible === true ? "yes" : d.eligible === false ? "no" : "unk";
-    const mark = d.eligible === true ? "✓" : d.eligible === false ? "✗" : "?";
-    return `<span class="badge ${cls}" title="${esc(d.basis)}">${esc(key)} ${mark}</span>`;
-  }).join("");
-
-  const detail = entries.map(([key, d]) => `
-    <div class="kv" style="margin-top:.3rem">
-      <b>${esc(key)}:</b> ${esc(d.basis)}
-      ${d.source_name ? `<div class="src">source: ${d.source_url
-          ? `<a href="${esc(d.source_url)}" target="_blank" rel="noopener">${esc(d.source_name)}</a>`
-          : esc(d.source_name)}${d.source_vintage ? ` · ${esc(d.source_vintage)}` : ""}</div>` : ""}
-    </div>`).join("");
-
-  return `<div class="card">
-    <h4>Verified eligibility determinations</h4>
-    <div class="badges">${badges}</div>
-    ${detail}
-  </div>`;
 }
 
 function deadlineCell(iso) {
@@ -474,66 +533,138 @@ function deadlineCell(iso) {
   return `<span class="deadline${soon}">${esc(iso)}${suffix}</span>`;
 }
 
-function reviewCard(review) {
-  const signals = review.signals || [];
-  const failed = signals.filter(s => s.assessment_failed);
+function scoreColour(v) {
+  if (v == null) return "var(--muted)";
+  return v >= 0.6 ? "var(--teal)" : v >= 0.35 ? "var(--amber)" : "var(--red)";
+}
 
-  const warn = failed.length
-    ? `<div class="banner warn"><b>${failed.length} of ${signals.length} signals were not assessed by the model.</b>
-       Their 0.50 scores are placeholders, not analysis — check the server log before trusting this run.</div>`
-    : `<div class="banner ok">All ${signals.length} candidates assessed by the model.</div>`;
+function fitRow(recId, f, floor) {
+  const v = f.fit_score;
+  const strong = v != null && v >= floor;
 
-  const rows = signals.map(s => {
-    const v = s.relevance_score;
-    const colour = v == null ? "var(--muted)" : v >= 0.6 ? "var(--teal)" : v >= 0.35 ? "var(--amber)" : "var(--red)";
+  const amt = (f.award_amount_min || f.award_amount_max)
+    ? `${money(f.award_amount_min)} – ${money(f.award_amount_max)}`
+    : `<span class="assess">varies</span>`;
 
-    // Programs with a failed hard eligibility test are dropped on approve.
-    let pill = "";
-    if (s.eligibility_confirmed === true) pill = `<span class="pill yes" title="${esc(s.determination_basis)}">eligible</span>`;
-    else if (s.eligibility_confirmed === false) pill = `<span class="pill no" title="${esc(s.determination_basis)}">not eligible — will be dropped</span>`;
+  const src = f.source_name
+    ? `<div class="src">${f.is_extracted ? `<span class="curated">extracted${
+          f.extraction_confidence != null ? ` ${num(f.extraction_confidence, 2)}` : ""}</span> · ` : ""}${
+        f.source_url
+          ? `<a href="${esc(f.source_url)}" target="_blank" rel="noopener">${esc(f.source_name)}</a>`
+          : esc(f.source_name)}</div>`
+    : `<div class="src">no source recorded</div>`;
 
-    const amt = (s.award_amount_min || s.award_amount_max)
-      ? `${money(s.award_amount_min)} – ${money(s.award_amount_max)}`
-      : `<span class="assess">varies</span>`;
+  // Pre-ticked above the floor: the model's proposal is the starting point, and
+  // the reviewer's job is to correct it rather than re-enter it.
+  return `<tr class="${strong ? "" : "weak"}" data-rec="${recId}" data-prog="${esc(f.program_name)}">
+    <td class="pick"><input type="checkbox" class="fit-pick"${strong ? " checked" : ""}></td>
+    <td><input type="number" class="score-edit" min="0" max="1" step="0.05"
+         value="${v == null ? "" : num(v, 2)}" style="color:${scoreColour(v)}"
+         data-orig="${v == null ? "" : num(v, 2)}"></td>
+    <td>
+      <div>${esc(f.program_name)}${f.assessment_failed ? ' <span style="color:var(--amber)" title="not assessed by model">⚠</span>' : ""}</div>
+      <div class="assess">${esc(f.narrative)}</div>
+      ${f.recommended_action ? `<div class="src">action: ${esc(f.recommended_action)}</div>` : ""}
+      ${src}
+    </td>
+    <td>${deadlineCell(f.deadline)}</td>
+    <td class="assess">${amt}</td>
+  </tr>`;
+}
 
-    const src = s.source_name
-      ? `<div class="src">${s.is_extracted ? `<span class="curated">extracted${
-            s.extraction_confidence != null ? ` ${num(s.extraction_confidence, 2)}` : ""}</span> · ` : ""}${
-          s.source_url
-            ? `<a href="${esc(s.source_url)}" target="_blank" rel="noopener">${esc(s.source_name)}</a>`
-            : esc(s.source_name)}</div>`
-      : `<div class="src">no source recorded</div>`;
+function recGroup(rec, floor) {
+  const fits = rec.fits || [];
+  const strong = fits.filter(f => f.fit_score != null && f.fit_score >= floor).length;
+  const weak = fits.length - strong;
+  const gain = rec.predicted_score_increase;
 
-    return `<tr>
-      <td class="score" style="color:${colour}">${num(v, 2)}</td>
-      <td>
-        <div>${esc(s.program_name)}${s.assessment_failed ? ' <span style="color:var(--amber)">⚠</span>' : ""} ${pill}</div>
-        <div class="assess">${esc(s.eligibility_assessment)}</div>
-        ${src}
-      </td>
-      <td>${deadlineCell(s.deadline)}</td>
-      <td class="assess">${amt}</td>
-    </tr>`;
-  }).join("");
+  // A 'Decrease' recommendation means remove the feature, not add it — showing the
+  // label alone reads as the opposite of what the block needs. Say 'feature' so the
+  // pill reads as the recommendation's direction, not as a control acting on the row.
+  const down = rec.direction === "Decrease";
+  const verb = down
+    ? `<span class="pill no" title="this block has too much of it">remove/reduce feature</span>`
+    : `<span class="pill yes">add/increase feature</span>`;
 
-  return `${determinationBadges(review.determinations)}
-  <div class="card">
-    <h4>Human review — ${signals.length} candidate programs</h4>
-    ${warn}
+  return `<div class="rec-group" data-rec="${rec.rec_id}">
+    <div class="rec-head">
+      ${verb}
+      <h5>${esc(rec.rec_label)}</h5>
+      <span class="dim">${esc(rec.dimension || "—")}${
+        gain != null ? ` · predicted +${num(gain, 1)}` : ""}</span>
+      <span class="spacer"></span>
+      <span class="count">${strong} of ${fits.length} above ${floor}</span>
+      ${weak ? `<button type="button" class="toggle-weak">show ${weak} weaker</button>` : ""}
+    </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Relevance</th><th>Program / assessment / source</th><th>Deadline</th><th>Award</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="4" class="assess">No candidates returned.</td></tr>`}</tbody>
+        <thead><tr>
+          <th>Keep</th><th>Fit</th><th>Program / why it fits / source</th><th>Deadline</th><th>Award</th>
+        </tr></thead>
+        <tbody>${
+          fits.map(f => fitRow(rec.rec_id, f, floor)).join("")
+          || `<tr><td colspan="5" class="assess">No programs assessed.</td></tr>`
+        }</tbody>
       </table>
-    </div>
-    <div style="margin-top:.85rem">
-      <label for="feedback">Reviewer feedback — <code>approved</code> accepts as-is</label>
-      <textarea id="feedback" rows="2" style="width:100%;margin-top:.3rem">approved</textarea>
     </div>
   </div>`;
 }
 
-function wireFeedback() {
+function reviewCard(review) {
+  const recs = review.recommendations || [];
+  const floor = review.default_floor != null ? review.default_floor : 0.3;
+  const allFits = recs.flatMap(r => r.fits || []);
+  const failed = allFits.filter(f => f.assessment_failed);
+
+  if (!recs.length) {
+    return `<div class="card"><h4>Human review</h4>
+      <div class="banner warn">This block has no recommendations, so there is nothing to
+      match funding against. Load its State of Place recommendations first.</div></div>`;
+  }
+
+  const warn = failed.length
+    ? `<div class="banner warn"><b>${failed.length} of ${allFits.length} fits were not assessed by the model.</b>
+       Their 0.50 scores are placeholders, not analysis — check the server log before trusting this run.</div>`
+    : `<div class="banner ok">${recs.length} recommendation(s) × ${
+        recs[0].fits ? recs[0].fits.length : 0} program(s) assessed. Scores are proposals — edit any of them.</div>`;
+
+  return `<div class="card">
+    <h4>Human review — funding fit per recommendation</h4>
+    ${warn}
+    ${recs.map(r => recGroup(r, floor)).join("")}
+    <div style="margin-top:.85rem">
+      <label for="feedback">Optional note recorded with every signal you keep</label>
+      <textarea id="feedback" rows="2" style="width:100%;margin-top:.3rem" placeholder="approved"></textarea>
+    </div>
+  </div>`;
+}
+
+function wireReview() {
+  document.querySelectorAll(".toggle-weak").forEach(btn => {
+    btn.onclick = () => {
+      const group = btn.closest(".rec-group");
+      const shown = group.classList.toggle("show-all");
+      btn.textContent = shown
+        ? "hide weaker"
+        : `show ${group.querySelectorAll("tr.weak").length} weaker`;
+    };
+  });
+
+  // Editing a score marks it and ticks the row — changing a number you then
+  // forgot to keep was the easiest mistake to make here.
+  document.querySelectorAll("input.score-edit").forEach(inp => {
+    inp.oninput = () => {
+      const changed = inp.value !== inp.dataset.orig;
+      inp.classList.toggle("edited", changed);
+      const v = parseFloat(inp.value);
+      inp.style.color = changed ? "var(--orange)" : scoreColour(isNaN(v) ? null : v);
+      if (changed) {
+        const pick = inp.closest("tr").querySelector(".fit-pick");
+        if (pick) pick.checked = true;
+      }
+    };
+  });
+
   const fb = $("feedback");
   if (fb) fb.onkeydown = (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) approve();
@@ -542,16 +673,41 @@ function wireFeedback() {
 
 /* ---------- step 2: approve ---------- */
 
+// Every row the reviewer sees is reported back, approved true or false, so the
+// backend never has to guess whether an absent row was rejected or just missed.
+function collectFits() {
+  return Array.from(document.querySelectorAll(".rec-group tr[data-prog]")).map(tr => {
+    const score = parseFloat(tr.querySelector(".score-edit").value);
+    return {
+      rec_id: Number(tr.dataset.rec),
+      program_name: tr.dataset.prog,
+      fit_score: isNaN(score) ? null : Math.max(0, Math.min(1, score)),
+      approved: tr.querySelector(".fit-pick").checked,
+    };
+  });
+}
+
 async function approve() {
   if (!thread) return;
   const btn = $("btn-approve");
   btn.disabled = true;
-  const feedback = ($("feedback") && $("feedback").value.trim()) || "approved";
+  const fits = collectFits();
+  const note = ($("feedback") && $("feedback").value.trim()) || "";
+  const kept = fits.filter(f => f.approved).length;
   try {
-    const r = await call("POST", `/threads/${thread.id}/approve`, { feedback });
+    const r = await call("POST", `/threads/${thread.id}/approve`, {
+      fits,
+      feedback: note || "approved",
+    });
     thread.approved = true;
-    stageAppend(`<div class="banner ok">Wrote ${r.signals_written} signal(s) to
-      <code>funding_signals</code> — ids ${esc(JSON.stringify(r.written_signal_ids))}</div>`);
+    // Removals are reported separately: on a re-review the interesting number is
+    // often what the unticks took back out, not what went in.
+    const removed = r.signals_removed
+      ? ` Removed ${r.signals_removed} previously kept row(s), ids ${esc(JSON.stringify(r.removed_signal_ids))}.`
+      : "";
+    stageAppend(`<div class="banner ok">Kept ${kept} of ${fits.length} fits — wrote
+      ${r.signals_written} row(s) to <code>funding_signals</code>, ids
+      ${esc(JSON.stringify(r.written_signal_ids))}.${removed}</div>`);
     $("btn-gold").disabled = false;
   } catch (e) {
     stageAppend(`<div class="banner err">Approve failed — ${esc(e.message)}</div>`);
@@ -568,6 +724,13 @@ async function computeGold() {
   try {
     const p = await call("POST", `/threads/${thread.id}/gold`);
     stageAppend(profileCard(p, "Gold layer — block_implementation_profile"));
+    // Read back what was written rather than reusing the review card above it —
+    // that card still shows every fit assessed, including the ones just rejected.
+    const signals = await fetchSignals(selected.id);
+    if (signals) {
+      stageAppend(signalsCard(signals));
+      wireSignalGroups();
+    }
   } catch (e) {
     stageAppend(`<div class="banner err">Gold failed — ${esc(e.message)}</div>`);
     btn.disabled = false;
@@ -597,6 +760,151 @@ function profileCard(p, title) {
     ${actions ? `<ol class="actions">${actions}</ol>` : ""}
     ${p.narrative ? `<div class="narrative">${esc(p.narrative)}</div>` : ""}
   </div>`;
+}
+
+/* ---------- drill-down: written signals, by recommendation ----------
+ *
+ * Read-only twin of the review card. Same grouping, same columns, but these rows
+ * were already approved and written — there is nothing left to decide, so no
+ * checkboxes and no editable scores. Every weak row is shown: the reviewer
+ * already removed what did not belong, so anything still here was kept on purpose.
+ */
+
+function sourceLine(f) {
+  if (!f.source_name) return `<div class="src">no source recorded</div>`;
+  const extracted = f.is_extracted
+    ? `<span class="curated">extracted${
+        f.extraction_confidence != null ? ` ${num(f.extraction_confidence, 2)}` : ""}</span> · `
+    : "";
+  const name = f.source_url
+    ? `<a href="${esc(f.source_url)}" target="_blank" rel="noopener">${esc(f.source_name)}</a>`
+    : esc(f.source_name);
+  return `<div class="src">${extracted}${name}</div>`;
+}
+
+function signalRow(f) {
+  const amt = (f.award_amount_min || f.award_amount_max)
+    ? `${money(f.award_amount_min)} – ${money(f.award_amount_max)}`
+    : `<span class="assess">varies</span>`;
+
+  return `<tr>
+    <td class="fit" style="color:${scoreColour(f.fit_score)}">${num(f.fit_score, 2)}${
+      f.score_adjusted_by_reviewer
+        ? `<span class="tag derived" title="the reviewer changed the model's proposed score">edited</span>`
+        : ""}</td>
+    <td>
+      <div>${esc(f.program_name)}${
+        f.assessment_failed
+          ? ` <span style="color:var(--amber)" title="the model did not assess this — 0.50 is a placeholder">⚠</span>`
+          : ""}</div>
+      <div class="assess">${esc(f.narrative)}</div>
+      ${f.recommended_action ? `<div class="src">action: ${esc(f.recommended_action)}</div>` : ""}
+      ${f.human_notes ? `<div class="src">reviewer note: ${esc(f.human_notes)}</div>` : ""}
+      ${sourceLine(f)}
+    </td>
+    <td>${deadlineCell(f.deadline)}</td>
+    <td class="assess">${amt}</td>
+    <td>${f.application_url
+      ? `<a class="apply" href="${esc(f.application_url)}" target="_blank" rel="noopener">apply ↗</a>`
+      : `<span class="assess">—</span>`}</td>
+  </tr>`;
+}
+
+function signalTable(fits, open) {
+  return `<div class="table-wrap"${open ? "" : " hidden"}>
+    <table>
+      <thead><tr>
+        <th>Fit</th><th>Program / why it fits / source</th><th>Deadline</th><th>Award</th><th></th>
+      </tr></thead>
+      <tbody>${fits.map(signalRow).join("")}</tbody>
+    </table>
+  </div>`;
+}
+
+function signalGroup(g, open) {
+  const fits = g.fits || [];
+  const best = fits.reduce((m, f) => Math.max(m, f.fit_score || 0), 0);
+  const gain = g.predicted_score_increase;
+  const verb = g.direction === "Decrease"
+    ? `<span class="pill no" title="this block has too much of it">remove/reduce feature</span>`
+    : `<span class="pill yes">add/increase feature</span>`;
+
+  return `<div class="rec-group ro">
+    <div class="rec-head" role="button" tabindex="0" aria-expanded="${open}">
+      <span class="caret">${open ? "▾" : "▸"}</span>
+      ${verb}
+      <h5>${esc(g.rec_label)}</h5>
+      <span class="dim">${esc(g.dimension || "—")}${
+        gain != null ? ` · predicted +${num(gain, 1)}` : ""}</span>
+      <span class="spacer"></span>
+      <span class="count">${fits.length} program(s) · best fit
+        <b style="color:${scoreColour(best)}">${num(best, 2)}</b></span>
+    </div>
+    ${signalTable(fits, open)}
+  </div>`;
+}
+
+// Signals written before the analysis became per-recommendation. Shown, because
+// they are still what backs the profile above, but never folded into a
+// recommendation they were not assessed against.
+function unlinkedGroup(fits) {
+  return `<div class="rec-group ro unlinked">
+    <div class="rec-head" role="button" tabindex="0" aria-expanded="false">
+      <span class="caret">▸</span>
+      <h5>Not linked to a recommendation</h5>
+      <span class="dim">scored against the block as a whole</span>
+      <span class="spacer"></span>
+      <span class="count">${fits.length} signal(s)</span>
+    </div>
+    ${signalTable(fits, false)}
+  </div>`;
+}
+
+function signalsCard(d) {
+  const recs = d.recommendations || [];
+  const unlinked = d.unlinked || [];
+  if (!recs.length && !unlinked.length) return "";
+
+  const stale = unlinked.length
+    ? `<div class="banner warn"><b>${unlinked.length} signal(s) predate per-recommendation
+       analysis</b> and carry no <code>rec_id</code>, so they cannot be attributed to a
+       specific improvement. Re-run <b>1 · Analyze</b> to replace them.</div>`
+    : "";
+
+  return `<div class="card">
+    <h4>Funding detail by recommendation</h4>
+    <div class="kv" style="margin-bottom:.65rem">
+      ${d.signal_count} approved signal(s) · ${recs.length} of ${d.recommendations_total}
+      recommendation(s) on this block have funding · read-only view of <code>funding_signals</code>
+    </div>
+    ${stale}
+    ${recs.map((g, i) => signalGroup(g, i === 0)).join("")}
+    ${unlinked.length ? unlinkedGroup(unlinked) : ""}
+  </div>`;
+}
+
+function wireSignalGroups() {
+  document.querySelectorAll(".rec-group.ro .rec-head").forEach(head => {
+    const toggle = () => {
+      const body = head.nextElementSibling;
+      const opening = body.hasAttribute("hidden");
+      body.toggleAttribute("hidden", !opening);
+      head.setAttribute("aria-expanded", String(opening));
+      head.querySelector(".caret").textContent = opening ? "▾" : "▸";
+    };
+    head.onclick = toggle;
+    head.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    };
+  });
+}
+
+async function fetchSignals(blockId) {
+  try {
+    return await call("GET", `/blocks/${blockId}/signals`);
+  } catch {
+    return null;
+  }
 }
 
 /* ============================================================
@@ -662,11 +970,22 @@ function renderStartForm(banner = "") {
     <div class="card">
       <div class="field">
         <label for="d-goal">Goal — what are you trying to fund?</label>
-        <textarea id="d-goal" rows="2" placeholder="e.g. Find state and local funding to build a public garden on a residential block in Bowie, Maryland."></textarea>
+        <textarea id="d-goal" rows="3" placeholder="e.g. Find state and local funding to build a public garden on a residential block in Bowie, Maryland. The eligibility rules are in the sidebar, not the main text."></textarea>
+        <div class="muted-note">
+          The goal is an instruction to the agent, not a search box. It is passed to the
+          agent at every reading stage, so hints about how to read the pages belong here
+          too — which sections matter, what to ignore, what counts as one programme. A
+          short keyword is distilled from it separately for database searches, so writing
+          in full sentences costs you nothing.
+        </div>
       </div>
       <div class="field">
         <label for="d-sources">Sources — one URL per line</label>
         <textarea id="d-sources" rows="4" placeholder="https://dnr.maryland.gov/land/Pages/ProgramOpenSpace/home.aspx"></textarea>
+      </div>
+      <div class="field">
+        <label>What gets recorded for each programme</label>
+        <div id="d-fields" class="assess">Loading…</div>
       </div>
       <div class="btn-row">
         <button class="primary" id="d-start">Start session</button>
@@ -676,8 +995,168 @@ function renderStartForm(banner = "") {
         pages actually contain, propose extractions with verifiable excerpts, and
         recommend a geographic tie. You review each step.
       </div>
-    </div>`;
+    </div>
+
+    <h3 style="margin-top:1.5rem">Past discoveries</h3>
+    <div class="sub">Every session that has been run, newest first. Opening one only
+      reads its history — nothing is re-run unless you start a new session from it.</div>
+    <div id="d-sessions" class="card spin">Loading past sessions…</div>`;
   $("d-start").onclick = startSession;
+  loadFields();
+  loadSessions();
+}
+
+/* The field list is served from the extraction schema, never hardcoded here — the
+ * whole point is that what the form promises is what the agent actually records.
+ * A failure degrades to a plain note rather than an error: not knowing the field
+ * list is no reason to block someone from starting a session. */
+async function loadFields() {
+  const el = $("d-fields");
+  if (!el) return;
+  try {
+    const { fields = [] } = await call("GET", "/funding/discovery/fields");
+    el.innerHTML = `
+      <ul class="sources-list" style="margin:0">${fields.map(f => `
+        <li>
+          <code>${esc(f.field)}</code>
+          <span style="font-size:.75rem">${esc(f.description || "")}</span>
+          ${f.optional ? `<span class="pill">left blank if unstated</span>` : ""}
+        </li>`).join("")}</ul>
+      <div class="muted-note" style="margin-top:.4rem">
+        Nothing outside this list is captured. Fields the source does not state are
+        left blank rather than guessed, and you correct every value before it is saved.
+      </div>`;
+  } catch (e) {
+    el.textContent = `Could not load the field list (${e.message}). The session will still run.`;
+  }
+}
+
+/* ---------- past sessions ----------
+ *
+ * History is read-only here. "Re-run" deliberately only prefills the form: it
+ * starts a fresh session the user drives themselves, leaving the past session's
+ * record untouched. There is no bulk re-run, by design — sessions are
+ * independent and re-running one must never disturb the others.
+ */
+
+let dSessions = [];
+
+async function loadSessions() {
+  const el = $("d-sessions");
+  if (!el) return;
+  try {
+    const res = await call("GET", "/funding/discovery/sessions");
+    dSessions = res.sessions || [];
+    renderSessions();
+  } catch (e) {
+    el.className = "banner warn";
+    el.innerHTML = `Could not load past sessions — ${esc(e.message)}`;
+  }
+}
+
+function renderSessions() {
+  const el = $("d-sessions");
+  if (!dSessions.length) {
+    el.className = "card";
+    el.innerHTML = `<div class="assess">No discovery sessions yet. The first one you
+      complete will appear here.</div>`;
+    return;
+  }
+  el.className = "";
+  el.innerHTML = dSessions.map((s, i) => {
+    const when = s.created_at ? new Date(s.created_at).toLocaleString() : "date unknown";
+    const n = s.program_count ?? (s.programs || []).length;
+    // A reconstructed session is a best effort from the catalogue, not a record.
+    // Saying so is the difference between history and a guess that looks like one.
+    const derived = s.record === "derived"
+      ? `<span class="tag derived" title="Reconstructed by grouping funding_programs — this session ran before session history was recorded, so its source list and program count may be incomplete.">reconstructed</span>`
+      : "";
+    return `
+      <div class="session-item">
+        <div class="s-head">
+          <span class="s-goal">${esc(s.goal || "(no goal recorded)")} ${derived}</span>
+          <span class="s-meta">${esc(when)} · ${n} program${n === 1 ? "" : "s"}</span>
+          <span class="s-actions">
+            <button data-open="${i}">Open</button>
+            <button data-rerun="${i}">Re-run</button>
+          </span>
+        </div>
+        <div class="s-body" id="s-body-${i}" hidden></div>
+      </div>`;
+  }).join("");
+
+  el.querySelectorAll("[data-open]").forEach(b => {
+    b.onclick = () => toggleSession(Number(b.dataset.open), b);
+  });
+  el.querySelectorAll("[data-rerun]").forEach(b => {
+    b.onclick = () => rerunSession(dSessions[Number(b.dataset.rerun)]);
+  });
+}
+
+async function toggleSession(i, btn) {
+  const body = $(`s-body-${i}`);
+  if (!body.hidden) {
+    body.hidden = true;
+    btn.textContent = "Open";
+    return;
+  }
+  body.hidden = false;
+  btn.textContent = "Close";
+  if (body.dataset.loaded) return;
+
+  body.innerHTML = `<div class="assess">Loading…</div>`;
+  const s = dSessions[i];
+  try {
+    const full = await call("GET", `/funding/discovery/sessions/${encodeURIComponent(s.thread_id)}`);
+    dSessions[i] = { ...s, ...full };
+    body.innerHTML = sessionDetail(dSessions[i]);
+    body.dataset.loaded = "1";
+  } catch (e) {
+    body.innerHTML = `<div class="banner err">Could not load session — ${esc(e.message)}</div>`;
+  }
+}
+
+function sessionDetail(s) {
+  const sources = (s.sources || []).length
+    ? `<div class="s-sources">${(s.sources || []).map(esc).join("<br>")}</div>`
+    : `<div class="assess">No sources recorded.</div>`;
+
+  const rows = (s.programs || []).map(p => {
+    // The snapshot is what this session wrote; these tags say where it no longer
+    // matches the live catalogue, so a stale row is never read as current.
+    let flag = "";
+    if (p.still_in_catalogue === false) {
+      flag = `<span class="tag gone" title="No longer in funding_programs — deleted since this session ran.">removed</span>`;
+    } else if (p.superseded_by) {
+      flag = `<span class="tag superseded" title="Re-extracted by session ${esc(p.superseded_by)}, which now owns the catalogue row.">re-extracted later</span>`;
+    }
+    return `
+      <tr>
+        <td><b>${esc(p.program_name || "")}</b> ${flag}</td>
+        <td class="assess">${esc(p.source_agency || "—")}</td>
+        <td class="assess">${esc(p.geo_scope || "—")}</td>
+        <td class="deadline">${esc(p.deadline || "—")}</td>
+      </tr>`;
+  }).join("");
+
+  return `
+    <div class="field"><label>Thread</label><code>${esc(s.thread_id)}</code></div>
+    <div class="field"><label>Sources read</label>${sources}</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Program</th><th>Agency</th><th>Geo scope</th><th>Deadline</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" class="assess">This session wrote no programs.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+
+function rerunSession(s) {
+  // Prefill only. The user still presses "Start session", and the result is a new
+  // thread — the past session stays exactly as it was.
+  $("d-goal").value = s.goal && s.goal.startsWith("(") ? "" : (s.goal || "");
+  $("d-sources").value = (s.sources || []).join("\n");
+  $("d-goal").scrollIntoView({ behavior: "smooth", block: "center" });
+  $("d-goal").focus();
 }
 
 async function startSession() {
@@ -788,6 +1267,9 @@ function renderClarify(p) {
 
   $("stage-body").innerHTML = `
     ${srcSummary ? `<div class="field"><label>Sources read</label><ul style="margin:0;padding-left:1.2rem">${srcSummary}</ul></div>` : ""}
+    ${p.search_keyword ? `<div class="muted-note">Database searches used the keyword
+      <code>${esc(p.search_keyword)}</code>, distilled from your goal. If that misses the
+      subject, say so below — the agent reads your answer at every later stage.</div>` : ""}
     ${failSummary ? `<div class="banner warn">Some sources failed: <ul style="margin:.3rem 0 0;padding-left:1.2rem">${failSummary}</ul></div>` : ""}
     ${p.notes ? `<div class="muted-note">${esc(p.notes)}</div>` : ""}
     ${qs || `<div class="assess">The agent has no clarifying questions.</div>`}
@@ -822,6 +1304,8 @@ function renderResearch(p) {
 
   $("stage-body").innerHTML = `
     ${p.summary ? `<div class="muted-note" style="margin-bottom:.75rem">${esc(p.summary)}</div>` : ""}
+    ${p.search_keyword ? `<div class="muted-note" style="margin-bottom:.75rem">Web search
+      ran on <code>${esc(p.search_keyword)}</code>${p.web_search_available ? "" : " — but web search was unavailable, so suggestions come from the fetched pages only"}.</div>` : ""}
     <div class="field">
       <label>Source assessments (from agent)</label>
       ${assessCards || `<div class="assess">No assessments returned.</div>`}

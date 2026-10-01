@@ -10,6 +10,7 @@ function BlocksView() {
   const [loadError, setLoadError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [profiles, setProfiles] = useState({}); // blockId -> gold profile, for map color overlay
+  const [showMap, setShowMap] = useState(false); // map is on-demand, not shown on every load
 
   useEffect(() => {
     call("GET", "/blocks/")
@@ -35,9 +36,17 @@ function BlocksView() {
 
   return (
     <main className="view">
-      <div className="blocks-top">
-        <BlockList blocks={blocks} selectedId={selectedId} onSelect={setSelectedId} />
-        <BlockMap blocks={blocks} selectedId={selectedId} profiles={profiles} onSelect={setSelectedId} />
+      <div className={`blocks-top${showMap ? "" : " map-collapsed"}`}>
+        <BlockList
+          blocks={blocks}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          showMap={showMap}
+          onToggleMap={() => setShowMap((s) => !s)}
+        />
+        {showMap && (
+          <BlockMap blocks={blocks} selectedId={selectedId} profiles={profiles} onSelect={setSelectedId} />
+        )}
       </div>
       <BlockDetail
         block={selected}

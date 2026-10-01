@@ -25,10 +25,11 @@ STAGE A — funding discovery          (fills the catalogue, not block-specific)
     → geo_tie   ⏸    recommend geographic reach, user overrides
     → write_silver   → funding_programs               [SILVER]
 
-STAGE B — per-block analysis         (scores one block against the catalogue)
+STAGE B — per-recommendation analysis  (matches money to each improvement)
   user clicks a block in the dev console
-    → POST /blocks/{id}/analyze      FundingAgent: catalogue × determinations
-    → GET  /threads/{tid}/review ⏸   human review of the ranked signals
+    → POST /blocks/{id}/analyze      FundingAgent: one LLM pass per recommendation,
+                                     scoring every catalogued programme against it
+    → GET  /threads/{tid}/review ⏸   review grouped by recommendation; scores editable
     → POST /threads/{tid}/approve    → funding_signals                [SILVER]
     → POST /threads/{tid}/gold       → block_implementation_profiles  [GOLD]
 ```
@@ -45,7 +46,7 @@ source with opinions about relevance.
 
 ---
 
-## 2. CURRENT BLOCKER — `tract_eligibility` is empty
+## 2. CURRENT BLOCKER — Stage B schema migration not yet applied
 
 Verified Sep 29. Live row counts:
 
@@ -54,30 +55,33 @@ Verified Sep 29. Live row counts:
 | `blocks` | 68 | ✅ |
 | `block_recommendations` | 1506 | ✅ |
 | `funding_programs` | 2 | ✅ both extracted + user-reviewed |
-| `tract_eligibility` | **0** | ❌ **this is the blocker** |
-| `funding_signals` | 2 | |
+| `tract_eligibility` | 0 | no longer blocking — see below |
+| `funding_signals` | 2 | ⚠️ legacy rows, `rec_id` NULL |
 | `block_implementation_profiles` | 2 | |
 
-`FundingAgent.gather_signals` reads per-tract designations from `tract_eligibility`. With
-the table empty, every NMTC-gated programme resolves to **UNDETERMINED** instead of
-CONFIRMED ELIGIBLE, so `_score_funding` never awards `points_confirmed_eligible` and the
-block-14-vs-69 demo contrast collapses. The CDBG income rule still works — it is computed
-from the block's own ACS data, not from this table.
+A funding signal is now **per recommendation**, not per block, so `funding_signals` needs
+`rec_id` / `rec_label` and its old `UNIQUE (block_id, program_name)` has to go — without
+that, two recommendations matching the same programme collide and the second write
+overwrites the first. PostgREST cannot run DDL, so this must be pasted into the Supabase
+SQL editor. It is the last section of `backend/db/schema.sql`; re-running the whole file
+works too, since every other statement is guarded.
 
-**Fix (needs network, ~1 min):**
+**Until it is applied, `POST /threads/{tid}/approve` fails** with
+`column funding_signals.rec_id does not exist`. Analyze and review work fine — nothing is
+written until approval.
 
-```bash
-cd sop_implementation_guide
-.venv/Scripts/python.exe -m scripts.sync_tract_eligibility
+The 2 legacy `funding_signals` rows predate `rec_id`. Postgres treats NULLs as distinct in
+a UNIQUE constraint, so they will never match the new upsert target and will just sit
+there. Clear them rather than trying to migrate them:
+
+```sql
+DELETE FROM funding_signals WHERE rec_id IS NULL;
 ```
 
-This is almost certainly the aftermath of `reset_and_reload.py` being run **without**
-`--with-tracts` — that script wipes all eight tables and its own closing message tells you
-to run the tract sync as step 2. Easy to miss. If you reset again, prefer
-`--confirm --with-tracts`.
-
-The schema blocker from the previous handoff is **resolved**: `funding_programs` now has
-27 columns including `discovery_thread_id`, so `schema.sql` was re-run successfully.
+**`tract_eligibility` being empty is no longer a blocker.** The deterministic eligibility
+path (CDBG income rule, NMTC tract designation) was unwired from Stage B on Sep 29 — see
+section 6. The modules are still on disk and the sync script still works, so re-enabling is
+a small change, but nothing reads that table today.
 
 ---
 
@@ -146,9 +150,17 @@ Assert afterwards: the row has `is_extracted=true`, `reviewed_by_user=true`, a n
 `source_excerpt`, the `discovery_thread_id`, and **your edited value** rather than the
 model's original.
 
-**Smoke test for Stage B:** run section 2's tract sync first, then `POST
-/blocks/14/analyze` → `GET /threads/{tid}/review` → `approve` → `gold`. Block 14 should
-come back CDBG- and NMTC-eligible.
+**Smoke test for Stage B:** apply section 2's migration first, then `POST
+/blocks/24/analyze` → `GET /threads/{tid}/review` → `approve` → `gold`. The review payload
+should come back grouped by recommendation, each group holding one scored fit per
+catalogued programme with a narrative naming the specific connection.
+
+Two things to assert, because both were bugs once:
+- A `Decrease` recommendation (block 24 has "Surface parking lot / Decrease") must be
+  assessed as *removal*. If a narrative talks about building a parking lot, `direction`
+  stopped reaching the prompt.
+- Edit a score in the console before approving, then check the DB: `relevance_score` must
+  be **your** number, and `raw_data.score_adjusted_by_reviewer` must be `true`.
 
 ---
 
@@ -166,8 +178,9 @@ backend/
     threads.py               Stage B — review / approve / gold
   agents/
     funding_discovery.py     Stage A graph. ALL PROMPTS AT TOP — edit those, not the nodes
-    funding.py               Stage B graph. Two-stage: determinations (facts) then LLM
-                             relevance ranking over them
+    funding.py               Stage B graph. One LLM pass per block recommendation,
+                             scoring every programme against it; reviewer edits the
+                             scores and approves per recommendation
     orchestrator.py          Fans out, scores, writes gold
     base.py                  SpecialistAgent ABC
     zoning.py / policy.py    Scaffolds. Return not_implemented. Post-midterm.
@@ -175,15 +188,16 @@ backend/
   tools/
     web_source.py            fetch() / search() / excerpt_is_genuine(). Plain httpx
     grants_gov.py            Protocol adapter ONLY (POST). No keywords, no ranking
-    llm_extractor.py         structured_call() + extract_funding_eligibility()
-    cdbg.py                  Deterministic HUD LMI income rule
-    tract_eligibility.py     NMTC lookup against the ArcGIS layer
+    llm_extractor.py         structured_call() + assess_recommendation_fit()
+    cdbg.py                  UNWIRED Sep 29. Deterministic HUD LMI income rule
+    tract_eligibility.py     UNWIRED Sep 29. NMTC lookup against the ArcGIS layer
   repositories/              All DB access. Agents never write SQL directly
   db/schema.sql              Re-runnable: every statement is IF NOT EXISTS
 frontend/dev-console/        Single-file HTML console. No build step
 scripts/
   load_bowie_data.py         GeoJSON + CSV → blocks, block_recommendations
-  sync_tract_eligibility.py  NMTC designations → tract_eligibility  (see section 2)
+  sync_tract_eligibility.py  NMTC designations → tract_eligibility. Still works, but
+                             nothing reads that table since Sep 29 (see section 6)
   reset_and_reload.py        Wipe all 8 tables + reload. --confirm required
 ```
 
@@ -225,6 +239,36 @@ grep-verified before deletion:
 `cfda_numbers` are now written by nothing, but dropping columns is a destructive migration
 and `schema.sql` is meant to stay re-runnable. They are dead weight in the table, not in
 the code.
+
+### Unwired Sep 29 — deterministic eligibility
+
+Stage B no longer computes eligibility before ranking. The unit of analysis moved from the
+block to the individual recommendation, and the deterministic layer was cut out of that
+path on purpose: it was carrying the design before there was a reason for it, and a
+per-recommendation narrative is what the reviewer actually reads.
+
+Removed from the flow — **not deleted, still on disk:**
+- `tools/cdbg.py` (`check_cdbg_eligibility`) and `tools/tract_eligibility.py`
+  (`lookup_nmtc`, `sanity_check_layer`) have no callers now except the sync script.
+- `FundingAgent.gather_signals` and `assess_relevance` are gone, replaced by
+  `load_programs` and `assess_fit`.
+- `llm_extractor._designation_status` and the "VERIFIED ELIGIBILITY DETERMINATIONS
+  (authoritative — treat as established fact)" prompt block are gone.
+- `funding_signals.eligibility_confirmed` / `determination_basis` columns still exist but
+  nothing writes them. `config.points_confirmed_eligible` / `points_relevant` are marked
+  DEPRECATED in place so an existing `.env` still loads.
+
+`orchestrator._score_funding` now scores approved fit alone, on two tiers
+(`points_strong_fit` / `points_marginal`), and dedupes to the strongest fit per programme
+first — signals are per (recommendation, programme), so counting rows would let one
+versatile programme cap the score by itself.
+
+**To re-enable:** the determination dict shape and the tri-state `True/False/None`
+semantics are intact in both modules, including the guard that refuses to write "not
+designated" when the NMTC layer returns zero tracts county-wide. Feed determinations back
+into `assess_fit` as prompt context; don't restore the hard drop in `apply_feedback` unless
+you also decide what a confirmed-ineligible programme should look like to a reviewer who
+is approving row by row.
 
 ---
 
@@ -291,10 +335,16 @@ the code.
 **What can be demonstrated today:** a live session where the user pastes a government URL,
 the agent asks grounded clarifying questions, reports what the page actually contains,
 extracts programmes with excerpts verified against the fetched text, recommends a
-geographic tie, and the user edits everything before it is saved. Then per-block
-feasibility scoring driven by real determinations (CDBG income rule, NMTC tract
-designation) rather than LLM guesswork. The catalogue currently contains **only**
-user-reviewed extractions — there is no hand-typed data left anywhere in the funding path.
+geographic tie, and the user edits everything before it is saved. Then, per block
+recommendation, a scored and reasoned match against every programme in that catalogue —
+each fit naming why the money does or does not suit that specific improvement, with the
+reviewer adjusting any score and approving recommendation by recommendation. The catalogue
+currently contains **only** user-reviewed extractions — there is no hand-typed data left
+anywhere in the funding path.
+
+**Where the judgement sits:** the fit score is the LLM's proposal and nothing else. There
+is no deterministic eligibility check behind it any more (see section 6), so the honest
+claim is "reasoned, reviewable matching", not "verified eligibility". Don't oversell it.
 
 **What cannot:** zoning and policy agents are scaffolds, so `zoning_score` and
 `policy_score` are hardcoded `50.0` placeholders in `orchestrator.compute_gold` (the dev
