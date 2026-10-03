@@ -14,9 +14,11 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from io import BytesIO
 from typing import Any, Optional
 
 import httpx
+import pypdf
 
 from backend.tools.grants_gov import clean_text
 
@@ -74,19 +76,34 @@ def _to_text(resp: httpx.Response, ctype: str, url: str) -> str:
         except ValueError:
             return resp.text
 
-    if "pdf" in ctype:
-        # No PDF parser installed. Say so rather than handing the model bytes and
-        # letting it invent a plausible-looking programme from nothing.
-        raise FetchError(
-            f"{url} is a PDF. PDF extraction is not supported yet — paste an HTML page, "
-            "or copy the relevant text in as a note."
-        )
+    # Suffix checked alongside content-type: our own uploads set the right type, but
+    # a third-party URL serving a plain-text/CSV file with a generic or missing
+    # content-type header shouldn't fall through to the HTML-stripping branch below.
+    if "pdf" in ctype or url.lower().endswith(".pdf"):
+        return _pdf_to_text(resp.content, url)
+
+    if "csv" in ctype or url.lower().endswith(".csv"):
+        return resp.text[:MAX_TEXT * 2]
+
+    if ctype == "text/plain" or url.lower().endswith(".txt"):
+        return resp.text[:MAX_TEXT * 2]
 
     # HTML and anything else textual: drop script/style, then tags and entities.
     body = resp.text
     for tag in ("script", "style", "noscript", "svg"):
         body = _strip_block(body, tag)
     return clean_text(body, limit=MAX_TEXT * 2) or ""
+
+
+def _pdf_to_text(data: bytes, url: str) -> str:
+    try:
+        reader = pypdf.PdfReader(BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as e:
+        raise FetchError(f"Could not read PDF at {url}: {e}") from e
+    if not text.strip():
+        raise FetchError(f"{url} is a PDF with no extractable text (likely scanned/image-only).")
+    return text[:MAX_TEXT * 2]
 
 
 def _strip_block(html_text: str, tag: str) -> str:

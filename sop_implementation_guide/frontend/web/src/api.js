@@ -20,6 +20,15 @@ export async function call(method, path, body) {
   return data;
 }
 
+export async function uploadFiles(files) {
+  const formData = new FormData();
+  for (const f of files) formData.append("files", f);
+  const res = await fetch(API_BASE + "/funding/discovery/uploads", { method: "POST", body: formData });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data && data.detail) || res.statusText);
+  return data; // { uploaded: [{filename, url}], errors: [{filename, error}] }
+}
+
 export const money = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString());
 export const num = (n, d = 1) => (n == null ? "—" : Number(n).toFixed(d));
 

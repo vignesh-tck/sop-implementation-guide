@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { call } from "../api.js";
+import { call, uploadFiles } from "../api.js";
 import SessionHistory from "./SessionHistory.jsx";
 
 export default function StartForm({ onStarted, banner }) {
   const [goal, setGoal] = useState("");
   const [sources, setSources] = useState("");
+  const [uploads, setUploads] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
   const [fields, setFields] = useState(null);
   const [fieldsError, setFieldsError] = useState(null);
   const [starting, setStarting] = useState(false);
@@ -26,11 +29,33 @@ export default function StartForm({ onStarted, banner }) {
     goalRef.current?.focus();
   }
 
+  async function handleFiles(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const res = await uploadFiles(files);
+      setUploads((prev) => [...prev, ...res.uploaded]);
+      if (res.errors && res.errors.length) {
+        setUploadError(res.errors.map((er) => `${er.filename}: ${er.error}`).join("; "));
+      }
+    } catch (e) {
+      setUploadError(e.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function startSession() {
     const trimmedGoal = goal.trim();
-    const sourceList = sources.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const sourceList = [
+      ...sources.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+      ...uploads.map((u) => u.url),
+    ];
     if (!trimmedGoal) return alert("Enter a goal.");
-    if (!sourceList.length) return alert("Add at least one source URL.");
+    if (!sourceList.length) return alert("Add at least one source URL or uploaded file.");
     setStarting(true);
     setStartError(null);
     try {
@@ -47,7 +72,7 @@ export default function StartForm({ onStarted, banner }) {
     <div className="discovery-wrap">
       <h3>Funding discovery — new session</h3>
       <div className="sub">
-        Paste one or more source URLs the agent should read. Nothing is written to the silver layer until you confirm every stage.
+        Paste one or more source URLs, or upload documents, for the agent to read. Nothing is written to the silver layer until you confirm every stage.
       </div>
       {banner}
       {startError && <div className="banner err">Failed to start — {startError}</div>}
@@ -73,6 +98,23 @@ export default function StartForm({ onStarted, banner }) {
             placeholder="https://dnr.maryland.gov/land/Pages/ProgramOpenSpace/home.aspx"
             value={sources} onChange={(e) => setSources(e.target.value)}
           />
+          <div className="muted-note" style={{ marginTop: ".4rem" }}>
+            Or upload your own documents (.txt, .csv, .pdf) — they are read the same way as a pasted URL.
+          </div>
+          <input type="file" multiple accept=".txt,.csv,.pdf" onChange={handleFiles} disabled={uploading} />
+          {uploading && <div className="assess">Uploading…</div>}
+          {uploadError && <div className="banner err">{uploadError}</div>}
+          {uploads.length > 0 && (
+            <ul className="sources-list" style={{ marginTop: ".4rem" }}>
+              {uploads.map((u, i) => (
+                <li key={i}>
+                  <span className="url">{u.filename}</span>
+                  <button className="rm" type="button" title="Remove"
+                          onClick={() => setUploads((prev) => prev.filter((_, idx) => idx !== i))}>×</button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <div className="field">
           <label>What gets recorded for each programme</label>

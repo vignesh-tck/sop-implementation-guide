@@ -1,9 +1,31 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadFiles } from "../../api.js";
 
 export default function ResearchStage({ payload, onValueChange }) {
   const initial = useRef((payload.current_sources || []).slice());
   const [sources, setSources] = useState(initial.current.slice());
   const [newUrl, setNewUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+
+  async function handleFiles(e) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const res = await uploadFiles(files);
+      setSources((prev) => [...prev, ...res.uploaded.map((u) => u.url)]);
+      if (res.errors && res.errors.length) {
+        setUploadError(res.errors.map((er) => `${er.filename}: ${er.error}`).join("; "));
+      }
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   useEffect(() => {
     const same =
@@ -80,6 +102,11 @@ export default function ResearchStage({ payload, onValueChange }) {
             if (newUrl.trim()) { setSources((prev) => [...prev, newUrl.trim()]); setNewUrl(""); }
           }}>Add</button>
         </div>
+        <div className="btn-row" style={{ marginTop: ".5rem" }}>
+          <input type="file" multiple accept=".txt,.csv,.pdf" onChange={handleFiles} disabled={uploading} />
+          {uploading && <span className="assess">Uploading…</span>}
+        </div>
+        {uploadError && <div className="banner err">{uploadError}</div>}
         <div className="muted-note">Submitting the current list unchanged sends <code>"approved"</code>. Any edit sends the new list.</div>
       </div>
     </>

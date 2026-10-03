@@ -4,6 +4,9 @@
 
 fastapi==0.141.1
 uvicorn[standard]==0.54.0
+# Needed by FastAPI/Starlette to parse multipart/form-data (file uploads) - not
+# imported directly anywhere, but required for UploadFile to work at all.
+python-multipart==0.0.32
 supabase==2.31.0
 python-dotenv==1.2.3
 pydantic==2.13.5
@@ -20,3 +23,4 @@ anthropic==1.9.0
 
 httpx==0.28.1
 pandas==3.0.6
+pypdf==6.19.0

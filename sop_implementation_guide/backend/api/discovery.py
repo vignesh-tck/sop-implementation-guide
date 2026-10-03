@@ -20,7 +20,7 @@ import uuid
 from functools import lru_cache
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.agents.funding_discovery import FundingDiscoveryAgent, extraction_fields
@@ -29,6 +29,7 @@ from backend.repositories.funding_programs import (
     DiscoverySessionRepository,
     FundingProgramRepository,
 )
+from backend.tools import upload_storage
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,26 @@ def list_fields():
     true on the first change to either.
     """
     return {"fields": extraction_fields()}
+
+
+@router.post("/uploads")
+async def upload_sources(files: list[UploadFile] = File(...)):
+    """
+    Store user-supplied documents and return their public URLs.
+
+    Returned URLs are meant to be added to a session's `sources` list — the fetch
+    pipeline reads them exactly like any pasted URL. Partial success by design: one
+    bad file (wrong type, too large) shouldn't block the rest of the batch.
+    """
+    uploaded, errors = [], []
+    for f in files:
+        content = await f.read()
+        try:
+            url = upload_storage.store(f.filename, content)
+            uploaded.append({"filename": f.filename, "url": url})
+        except ValueError as e:
+            errors.append({"filename": f.filename, "error": str(e)})
+    return {"uploaded": uploaded, "errors": errors}
 
 
 # ── Session history ──────────────────────────────────────────────────────────
