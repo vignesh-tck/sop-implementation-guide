@@ -360,3 +360,37 @@ CREATE TABLE IF NOT EXISTS discovery_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_discovery_sessions_created ON discovery_sessions(created_at DESC);
+
+
+-- ---------------------------------------------------------------
+-- IMPLEMENTATION PLANS  (added Nov 2026)
+--
+-- The steps to get one recommendation done, as a reviewer (an SME) saved them.
+-- A plan starts from its pathway template in backend/data/pathways.json; a row
+-- appears here only once someone saves an edited or finalised version.
+--
+-- Funding is deliberately NOT stored in `steps`. It is attached on read from
+-- funding_signals, so money approved after a plan was finalised still shows.
+-- template_version records which template the reviewer started from, so a
+-- plan saved against an older template stays recognisable as such.
+-- ---------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS implementation_plans (
+    id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    block_id         BIGINT REFERENCES blocks(id) ON DELETE CASCADE,
+    rec_id           BIGINT REFERENCES block_recommendations(id) ON DELETE CASCADE,
+    rec_label        TEXT,
+    pathway_key      TEXT NOT NULL,
+    template_version TEXT,
+    -- [{title, owner, waits_on, time, filled_by, note, edited}], in order
+    steps            JSONB NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'final')),
+    reviewed_by      TEXT,
+    notes            TEXT,
+    finalized_at     TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (block_id, rec_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_block_id ON implementation_plans(block_id);

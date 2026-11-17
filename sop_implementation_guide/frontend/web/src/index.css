@@ -338,3 +338,33 @@ td.pick input { accent-color: var(--orange); width: 16px; height: 16px; }
 .tag.derived { border-color: var(--amber); color: var(--amber); }
 .tag.gone    { border-color: var(--red);   color: var(--red); }
 .tag.superseded { border-color: var(--amber); color: var(--amber); }
+
+/* ---- implementation plan ---- */
+.all-recs-list li.pick { cursor: pointer; padding-left: .35rem; padding-right: .35rem; border-radius: 4px; }
+.all-recs-list li.pick:hover { background: color-mix(in srgb, var(--orange) 8%, transparent); }
+.all-recs-list li.selected { background: color-mix(in srgb, var(--orange) 14%, transparent); }
+.all-recs-list .label .dim { color: var(--muted); font-weight: 400; font-size: .78rem; }
+.tag.ok     { border-color: var(--teal);   color: var(--teal); }
+.tag.edited { border-color: var(--orange); color: var(--orange); }
+
+.plan-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .4rem; }
+.plan-head h5 { margin: 0; font-size: 1rem; color: var(--orange); }
+.plan-status { font-size: .78rem; color: var(--muted); }
+.plan-status.final { color: var(--teal); font-weight: 700; }
+.plan-status.draft { color: var(--orange); font-weight: 700; }
+.plan-meta { margin-bottom: .4rem; }
+.plan-table td.n { color: var(--muted); font-variant-numeric: tabular-nums; width: 1.6rem; }
+.plan-table td .tag { margin-left: .25rem; }
+.plan-table tr.has-funding td { background: color-mix(in srgb, var(--teal) 6%, transparent); }
+.plan-table .nowrap { white-space: nowrap; }
+.plan-table input, .plan-table textarea { width: 100%; font-size: .84rem; min-width: 6rem; }
+.plan-table textarea { min-width: 14rem; resize: vertical; }
+.plan-table .row-actions { white-space: nowrap; }
+.plan-table .row-actions button { padding: .15rem .4rem; font-size: .75rem; margin-right: .15rem; }
+.plan-funding { list-style: none; margin: .35rem 0 0; padding: 0; font-size: .82rem; }
+.plan-funding li { padding: .2rem 0; border-top: 1px dashed var(--border); }
+.plan-funding a { color: var(--teal); }
+.plan-edit { margin-top: .75rem; }
+.plan-edit-row { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: .75rem; }
+.plan-edit-row label { display: flex; flex-direction: column; gap: .25rem; }
+.plan-edit-row label.grow { flex: 1; min-width: 14rem; }

@@ -4,12 +4,24 @@ import ReviewTable, { fitKey } from "./ReviewTable.jsx";
 import SignalsView from "./SignalsView.jsx";
 import ProfileCard from "./ProfileCard.jsx";
 import AllRecommendations from "./AllRecommendations.jsx";
+import PlanView from "./PlanView.jsx";
+
+// The recommendation that opens first: the one with the largest predicted gain.
+function topRecId(recs) {
+  const ranked = [...(recs || [])].sort(
+    (a, b) => (b.predicted_score_increase ?? -Infinity) - (a.predicted_score_increase ?? -Infinity)
+  );
+  return ranked[0]?.rec_id ?? null;
+}
 
 export default function BlockDetail({ block, onProfileComputed }) {
   const [existingProfile, setExistingProfile] = useState(null);
   const [existingSignals, setExistingSignals] = useState(null);
   const [existingLoading, setExistingLoading] = useState(false);
   const [allRecommendations, setAllRecommendations] = useState(null);
+  const [selectedRecId, setSelectedRecId] = useState(null);
+  // Bumped when funding is approved, so the open plan re-reads and picks up the new money.
+  const [planRefresh, setPlanRefresh] = useState(0);
 
   const [thread, setThread] = useState(null); // { id, approved }
   const [analyzing, setAnalyzing] = useState(false);
@@ -43,6 +55,7 @@ export default function BlockDetail({ block, onProfileComputed }) {
     setExistingProfile(null);
     setExistingSignals(null);
     setAllRecommendations(null);
+    setSelectedRecId(null);
 
     if (!block) return;
     const id = block.id;
@@ -50,17 +63,26 @@ export default function BlockDetail({ block, onProfileComputed }) {
     Promise.all([
       call("GET", `/blocks/${id}/profile`).catch(() => null),
       call("GET", `/blocks/${id}/signals`).catch(() => null),
-      call("GET", `/blocks/${id}`).catch(() => null),
-    ]).then(([profile, signals, full]) => {
+      call("GET", `/blocks/${id}/plans`).catch(() => null),
+    ]).then(([profile, signals, plans]) => {
       // A block can be reselected while these are in flight — drop a late response
       // rather than render one block's funding under another block's heading.
       if (!block || block.id !== id) return;
       setExistingProfile(profile);
       setExistingSignals(signals);
-      setAllRecommendations(full?.recommendations || null);
+      setAllRecommendations(plans?.recommendations || null);
+      setSelectedRecId(topRecId(plans?.recommendations));
       setExistingLoading(false);
     });
   }, [block]);
+
+  // Re-read the list's funding counts and plan statuses after anything changes them.
+  function refreshPlans() {
+    const id = block.id;
+    call("GET", `/blocks/${id}/plans`)
+      .then((plans) => { if (block.id === id) setAllRecommendations(plans?.recommendations || null); })
+      .catch(() => {});
+  }
 
   if (!block) {
     return (
@@ -130,6 +152,8 @@ export default function BlockDetail({ block, onProfileComputed }) {
       const r = await call("POST", `/threads/${thread.id}/approve`, { fits, feedback: note });
       setThread((t) => ({ ...t, approved: true }));
       setApproveResult({ ...r, kept: fits.filter((f) => f.approved).length, total: fits.length });
+      setPlanRefresh((n) => n + 1);
+      refreshPlans();
     } catch (e) {
       setApproveError(e.message);
     } finally {
@@ -166,10 +190,18 @@ export default function BlockDetail({ block, onProfileComputed }) {
         median HH income {money(block.median_hh_income)} · SoP {num(block.sop_index_norm)}/100
       </div>
 
-      <AllRecommendations recommendations={allRecommendations} />
+      <AllRecommendations
+        recommendations={allRecommendations}
+        selectedRecId={selectedRecId}
+        onSelect={setSelectedRecId}
+      />
+
+      {selectedRecId != null && (
+        <PlanView blockId={block.id} recId={selectedRecId} refreshKey={planRefresh} onSaved={refreshPlans} />
+      )}
 
       <div className="card">
-        <h4>Flow</h4>
+        <h4>Funding analysis — attaches approved funding to each plan</h4>
         <div className="steps">
           <button className="primary" onClick={analyze} disabled={analyzing}>
             {analyzing ? "Analyzing…" : "1 · Analyze"}

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.blocks import router as blocks_router
 from backend.api.discovery import router as discovery_router
+from backend.api.plans import router as plans_router
 from backend.api.threads import router as threads_router
 
 app = FastAPI(
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(blocks_router)
 app.include_router(threads_router)
 app.include_router(discovery_router)
+app.include_router(plans_router)
 
 
 @app.get("/health")

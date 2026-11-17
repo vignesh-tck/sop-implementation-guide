@@ -1,0 +1,195 @@
+{
+  "version": "v0-draft",
+  "updated": "2026-11-17",
+  "status": "Draft. Owners and times are a strawman from general practice, not yet reviewed by an SME.",
+
+  "filled_by": {
+    "template":      {"label": "Template",          "automated": false, "note": "Set by this template; the same on every block."},
+    "funding":       {"label": "Funding match",     "automated": true,  "note": "Approved funding signals for this recommendation."},
+    "parcel":        {"label": "Parcel records",    "automated": false, "note": "Owner and site lookup. Not automated yet."},
+    "zoning":        {"label": "Zoning lookup",     "automated": false, "note": "Zone and permitted-use check. Not automated yet."},
+    "road_owner":    {"label": "Road-owner lookup", "automated": false, "note": "State, county or city road. Not automated yet."},
+    "policy":        {"label": "Policy match",      "automated": false, "note": "Supporting or blocking plans and codes. Not automated yet."},
+    "program_terms": {"label": "Program terms",     "automated": false, "note": "The funding program's own post-award rules. Not extracted yet."}
+  },
+
+  "pathways": [
+    {
+      "key": "building_facade",
+      "name": "Building and façade",
+      "who": "Property owner",
+      "branch": "Is the condition a code violation the City can enforce, or an improvement beyond code that needs an incentive?",
+      "steps": [
+        {"title": "Identify the property owners on the block", "owner": "City planning staff", "waits_on": "", "time": "1–2 wk", "filled_by": "parcel"},
+        {"title": "Decide the path: code violation or voluntary improvement", "owner": "Code enforcement + planning", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "template"},
+        {"title": "Inspect and issue a notice of violation; owner corrects", "owner": "Code enforcement", "waits_on": "If a violation", "time": "1–3 mo", "filled_by": "template"},
+        {"title": "Find incentives: façade grant or loan, storefront program", "owner": "Economic development staff", "waits_on": "If voluntary", "time": "2–4 wk", "filled_by": "funding"},
+        {"title": "Meet the owners; each decides whether to take part", "owner": "Economic development staff", "waits_on": "After 4", "time": "1–2 mo", "filled_by": "template"},
+        {"title": "Apply for the chosen program (the City or the owner, per program rules)", "owner": "City or owner", "waits_on": "If an owner joins", "time": "Program deadline", "filled_by": "template"},
+        {"title": "Design review of the façade change, if design rules apply", "owner": "Planning staff or review board", "waits_on": "After 5", "time": "1–2 mo", "filled_by": "policy"},
+        {"title": "Building or sign permit", "owner": "Permitting office", "waits_on": "After 7", "time": "2–6 wk", "filled_by": "template"},
+        {"title": "Work done and inspected; incentive paid on completion", "owner": "Owner; City verifies", "waits_on": "After 8", "time": "1–6 mo", "filled_by": "program_terms"}
+      ]
+    },
+    {
+      "key": "land_use",
+      "name": "Land use and development",
+      "who": "Owner or developer",
+      "branch": "Is the use allowed by right, by special exception, or not at all without rezoning? Reductions mostly happen when a site redevelops.",
+      "steps": [
+        {"title": "Look up the zone of each parcel on the block", "owner": "Planning staff", "waits_on": "", "time": "Days", "filled_by": "zoning"},
+        {"title": "Check whether the use is allowed: by right, special exception, or not allowed", "owner": "Planning staff", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "zoning"},
+        {"title": "Check what the area master plan says for the site", "owner": "Planning staff", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "policy"},
+        {"title": "If not allowed by right: special exception hearing, or rezoning / text amendment", "owner": "Zoning Hearing Examiner or District Council (confirm)", "waits_on": "If not by right", "time": "Special exception 4–9 mo; rezoning 9–18 mo", "filled_by": "template"},
+        {"title": "Test the market: a willing owner or developer, and demand", "owner": "Economic development staff", "waits_on": "Alongside 2–4", "time": "2–6 mo", "filled_by": "template"},
+        {"title": "Line up incentives to close any financing gap (tax credits, state programs)", "owner": "Economic development staff", "waits_on": "If there is a gap", "time": "Varies", "filled_by": "funding"},
+        {"title": "Developer applies for site plan approval", "owner": "Developer; Planning Board (M-NCPPC)", "waits_on": "After 4–6", "time": "3–9 mo", "filled_by": "template"},
+        {"title": "Permits: building and stormwater, plus a state access permit on state routes", "owner": "Permitting office; MD SHA", "waits_on": "After 7", "time": "2–6 mo", "filled_by": "road_owner"},
+        {"title": "Construction", "owner": "Developer", "waits_on": "After 8", "time": "12–24 mo", "filled_by": "template"}
+      ]
+    },
+    {
+      "key": "parks",
+      "name": "Parks and public space",
+      "who": "City or county parks agency",
+      "branch": "Is the site City land, county parkland (M-NCPPC) or private land? Is it construction, or programming like a farmers market?",
+      "steps": [
+        {"title": "Pick a site and confirm who controls it", "owner": "City planning or parks staff", "waits_on": "", "time": "2–4 wk", "filled_by": "parcel"},
+        {"title": "Secure the site: purchase, lease or easement", "owner": "City", "waits_on": "If not City-owned", "time": "6–12 mo", "filled_by": "template"},
+        {"title": "Check zoning allows park use on the parcel", "owner": "Planning staff", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "zoning"},
+        {"title": "Collect policy to cite: parks plan, master plan, health goals", "owner": "Planning staff", "waits_on": "Before 7", "time": "1–2 wk", "filled_by": "policy"},
+        {"title": "Community input on the concept", "owner": "City parks staff", "waits_on": "After 1", "time": "1–3 mo", "filled_by": "template"},
+        {"title": "Concept design and cost estimate", "owner": "City parks staff or consultant", "waits_on": "After 5", "time": "2–3 mo", "filled_by": "template"},
+        {"title": "Apply for state or federal parks grants", "owner": "City", "waits_on": "After 6", "time": "Program deadline", "filled_by": "funding"},
+        {"title": "If awarded: council accepts the grant; notify the planning committee", "owner": "City Council", "waits_on": "If awarded", "time": "1–2 mo", "filled_by": "template"},
+        {"title": "Final design approval, within the program's deadline", "owner": "City; funding agency", "waits_on": "After 8", "time": "2–6 mo", "filled_by": "program_terms"},
+        {"title": "Permits: site, grading, stormwater", "owner": "Permitting office", "waits_on": "After 9", "time": "1–3 mo", "filled_by": "template"},
+        {"title": "Bid and award the construction contract", "owner": "City procurement", "waits_on": "After 10", "time": "2–3 mo", "filled_by": "template"},
+        {"title": "Build, then grant close-out and a maintenance plan", "owner": "Contractor; City", "waits_on": "After 11", "time": "3–9 mo", "filled_by": "program_terms"}
+      ]
+    },
+    {
+      "key": "traffic_control",
+      "name": "Traffic control and crossings",
+      "who": "Road owner",
+      "branch": "Is the road state (MD SHA), county or City? Signs and markings move fast; signals need a warrant study and take much longer.",
+      "steps": [
+        {"title": "Confirm who owns the road", "owner": "City staff", "waits_on": "", "time": "Days", "filled_by": "road_owner"},
+        {"title": "Request an engineering study: a crossing study, or a warrant analysis for signals and stop signs", "owner": "Road owner", "waits_on": "After 1", "time": "2–6 mo", "filled_by": "template"},
+        {"title": "Road owner approves the treatment", "owner": "Road owner", "waits_on": "If the study supports it", "time": "1–2 mo", "filled_by": "template"},
+        {"title": "Find funding: maintenance budget for markings, grants for signals", "owner": "City or road owner", "waits_on": "After 3", "time": "Program deadline", "filled_by": "funding"},
+        {"title": "Agreement or permit, if the City pays for or builds on a road it doesn't own", "owner": "City + road owner", "waits_on": "If not a City road", "time": "1–3 mo", "filled_by": "road_owner"},
+        {"title": "Design to the Maryland MUTCD", "owner": "Road owner or City engineer", "waits_on": "After 4", "time": "1–6 mo", "filled_by": "template"},
+        {"title": "Install", "owner": "Road owner or contractor", "waits_on": "After 6", "time": "Weeks for markings; 3–6 mo for signals", "filled_by": "template"},
+        {"title": "Agree who maintains it", "owner": "Road owner + City", "waits_on": "At handover", "time": "", "filled_by": "template"}
+      ]
+    },
+    {
+      "key": "streetscape",
+      "name": "Streetscape and sidewalks",
+      "who": "Road owner",
+      "branch": "Who owns the road? Is the item capital work, a furnishing, a service an operator runs (bus stops, bike share), or a business permit (outdoor dining)?",
+      "steps": [
+        {"title": "Confirm the road owner and the space available in the right-of-way", "owner": "City staff", "waits_on": "", "time": "1–4 wk", "filled_by": "road_owner"},
+        {"title": "Collect policy to cite: complete streets, bike and pedestrian plans", "owner": "Planning staff", "waits_on": "Before 4", "time": "1–2 wk", "filled_by": "policy"},
+        {"title": "Get into a capital budget, or a small-works budget for furnishings", "owner": "Public works + finance", "waits_on": "Next budget cycle", "time": "Up to 12 mo", "filled_by": "template"},
+        {"title": "Apply for transportation or streetscape grants", "owner": "City", "waits_on": "After 1", "time": "Program deadline", "filled_by": "funding"},
+        {"title": "If awarded: council accepts; federal money adds environmental review", "owner": "City Council; MD SHA for federal aid", "waits_on": "If awarded", "time": "1–12 mo", "filled_by": "program_terms"},
+        {"title": "Design, utility coordination and ADA compliance", "owner": "City engineer or consultant", "waits_on": "After 3 or 5", "time": "3–9 mo", "filled_by": "template"},
+        {"title": "Permits: right-of-way permit; street trees may need a state roadside tree permit", "owner": "Road owner; MD DNR (confirm)", "waits_on": "After 6", "time": "1–3 mo", "filled_by": "road_owner"},
+        {"title": "Bid and build", "owner": "City; contractor", "waits_on": "After 7", "time": "3–12 mo", "filled_by": "template"},
+        {"title": "Agree who maintains benches, trees and lights", "owner": "City + road owner", "waits_on": "At handover", "time": "", "filled_by": "template"}
+      ]
+    },
+    {
+      "key": "road_curb",
+      "name": "Road and curb changes",
+      "who": "Road owner",
+      "branch": "Who owns the road? Lane reductions need traffic analysis and public engagement; driveway reductions usually wait for redevelopment.",
+      "steps": [
+        {"title": "Confirm who owns the road", "owner": "City staff", "waits_on": "", "time": "Days", "filled_by": "road_owner"},
+        {"title": "Traffic and parking study: volumes for lane cuts; width and sight lines for parking", "owner": "Road owner", "waits_on": "After 1", "time": "3–6 mo", "filled_by": "template"},
+        {"title": "Collect policy to cite: complete streets, road diet guidance", "owner": "Planning staff", "waits_on": "Before 4", "time": "1–2 wk", "filled_by": "policy"},
+        {"title": "Public engagement with businesses and residents", "owner": "City", "waits_on": "After 2", "time": "1–3 mo", "filled_by": "template"},
+        {"title": "Road owner approves", "owner": "Road owner", "waits_on": "After 2 and 4", "time": "1–2 mo", "filled_by": "template"},
+        {"title": "Time it with scheduled resurfacing, or fund it separately", "owner": "Road owner; City", "waits_on": "After 5", "time": "Next resurfacing", "filled_by": "funding"},
+        {"title": "Striping and signing plan", "owner": "Road owner or engineer", "waits_on": "After 6", "time": "1–3 mo", "filled_by": "template"},
+        {"title": "Restripe and sign", "owner": "Road owner", "waits_on": "After 7", "time": "1–4 wk", "filled_by": "template"},
+        {"title": "Driveways: consolidate with owners, usually at redevelopment", "owner": "City + owners", "waits_on": "Ties to land use and development", "time": "At redevelopment", "filled_by": "template"}
+      ]
+    }
+  ],
+
+  "rec_types": {
+    "General maintenance of the buildings": "building_facade",
+    "Attractiveness": "building_facade",
+    "Arcades": "building_facade",
+    "Awnings": "building_facade",
+    "Blank walls": "building_facade",
+    "Grafitti": "building_facade",
+    "Litter": "building_facade",
+    "Dumpsters": "building_facade",
+    "Billboards": "building_facade",
+
+    "Vertical mixed used buildings": "land_use",
+    "Restaurants": "land_use",
+    "Bank/Financial": "land_use",
+    "Condo/Apartment Housing": "land_use",
+    "Hospital, Medical Facility, Health Clinic": "land_use",
+    "Hotel/Hospitality": "land_use",
+    "Post Office, Police Station Courthouse, DMV": "land_use",
+    "Coffee Shops/Tea Houses": "land_use",
+    "Gym/Fitness Center": "land_use",
+    "Bars/Night Clubs": "land_use",
+    "Museum, Auditorium Concert Hall, Theater": "land_use",
+    "Single Family Home/Duplex Attached": "land_use",
+    "Religious Institution/buildings": "land_use",
+    "Corner Store/Convenience Store": "land_use",
+    "Offices": "land_use",
+    "Libraries/Bookstores": "land_use",
+    "Big Box Shops": "land_use",
+    "Strip Mall": "land_use",
+    "Gas/Service Station": "land_use",
+    "Drive-thru": "land_use",
+    "Shopping Mall": "land_use",
+    "Surface parking lot": "land_use",
+
+    "Public Garden": "parks",
+    "Plaza/Square/Courtyard": "parks",
+    "Park/Playground": "parks",
+    "Playing or Sport Field": "parks",
+    "Farmers Market": "parks",
+    "Community Center or Library": "parks",
+
+    "Crosswalks 1": "traffic_control",
+    "Crosswalks 2": "traffic_control",
+    "Zebra Striping": "traffic_control",
+    "Zebra Striping 2": "traffic_control",
+    "Stop Sign 1": "traffic_control",
+    "Stop Sign 2": "traffic_control",
+    "Traffic Signal 1": "traffic_control",
+    "Traffic Signal 2": "traffic_control",
+    "Pedestrian Signal (Activated)": "traffic_control",
+    "Pedestrian Signal (Activated) 2": "traffic_control",
+    "Midblock crossing": "traffic_control",
+
+    "Benches/chairs": "streetscape",
+    "Banners": "streetscape",
+    "Sidewalks with shading": "streetscape",
+    "Sidewalk completeness on either side": "streetscape",
+    "Sidewalks": "streetscape",
+    "Different Road Surface or Paving": "streetscape",
+    "Different Road Surface or Paving 2": "streetscape",
+    "Outdoor lighting on the segment": "streetscape",
+    "Street trees": "streetscape",
+    "Bus Stops With Seating": "streetscape",
+    "Bike lane": "streetscape",
+    "Bike share system": "streetscape",
+    "Outdoor dining areas": "streetscape",
+    "Parked cars between the sidewalk/street)": "streetscape",
+
+    "Angled/On street parking": "road_curb",
+    "Vehicle lanes": "road_curb",
+    "Driveways": "road_curb"
+  }
+}
