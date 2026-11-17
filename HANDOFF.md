@@ -421,3 +421,32 @@ including steps no source fills yet.
 
 **Deploy note:** the server needs `backend/data/zoning_rules.json` and
 `backend/data/zoning_use_table.json`. Every plan request loads them.
+
+**Zoning tab (`frontend/web/src/zoning/`):** shows the data behind every finding.
+- **Blocks:** each block's zones, prior zones, cases, overlays and its findings.
+- **Use table:** recommendation types × zones.
+- **Sources and method:** every source and the decision rules.
+
+All of it comes from `GET /zoning/overview` and `GET /blocks/{id}/zoning`.
+
+**Refreshing from the app:** in Zoning → Sources and method, a user can re-extract the use
+table from an enCodePlus link and re-look-up block zones. They choose the zoning layer, zone
+field, prior layer, buffer and blocks, and give their name and a reason.
+- The refresh runs in a background thread on the API server (`backend/tools/zoning_refresh.py`).
+- It produces a diff against the data in force: use-table cells, recommendation outcomes per
+  zone, block zones, scores and failed lookups. Nothing changes until someone with a name
+  applies it.
+- Applying writes a new `zoning_data_versions` row, plus the refreshed blocks' `zoning_signals`
+  rows. Every request reads the newest version through `zoning.refresh_active(db)`.
+- Version 0 is the committed file plus the default county layers.
+- These versions live in the DB because the hosted server's disk is wiped on redeploy.
+- Apply is refused if another version was applied after the refresh ran.
+- A run left "running" for over 30 minutes, e.g. after a server restart, is marked failed
+  when the next refresh starts.
+- **Needs the ZONING DATA VERSIONS AND REFRESH RUNS section of `schema.sql` pasted into
+  Supabase.** Until then refresh returns 503 and everything else works.
+- The CLI scripts still work, and the sync script uses the GIS settings in force.
+
+**Buffer sensitivity:** a dry run at 40 m instead of 25 m turned block 46 (Annapolis Rd) from
+RSF-65 only into four zones, and its score from 33 to 100. The buffer is a real modelling
+choice. Review any change to it.
