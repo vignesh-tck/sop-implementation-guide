@@ -29,6 +29,19 @@ class BlockRepository(BaseRepository):
         )
         return result.data or []
 
+    def all_recommendations(self, columns: str = "id, block_id, rec_label, direction, rec_rank") -> list[dict]:
+        """Every block_recommendations row. Paged, since PostgREST caps a response at 1,000 rows."""
+        rows, page, start = [], 1000, 0
+        while True:
+            batch = (
+                self._db.table("block_recommendations").select(columns)
+                .order("id").range(start, start + page - 1).execute()
+            ).data or []
+            rows += batch
+            if len(batch) < page:
+                return rows
+            start += page
+
     def distinct_rec_labels(self) -> list[str]:
         """Every recommendation type in the data. Paged, since PostgREST caps a response at 1,000 rows."""
         labels: set[str] = set()

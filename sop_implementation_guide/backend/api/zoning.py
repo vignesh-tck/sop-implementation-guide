@@ -12,10 +12,16 @@ from supabase import Client
 from backend.agents.zoning import ZoningAgent
 from backend.db.session import get_supabase
 
-router = APIRouter(prefix="/blocks", tags=["zoning"])
+router = APIRouter(tags=["zoning"])
 
 
-@router.get("/{block_id}/zoning")
+@router.get("/zoning/overview")
+def get_zoning_overview(db: Client = Depends(get_supabase)):
+    """Everything behind the zoning findings: blocks, the use-table matrix, sources."""
+    return ZoningAgent().overview(db)
+
+
+@router.get("/blocks/{block_id}/zoning")
 def get_block_zoning(block_id: int, db: Client = Depends(get_supabase)):
     result = ZoningAgent().assess_block(block_id, db)
     if result["status"] == "not_found":

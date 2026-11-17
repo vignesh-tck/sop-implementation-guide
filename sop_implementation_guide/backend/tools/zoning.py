@@ -167,10 +167,18 @@ class _Refs:
         return len(self.items)
 
     def source(self, key: str, page: int | None = None, detail: str | None = None) -> int:
-        src = load_rules()["sources"][key]
-        url = src["url"] + (f"#page={page}" if page else "")
-        label = src["label"] + (f", PDF p. {page}" if page else "")
-        return self.add(label, url, detail)
+        r = source_ref(key, page, detail)
+        return self.add(r["label"], r["url"], r["detail"])
+
+
+def source_ref(key: str, page: int | None = None, detail: str | None = None) -> dict:
+    """A named source from zoning_rules.json as a reference, pinned to a PDF page if given."""
+    src = load_rules()["sources"][key]
+    return {
+        "label": src["label"] + (f", PDF p. {page}" if page else ""),
+        "url": src["url"] + (f"#page={page}" if page else ""),
+        "detail": detail,
+    }
 
 
 def _join(items: list[str], word: str = "and") -> str:

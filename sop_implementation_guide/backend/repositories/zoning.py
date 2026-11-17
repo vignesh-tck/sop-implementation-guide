@@ -26,6 +26,19 @@ class ZoningRepository(BaseRepository):
         )
         return result.data or []
 
+    def get_all(self) -> list[dict]:
+        """Every block's rows. Paged, since PostgREST caps a response at 1,000 rows."""
+        rows, page, start = [], 1000, 0
+        while True:
+            batch = (
+                self._db.table(self._table).select("*")
+                .order("block_id").order("id").range(start, start + page - 1).execute()
+            ).data or []
+            rows += batch
+            if len(batch) < page:
+                return rows
+            start += page
+
     def replace_for_block(self, block_id: int, rows: list[dict]) -> list[dict]:
         """
         Swap a block's rows for a fresh lookup.

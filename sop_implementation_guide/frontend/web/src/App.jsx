@@ -5,6 +5,7 @@ import BlockMap from "./blocks/BlockMap.jsx";
 import BlockDetail from "./blocks/BlockDetail.jsx";
 import DiscoveryView from "./discovery/DiscoveryView.jsx";
 import PathwaysView from "./pathways/PathwaysView.jsx";
+import ZoningView from "./zoning/ZoningView.jsx";
 
 function BlocksView() {
   const [blocks, setBlocks] = useState([]);
@@ -79,8 +80,21 @@ function BlocksView() {
   );
 }
 
+const VIEWS = ["blocks", "discovery", "pathways", "zoning"];
+
+// The open tab lives in the URL hash (#zoning, #zoning/table) so a view can be linked to.
+function viewFromHash() {
+  const v = window.location.hash.slice(1).split("/")[0];
+  return VIEWS.includes(v) ? v : "blocks";
+}
+
 export default function App() {
-  const [view, setView] = useState("blocks");
+  const [view, setViewState] = useState(viewFromHash);
+
+  function setView(v) {
+    setViewState(v);
+    window.history.replaceState(null, "", `#${v}`);
+  }
 
   return (
     <>
@@ -99,6 +113,9 @@ export default function App() {
           <button className="tab" aria-selected={view === "pathways"} onClick={() => setView("pathways")}>
             Pathways
           </button>
+          <button className="tab" aria-selected={view === "zoning"} onClick={() => setView("zoning")}>
+            Zoning
+          </button>
         </nav>
         <div className="spacer" />
         <span className="meta" style={{ color: "var(--faint)", fontSize: ".72rem" }}>{API_BASE}</span>
@@ -107,6 +124,7 @@ export default function App() {
       {view === "blocks" && <BlocksView />}
       {view === "discovery" && <DiscoveryView />}
       {view === "pathways" && <PathwaysView />}
+      {view === "zoning" && <ZoningView />}
     </>
   );
 }
