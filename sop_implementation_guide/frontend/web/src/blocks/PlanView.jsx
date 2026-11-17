@@ -70,12 +70,14 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  const [promoted, setPromoted] = useState(null);
 
   useEffect(() => {
     setPlan(null);
     setLoadError(null);
     setEditing(false);
     setSaveError(null);
+    setPromoted(null);
     let live = true;
     call("GET", `/blocks/${blockId}/recommendations/${recId}/plan`)
       .then((p) => { if (live) setPlan(p); })
@@ -128,6 +130,24 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
     }
   }
 
+  // A finalised plan's steps become the pathway's template, so the next block
+  // starts from what the SME settled on rather than the draft guess.
+  async function promote() {
+    const msg = `Make these ${plan.steps.length} steps the template for every "${plan.pathway.name}" plan? ` +
+      "Plans already saved keep their own steps.";
+    if (!window.confirm(msg)) return;
+    setSaveError(null);
+    try {
+      const t = await call("PUT", `/pathways/${plan.pathway.key}/steps`, {
+        steps: plan.steps, updated_by: plan.reviewed_by,
+        note: `From the final plan for ${rec.rec_label} on block ${blockId}`,
+      });
+      setPromoted(`Saved as template ${t.version}.`);
+    } catch (e) {
+      setSaveError(e.message);
+    }
+  }
+
   const rows = editing ? steps : plan.steps;
 
   return (
@@ -143,7 +163,7 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
 
       {!plan.pathway ? (
         <div className="banner warn">
-          This recommendation type is not mapped to a pathway yet. Add it to <code>backend/data/pathways.json</code>.
+          This recommendation type is not mapped to a pathway yet. Add it to one in the Pathways tab.
         </div>
       ) : (
         <>
@@ -232,9 +252,16 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
               <button className="primary" onClick={startEdit}>
                 {plan.status === "template" ? "Review and edit" : "Edit plan"}
               </button>
+              {plan.status === "final" && !promoted && (
+                <button onClick={promote} title="Every plan on this pathway that nobody has saved yet will start from these steps">
+                  Use as pathway template
+                </button>
+              )}
               {plan.notes && <span className="kv">Notes: {plan.notes}</span>}
             </div>
           )}
+          {!editing && saveError && <div className="banner err" style={{ marginTop: ".75rem" }}>{saveError}</div>}
+          {promoted && <div className="banner ok" style={{ marginTop: ".75rem" }}>{promoted}</div>}
         </>
       )}
     </div>

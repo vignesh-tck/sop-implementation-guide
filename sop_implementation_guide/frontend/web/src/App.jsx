@@ -4,6 +4,7 @@ import BlockList from "./blocks/BlockList.jsx";
 import BlockMap from "./blocks/BlockMap.jsx";
 import BlockDetail from "./blocks/BlockDetail.jsx";
 import DiscoveryView from "./discovery/DiscoveryView.jsx";
+import PathwaysView from "./pathways/PathwaysView.jsx";
 
 function BlocksView() {
   const [blocks, setBlocks] = useState([]);
@@ -95,12 +96,17 @@ export default function App() {
           <button className="tab" aria-selected={view === "discovery"} onClick={() => setView("discovery")}>
             Funding discovery
           </button>
+          <button className="tab" aria-selected={view === "pathways"} onClick={() => setView("pathways")}>
+            Pathways
+          </button>
         </nav>
         <div className="spacer" />
         <span className="meta" style={{ color: "var(--faint)", fontSize: ".72rem" }}>{API_BASE}</span>
       </header>
 
-      {view === "blocks" ? <BlocksView /> : <DiscoveryView />}
+      {view === "blocks" && <BlocksView />}
+      {view === "discovery" && <DiscoveryView />}
+      {view === "pathways" && <PathwaysView />}
     </>
   );
 }

@@ -394,3 +394,26 @@ CREATE TABLE IF NOT EXISTS implementation_plans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_plans_block_id ON implementation_plans(block_id);
+
+
+-- ---------------------------------------------------------------
+-- PATHWAY TEMPLATES  (added Nov 2026)
+--
+-- The pathway templates as edited in the app's Pathways tab. Every save is a
+-- new row; the highest version is the one in force, and older rows are the
+-- history a reviewer can restore from. With no rows (or no table), the app
+-- falls back to backend/data/pathways.json, which is version v0.
+--
+-- `doc` holds {status, pathways, rec_types}. The filled_by sources are not
+-- stored: they describe what the code can automate, so they always come from
+-- the file.
+-- ---------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS pathway_templates (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    version     INT NOT NULL UNIQUE,
+    doc         JSONB NOT NULL,
+    updated_by  TEXT NOT NULL,
+    note        TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);

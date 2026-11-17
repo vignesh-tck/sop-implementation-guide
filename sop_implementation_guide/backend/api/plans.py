@@ -66,7 +66,7 @@ def _plan_response(db: Client, block_id: int, rec: dict) -> dict:
         saved = PlanRepository(db).get_for_rec(block_id, rec["id"])
     except PlanTableMissing:
         saved, storage_ready = None, False
-    plan = build_plan(rec, _funding_for(db, block_id, rec["id"]), saved)
+    plan = build_plan(rec, _funding_for(db, block_id, rec["id"]), saved, load_templates(db))
     return {"block_id": block_id, "storage_ready": storage_ready, **plan}
 
 
@@ -91,7 +91,7 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
         if s.get("rec_id") is not None:
             funding_counts[s["rec_id"]] = funding_counts.get(s["rec_id"], 0) + 1
 
-    templates = load_templates()
+    templates = load_templates(db)
     rows = []
     for rec in block.get("recommendations", []):
         pathway = pathway_for(rec.get("rec_label"), templates)
@@ -126,11 +126,12 @@ def save_plan(block_id: int, rec_id: int, body: PlanUpdate, db: Client = Depends
     current after the plan is saved.
     """
     _, rec = _block_and_rec(db, block_id, rec_id)
-    pathway = pathway_for(rec.get("rec_label"))
+    templates = load_templates(db)
+    pathway = pathway_for(rec.get("rec_label"), templates)
     if not pathway:
         raise HTTPException(
             status_code=422,
-            detail=f"'{rec.get('rec_label')}' is not mapped to a pathway in backend/data/pathways.json",
+            detail=f"'{rec.get('rec_label')}' is not mapped to a pathway. Map it in the Pathways tab.",
         )
     reviewer = (body.reviewed_by or "").strip() or None
     if body.status == "final" and not reviewer:
@@ -143,7 +144,7 @@ def save_plan(block_id: int, rec_id: int, body: PlanUpdate, db: Client = Depends
             "rec_id": rec_id,
             "rec_label": rec.get("rec_label"),
             "pathway_key": pathway["key"],
-            "template_version": load_templates().get("version"),
+            "template_version": templates.get("version"),
             "steps": [clean_step(s) for s in body.steps],
             "status": body.status,
             "reviewed_by": reviewer,

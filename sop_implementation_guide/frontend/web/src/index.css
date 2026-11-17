@@ -368,3 +368,32 @@ td.pick input { accent-color: var(--orange); width: 16px; height: 16px; }
 .plan-edit-row { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: .75rem; }
 .plan-edit-row label { display: flex; flex-direction: column; gap: .25rem; }
 .plan-edit-row label.grow { flex: 1; min-width: 14rem; }
+
+/* ---- pathways (template editor) ---- */
+.pathways-wrap { padding: 1rem 1.25rem; max-width: 1300px; margin: 0 auto; width: 100%; }
+.pathways-grid { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 1rem; align-items: start; }
+@media (max-width: 800px) { .pathways-grid { grid-template-columns: minmax(0, 1fr); } }
+.pathway-list ul { list-style: none; margin: 0; padding: 0; }
+.pathway-list > ul > li {
+  padding: .5rem .6rem; border-left: 3px solid transparent; border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.pathway-list > ul > li:hover { background: var(--surface-2); }
+.pathway-list > ul > li[aria-selected="true"] { background: var(--surface-2); border-left-color: var(--orange); }
+.pathway-list .name { font-weight: 600; }
+.pathway-list .meta { color: var(--muted); font-size: .78rem; }
+.pathway-new { display: flex; gap: .4rem; margin-top: .75rem; }
+.pathway-new input { flex: 1; min-width: 0; }
+.pathway-list .history-head, .recs-head { margin-top: 1.25rem; }
+.pathway-history li { font-size: .8rem; padding: .35rem 0; border-bottom: 1px dashed var(--border); cursor: default; }
+.pathway-history button { padding: .1rem .45rem; font-size: .72rem; margin-top: .25rem; display: block; }
+.pathway-fields { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem .75rem; margin-bottom: .75rem; }
+.pathway-fields label { display: flex; flex-direction: column; gap: .25rem; }
+.pathway-fields label.wide { grid-column: 1 / -1; }
+.pathway-fields textarea { resize: vertical; }
+.plan-table select { font-size: .8rem; padding: .3rem .4rem; }
+.pathway-recs { list-style: none; margin: 0 0 .6rem; padding: 0; columns: 2 18rem; column-gap: 1rem; }
+.pathway-recs li {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .25rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; break-inside: avoid;
+}
+.pathway-recs select { font-size: .75rem; padding: .15rem .3rem; max-width: 9rem; }

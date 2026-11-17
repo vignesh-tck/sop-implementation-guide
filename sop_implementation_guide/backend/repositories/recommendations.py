@@ -28,3 +28,22 @@ class BlockRepository(BaseRepository):
             .execute()
         )
         return result.data or []
+
+    def distinct_rec_labels(self) -> list[str]:
+        """Every recommendation type in the data. Paged, since PostgREST caps a response at 1,000 rows."""
+        labels: set[str] = set()
+        page = 1000
+        start = 0
+        while True:
+            rows = (
+                self._db.table("block_recommendations")
+                .select("rec_label")
+                .range(start, start + page - 1)
+                .execute()
+            ).data or []
+            labels.update((r.get("rec_label") or "").strip() for r in rows)
+            if len(rows) < page:
+                break
+            start += page
+        labels.discard("")
+        return sorted(labels)
