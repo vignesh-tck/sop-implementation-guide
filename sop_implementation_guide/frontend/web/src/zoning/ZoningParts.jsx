@@ -7,21 +7,38 @@ export function Cites({ refs }) {
   return <sup className="cites">{refs.map((n) => `[${n}]`).join("")}</sup>;
 }
 
+// The plain-language answer: what the finding means for the plan, with the
+// references behind it. Falls back to the zone-by-zone summary when the finding
+// has no "meaning" sentence (e.g. the block was never looked up).
+export function zoningAnswer(z) {
+  const meaning = z.narrative.filter((p) => p.section === "meaning");
+  if (!meaning.length) {
+    const found = z.narrative.find((p) => p.section === "found");
+    return z.status === "missing" && found ? { text: found.text, refs: found.refs } : { text: z.summary, refs: [] };
+  }
+  return {
+    text: meaning.map((p) => p.text).join(" "),
+    refs: [...new Set(meaning.flatMap((p) => p.refs))].sort((a, b) => a - b),
+  };
+}
+
 // The zoning finding: the answer first, then the background, then what is still
 // open. Every sentence carries the numbers of the references that back it.
-export function ZoningFinding({ z, detail, seeStep }) {
+// `hideSummary` drops the summary line and `omit` drops sections, for when the
+// caller already shows the answer above the finding.
+export function ZoningFinding({ z, detail, seeStep, hideSummary = false, omit = [] }) {
   if (detail === "summary") {
     return <div className="zoning-summary">Zoning: {z.summary}. Full finding in step {seeStep}.</div>;
   }
   const groups = [];
-  for (const p of z.narrative) {
+  for (const p of z.narrative.filter((p) => !omit.includes(p.section))) {
     const last = groups[groups.length - 1];
     if (last && last.section === p.section) last.items.push(p);
     else groups.push({ section: p.section, items: [p] });
   }
   return (
     <div className="zoning-finding">
-      <div className="zoning-summary"><b>Zoning:</b> {z.summary}</div>
+      {!hideSummary && <div className="zoning-summary"><b>Zoning:</b> {z.summary}</div>}
       {groups.map((g) => (
         <div key={g.section} className="zoning-section">
           <div className="zoning-h">{z.sections?.[g.section] || g.section}</div>

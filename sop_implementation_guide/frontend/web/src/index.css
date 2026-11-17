@@ -429,6 +429,47 @@ td.pick input { accent-color: var(--orange); width: 16px; height: 16px; }
 div.refs-list { padding-left: 0; }
 .source-legend { margin-top: .5rem; line-height: 1.9; }
 .source-legend b { font-size: .82rem; }
+.source-legend > summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
+
+/* ---- plan steps as cards ---- */
+button.link {
+  background: none; border: none; padding: 0; font: inherit; font-weight: 600;
+  color: var(--silver); text-decoration: underline; text-underline-offset: 2px;
+}
+button.link:hover:not(:disabled) { color: var(--orange); }
+.plan-attention {
+  margin: .5rem 0; padding: .4rem .65rem; border-left: 3px solid var(--amber); border-radius: 4px;
+  background: color-mix(in srgb, var(--amber) 8%, transparent); font-size: .84rem;
+}
+.plan-steps { list-style: none; margin: .5rem 0 0; padding: 0; }
+.plan-step {
+  border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 6px;
+  padding: .55rem .7rem .6rem; margin-bottom: .5rem; background: var(--surface); scroll-margin-top: .75rem;
+}
+.plan-step.needs-sme   { border-left-color: var(--amber); }
+.plan-step.has-funding { border-left-color: var(--teal); }
+.ps-head { display: flex; gap: .5rem; align-items: baseline; }
+.ps-n { color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; min-width: 1.1rem; }
+.ps-title { flex: 1; font-weight: 600; line-height: 1.4; }
+.ps-body { margin-left: 1.6rem; }
+.ps-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .35rem; margin-top: .15rem; font-size: .78rem; color: var(--muted); }
+.ps-tags { display: inline-flex; flex-wrap: wrap; gap: .25rem; margin-left: auto; }
+.ps-answer { display: flex; align-items: baseline; gap: .45rem; margin-top: .4rem; font-size: .86rem; line-height: 1.45; }
+.ps-answer .outcome { flex-shrink: 0; }
+.ps-evidence { margin-top: .4rem; }
+.ps-evidence > summary { cursor: pointer; font-size: .76rem; color: var(--silver); font-weight: 600; }
+.plan-step.needs-sme .ps-evidence > summary { color: var(--amber); }
+.ps-evidence-body { margin-top: .3rem; padding-left: .6rem; border-left: 2px solid var(--border); }
+.ps-evidence-body .zoning-finding { margin-top: 0; }
+.fit-why { margin: .2rem 0 0; padding-left: 1.1rem; font-size: .82rem; line-height: 1.45; }
+.fit-why li { margin-bottom: .25rem; }
+.plan-step.editing .ps-head textarea { flex: 1; min-width: 0; font-size: .86rem; resize: vertical; }
+.plan-step.editing .row-actions { white-space: nowrap; }
+.plan-step.editing .row-actions button { padding: .15rem .4rem; font-size: .75rem; margin-left: .15rem; }
+.ps-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .4rem .6rem; margin-top: .4rem; }
+.ps-fields label { display: flex; flex-direction: column; gap: .15rem; font-size: .74rem; color: var(--muted); }
+.ps-fields input { font-size: .84rem; min-width: 0; }
+.plan-step.editing .ps-tags { margin: .4rem 0 0 1.6rem; }
 
 
 /* ---- zoning tab ---- */
