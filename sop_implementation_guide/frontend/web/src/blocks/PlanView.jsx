@@ -206,7 +206,7 @@ function StepBody({ s, plan, onJump, onFunding }) {
           <span className="verdict-mark" aria-hidden="true">!</span>
           <span>
             No approved funding for this recommendation yet. Funding is analysed for the whole block at once.{" "}
-            <button type="button" className="link" onClick={onFunding}>Run it from the block page</button>.
+            <button type="button" className="link" onClick={onFunding}>Open the block's funding review</button>.
           </span>
         </div>
       )}

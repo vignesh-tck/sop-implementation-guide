@@ -3,6 +3,8 @@ import { call, API_BASE } from "./api.js";
 import BlockList from "./blocks/BlockList.jsx";
 import BlockMap from "./blocks/BlockMap.jsx";
 import BlockDetail from "./blocks/BlockDetail.jsx";
+import FundingWorkspace from "./blocks/FundingWorkspace.jsx";
+import useBlockFunding, { fundingStatus } from "./blocks/useBlockFunding.js";
 import DiscoveryView from "./discovery/DiscoveryView.jsx";
 import PathwaysView from "./pathways/PathwaysView.jsx";
 import ZoningView from "./zoning/ZoningView.jsx";
@@ -23,7 +25,26 @@ function BlocksView() {
       .catch((e) => setLoadError(e.message));
   }, []);
 
+  const funding = useBlockFunding({
+    onProfileComputed: (id, profile) => setProfiles((prev) => ({ ...prev, [id]: profile })),
+  });
+  // The funding review takes the map's place in the middle; closing it brings the map back.
+  const [fundingOpen, setFundingOpen] = useState(false);
+
+  useEffect(() => {
+    setFundingOpen(false);
+    if (selectedId != null) funding.load(selectedId);
+  }, [selectedId, funding.load]);
+
+  useEffect(() => {
+    if (!fundingOpen) return;
+    const onKey = (e) => { if (e.key === "Escape") setFundingOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fundingOpen]);
+
   const selected = blocks.find((b) => b.id === selectedId) || null;
+  const fs = funding.get(selectedId);
 
   if (loadError) {
     return (
@@ -72,7 +93,29 @@ function BlocksView() {
           </button>
           <BlockDetail
             block={selected}
-            onProfileComputed={(id, profile) => setProfiles((prev) => ({ ...prev, [id]: profile }))}
+            s={fs}
+            onOpenFunding={() => setFundingOpen(true)}
+            onRefresh={() => funding.refresh(selected.id)}
+          />
+        </div>
+      )}
+
+      {selected && fundingOpen && (
+        <div className={"panel workspace" + (panelOpen ? "" : " no-list")}>
+          <div className="ws-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected="false" onClick={() => setFundingOpen(false)}>Map</button>
+            <button type="button" role="tab" aria-selected="true">
+              Funding review{" "}
+              <span className={"status-chip " + { none: "idle", running: "run", review: "prop", done: "ok" }[fundingStatus(fs).key]}>
+                {fundingStatus(fs).text}
+              </span>
+            </button>
+          </div>
+          <FundingWorkspace
+            block={selected}
+            s={fs}
+            actions={funding}
+            onClose={() => setFundingOpen(false)}
           />
         </div>
       )}

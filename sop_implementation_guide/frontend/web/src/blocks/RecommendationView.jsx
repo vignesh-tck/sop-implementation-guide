@@ -75,7 +75,9 @@ function AllSources({ plan }) {
   return <References refs={refs} />;
 }
 
-export default function RecommendationView({ blockId, recId, position, total, onBack, onPrev, onNext, onChanged }) {
+export default function RecommendationView({
+  blockId, recId, refreshKey, position, total, onBack, onPrev, onNext, onChanged, onOpenFunding,
+}) {
   const [plan, setPlan] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [tab, setTab] = useState("plan");
@@ -88,7 +90,7 @@ export default function RecommendationView({ blockId, recId, position, total, on
       .then((p) => { if (live) setPlan(p); })
       .catch((e) => { if (live) setLoadError(e.message); });
     return () => { live = false; };
-  }, [blockId, recId]);
+  }, [blockId, recId, refreshKey]);
 
   // Arrow keys step through recommendations, unless the user is typing or panning the map.
   useEffect(() => {
@@ -151,7 +153,7 @@ export default function RecommendationView({ blockId, recId, position, total, on
               blockId={blockId}
               recId={recId}
               onSaved={(p) => { setPlan(p); onChanged?.(); }}
-              onFunding={onBack}
+              onFunding={onOpenFunding}
             />
           )}
 
@@ -174,8 +176,8 @@ export default function RecommendationView({ blockId, recId, position, total, on
               ) : (
                 <p className="assess">
                   No approved funding for this recommendation yet. Funding is analysed for the whole block at
-                  once: go back to the block, run the analysis, and approve the fits worth keeping.{" "}
-                  <button type="button" className="link" onClick={onBack}>Back to the block</button>
+                  once, then approved once for the block.{" "}
+                  <button type="button" className="link" onClick={onOpenFunding}>Open the block's funding review</button>
                 </p>
               )}
             </div>
