@@ -753,10 +753,10 @@ function profileCard(p, title) {
         <div class="kv">feasibility / 100</div>
       </div>
       <div class="kv">funding <b>${num(p.funding_score)}</b></div>
-      <div class="kv">zoning <b>${num(p.zoning_score)}</b> <span title="ZoningAgent is a scaffold — placeholder value">*</span></div>
+      <div class="kv">zoning <b>${num(p.zoning_score)}</b></div>
       <div class="kv">policy <b>${num(p.policy_score)}</b> <span title="PolicyAgent is a scaffold — placeholder value">*</span></div>
     </div>
-    <div class="kv" style="margin-top:.5rem">* zoning and policy are placeholder 50s until those agents are implemented.</div>
+    <div class="kv" style="margin-top:.5rem">* policy is a placeholder 50 until PolicyAgent is implemented. Zoning is checked against the county use tables; it falls back to 50 only when the narrative below says so.</div>
     ${actions ? `<ol class="actions">${actions}</ol>` : ""}
     ${p.narrative ? `<div class="narrative">${esc(p.narrative)}</div>` : ""}
   </div>`;

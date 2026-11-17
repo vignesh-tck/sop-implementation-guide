@@ -8,6 +8,11 @@
 > Everything in sections 1 and 3 was checked against the live Supabase instance on
 > Sep 29. Claims inherited from the previous handoff that I did **not** re-verify are
 > marked *(unverified)*.
+>
+> **Nov 17, 2026 — zoning is built.** Zoning statements in this file are updated, and section 10
+> describes the zoning lookup. The rest of the file is still the Sep 29 snapshot.
+> Implementation plans, pathway templates and the React app in `frontend/web/` came after it and
+> are not covered here.
 
 ---
 
@@ -168,7 +173,8 @@ Two things to assert, because both were bugs once:
 
 ```
 backend/
-  main.py                    FastAPI app; registers 3 routers
+  main.py                    FastAPI app; registers 6 routers (blocks, threads, discovery,
+                             plans, pathways, zoning)
   config.py                  pydantic-settings; scoring weights + thresholds live here
   api/
     discovery.py             Stage A — 3 generic endpoints (start / get stage / respond).
@@ -176,6 +182,7 @@ backend/
                              what it wants in its own `expects` field.
     blocks.py                Stage B — list / get / profile / analyze
     threads.py               Stage B — review / approve / gold
+    zoning.py                GET /blocks/{id}/zoning — zones, findings, zoning score
   agents/
     funding_discovery.py     Stage A graph. ALL PROMPTS AT TOP — edit those, not the nodes
     funding.py               Stage B graph. One LLM pass per block recommendation,
@@ -183,7 +190,9 @@ backend/
                              scores and approves per recommendation
     orchestrator.py          Fans out, scores, writes gold
     base.py                  SpecialistAgent ABC
-    zoning.py / policy.py    Scaffolds. Return not_implemented. Post-midterm.
+    zoning.py                ZoningAgent. Deterministic, no LLM and no graph: reads the
+                             stored zones, applies the use tables (tools/zoning.py)
+    policy.py                Scaffold. Returns not_implemented
     deps.py                  lru_cache'd orchestrator — one checkpointer app-wide
   tools/
     web_source.py            fetch() / search() / excerpt_is_genuine(). Plain httpx
@@ -191,6 +200,10 @@ backend/
     llm_extractor.py         structured_call() + assess_recommendation_fit()
     cdbg.py                  UNWIRED Sep 29. Deterministic HUD LMI income rule
     tract_eligibility.py     UNWIRED Sep 29. NMTC lookup against the ArcGIS layer
+    zoning_lookup.py         County GIS queries: zones, prior zones, cases, overlays per
+                             block. Called only by the sync script
+    zoning.py                Zoning findings: verdict per zone, narrative with numbered
+                             references, SME questions, block zoning score
   repositories/              All DB access. Agents never write SQL directly
   db/schema.sql              Re-runnable: every statement is IF NOT EXISTS
 frontend/dev-console/        Single-file HTML console. No build step
@@ -198,6 +211,8 @@ scripts/
   load_bowie_data.py         GeoJSON + CSV → blocks, block_recommendations
   sync_tract_eligibility.py  NMTC designations → tract_eligibility. Still works, but
                              nothing reads that table since Sep 29 (see section 6)
+  extract_use_table.py       Zoning Ordinance §27-5101 → backend/data/zoning_use_table.json
+  sync_block_zoning.py       County zoning GIS → zoning_signals (section 10)
   reset_and_reload.py        Wipe all 8 tables + reload. --confirm required
 ```
 
@@ -223,6 +238,7 @@ grep-verified before deletion:
   real validation, wire it into the API layer deliberately — don't restore these.
 - `backend/repositories/{policy,zoning}.py` — repos for the scaffold agents. **The agents
   themselves were kept** as post-midterm markers; only the never-imported repos went.
+  (A new `repositories/zoning.py` was written Nov 17 for the real zoning lookup.)
 - `scripts/clean_hand_typed_programs.py` — one-time migration, already run (its effect is
   visible in section 3: no hand-typed rows remain), and superseded by `reset_and_reload.py`.
 - `grants_gov.{fetch_opportunity,opportunity_url,parse_date,_to_number,SOURCE_NAME}` —
@@ -346,11 +362,14 @@ anywhere in the funding path.
 is no deterministic eligibility check behind it any more (see section 6), so the honest
 claim is "reasoned, reviewable matching", not "verified eligibility". Don't oversell it.
 
-**What cannot:** zoning and policy agents are scaffolds, so `zoning_score` and
-`policy_score` are hardcoded `50.0` placeholders in `orchestrator.compute_gold` (the dev
-console marks them with an asterisk). The gold layer is therefore 40% real and 60%
-placeholder by weight — be upfront about that rather than letting the feasibility number
-speak for itself.
+**What cannot (updated Nov 17):** the policy agent is still a scaffold, so `policy_score`
+is a hardcoded `50.0` in `orchestrator.compute_gold`. The dev console marks it with an
+asterisk. `zoning_score` is now computed (section 10). It falls back to `50.0` only for a
+block that has not been looked up or has nothing scorable, and the profile narrative says
+when that happens. By weight the gold layer is now 75% computed (funding 0.40 + zoning
+0.35) and 25% placeholder (policy 0.25). Even so, the zoning score barely varies: 63 of
+68 blocks score 100 because the town-center zones allow almost everything. The useful
+zoning signal is in the per-recommendation findings, not in the block number.
 
 **Before Wednesday, in order:**
 1. Run the tract sync (section 2). Without it the strongest part of Stage B is inert.
@@ -358,3 +377,47 @@ speak for itself.
    chose is that replacing the Grants.gov sync leaves **no non-interactive fallback** if a
    live session stumbles mid-demo.
 3. Do not edit files while a demo session is paused — `--reload` will destroy it.
+
+---
+
+## 10. Zoning lookup (added Nov 17, 2026)
+
+**What it answers:** for each land-use and parks recommendation, is the use allowed on this
+block — by right, by special exception, or prohibited — and what does that mean for the
+plan. Both halves are looked up, never inferred: the zone comes from the county GIS and the
+rule from the Zoning Ordinance. No LLM is involved, so the app labels it "Zoning lookup".
+
+**Data flow (sync-then-read, like NMTC):**
+1. `python -m scripts.extract_use_table` downloads §27-5101 from the county's code host
+   (enCodePlus) and writes `backend/data/zoning_use_table.json`, with links to each
+   use-specific standard. Re-run it when the Council amends the ordinance. It stops if a
+   column header changes.
+2. `python -m scripts.sync_block_zoning` queries the county GIS
+   (`Applications/ZoningCertificationLetter` on gisdata.pgplanning.org) for zones within
+   25 m of each block's centerline, plus prior zones, approved-plan case numbers and
+   overlays. It writes one `zoning_signals` row per (block, zone). All 68 blocks were synced
+   Nov 17. A failed lookup keeps the block's old rows; it never records "no zone".
+3. The plans API, `GET /blocks/{id}/zoning` and the gold layer read only the stored rows
+   plus the two data files. No county server is contacted at request time.
+
+**Judgement lives in one file:** `backend/data/zoning_rules.json`. It holds the zone names
+and the 2024 Bowie-Mitchellville SMA context (with PDF page references). It also holds the
+mapping from each SoP recommendation type to ordinance uses, which is our reading, shown on
+every finding. Low-confidence readings (plaza, gym, community center, post office…) become
+an SME question.
+
+**Findings explain, then ask.** Each finding is grouped as found → ordinance → what it means →
+how we read the recommendation → background → what we checked, followed by SME questions.
+Every sentence cites numbered references. Every plan step now carries a references list,
+including steps no source fills yet.
+
+**Known gaps:**
+- **LCD legacy zone (12 blocks):** the use tables don't apply (§27-4205(c)(3)). Findings name
+  the prior zone and the Basic Plan/CDP/SDP case numbers, and ask the SME.
+- **Development District Overlay (blocks 57–69):** found, and flagged for the SME.
+- **Accessory uses (§27-5201, outdoor dining):** not checked.
+- **Temporary uses (§27-5301, farmers markets):** not checked.
+- **Aviation Policy Area overlays:** not checked; no county layer for them.
+
+**Deploy note:** the server needs `backend/data/zoning_rules.json` and
+`backend/data/zoning_use_table.json`. Every plan request loads them.

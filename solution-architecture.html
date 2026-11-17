@@ -1234,7 +1234,7 @@
       <span class="meta-tag">Geography: Bowie, MD · 68 blocks / 1,506 recommendations</span>
       <span class="meta-tag">Domains: Funding · Zoning · Policy</span>
       <span class="meta-tag">Pattern: Discovery → Recommendation-Level Fit → Gold</span>
-      <span class="meta-tag">Version: 0.4 · Sep 2026</span>
+      <span class="meta-tag">Version: 0.5 · Nov 2026 (zoning built)</span>
     </div>
   </header>
 
@@ -1341,8 +1341,13 @@ flowchart TD
         G2[("block_implementation_profiles")]
     end
 
-    subgraph PLN["Planned (scaffolds, not wired)"]
-        Z1["ZoningAgent"]
+    subgraph ZON["Zoning lookup (deterministic, no LLM)"]
+        Z0["sync_block_zoning<br/>county zoning GIS"]
+        Z1[("zoning_signals")]
+        Z2["use tables §27-5101<br/>zoning_use_table.json"]
+    end
+
+    subgraph PLN["Planned (scaffold, not wired)"]
         P1["PolicyAgent"]
     end
 
@@ -1350,13 +1355,16 @@ flowchart TD
     A6 --> C1
     C4 --> G1
     G1 --> G2
-    Z1 -.->|"placeholder score"| G1
+    Z0 --> Z1
+    Z1 --> G1
+    Z2 --> G1
     P1 -.->|"placeholder score"| G1
 
     style SOP fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
     style STA fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
     style STB fill:#2A1F06,stroke:#DDA920,color:#EDD490
     style GLD fill:#1A1640,stroke:#8B82E8,color:#BDB8F4
+    style ZON fill:#0E1F2E,stroke:#5A88AD,color:#A8CCE4
     style PLN fill:#1F1F1F,stroke:#3D5E7A,color:#8FA8BF
       </div>
     </div>
@@ -1366,7 +1374,7 @@ flowchart TD
     </div>
 
     <div class="callout" style="background:var(--gold-dim);border-left-color:var(--gold)">
-      <strong>Honesty about the score:</strong> the feasibility score is currently <strong>~40% real, 60% placeholder</strong> by weight — funding is genuinely computed from reviewed signals, zoning and policy are hardcoded <code>50.0</code> until their agents are built. See <a href="#gold" style="color:inherit">Gold Layer</a> and <a href="#limitations" style="color:inherit">Limitations</a>.
+      <strong>Honesty about the score:</strong> the feasibility score is currently <strong>~75% computed, 25% placeholder</strong> by weight. Funding is computed from reviewed signals. Zoning is computed from the county zoning map and the ordinance's use tables. Policy is a hardcoded <code>50.0</code> until its agent is built. The zoning sub-score barely varies, though: 63 of 68 blocks score 100 because the town-center zones allow almost everything, so the useful zoning signal is in the per-recommendation findings. See <a href="#gold" style="color:inherit">Gold Layer</a> and <a href="#limitations" style="color:inherit">Limitations</a>.
     </div>
   </section>
 
@@ -1376,7 +1384,7 @@ flowchart TD
   <section class="section" id="sources">
     <div class="section-label">03 · Data Sources &amp; Domain Data Model</div>
     <h2 class="section-title">Source Data Classification: Static Ingestion vs. Dynamic Discovery</h2>
-    <p class="section-body">SoP's own block data is loaded once, up front, by a script — it never goes through an agent. Funding data is the opposite: nothing is pre-loaded, and every programme in the catalogue was found, read and verified during a live session. Zoning and policy sources are named here as the intended targets for the scaffold agents, not as anything currently ingested.</p>
+    <p class="section-body">SoP's own block data is loaded once, up front, by a script — it never goes through an agent. Funding data is the opposite: nothing is pre-loaded, and every programme in the catalogue was found, read and verified during a live session. Zoning data is synced by a script from the county's own GIS and Zoning Ordinance, so it is read, never inferred. Policy sources are named here as the intended targets for the scaffold agent, not as anything currently ingested.</p>
 
     <div class="source-grid">
       <div class="source-item">
@@ -1400,14 +1408,14 @@ flowchart TD
         <div class="source-desc">Anthropic's native <code>web_search</code> tool, used in the <code>research</code> stage to surface additional official sources the planner didn't paste. Reported honestly as unavailable if the configured model doesn't support it.</div>
       </div>
       <div class="source-item">
-        <div class="source-bucket zoning">Zoning · planned, not ingested</div>
-        <div class="source-name">PG County Parcel GIS · Maryland iMAP</div>
-        <div class="source-desc">Named as <code>ZoningAgent</code>'s target sources in code comments. No connector exists yet — <code>zoning.py</code> is a scaffold that returns <code>not_implemented</code>.</div>
+        <div class="source-bucket zoning">Zoning · synced by script</div>
+        <div class="source-name">PG County zoning GIS · Zoning Ordinance §27-5101 · 2024 Bowie-Mitchellville SMA</div>
+        <div class="source-desc"><code>sync_block_zoning.py</code> stores each block's zones, prior zones, approved-plan case numbers and overlays in <code>zoning_signals</code>. The data comes from the county layers behind its zoning certification letters. <code>extract_use_table.py</code> pulls the official use tables from the county code host (enCodePlus). The 2024 SMA supplies the reasons for the rezoning, cited by PDF page.</div>
       </div>
       <div class="source-item">
         <div class="source-bucket policy">Policy · planned, not ingested</div>
         <div class="source-name">PG County Master Plan · local ordinances</div>
-        <div class="source-desc">Named as <code>PolicyAgent</code>'s target sources. Same scaffold status as zoning — no PDF parsing or extraction pipeline exists for this bucket yet.</div>
+        <div class="source-desc">Named as <code>PolicyAgent</code>'s target sources. Unlike zoning, no connector or extraction pipeline exists for this bucket yet.</div>
       </div>
     </div>
 
@@ -1422,7 +1430,7 @@ flowchart TD
   <section class="section" id="pattern">
     <div class="section-label">04 · Domain Specialist Pattern</div>
     <h2 class="section-title">The Two-Phase Specialist Pattern</h2>
-    <p class="section-body">Analysis in this system is organized by domain — Funding, Zoning, and Policy each answer a different question about a block's recommendations, but all three are architected to follow the same two-phase pattern. Funding is the domain currently built end-to-end; Zoning and Policy are defined against the identical pattern and share its data-model shape, but their logic has not been implemented. This section describes the pattern generically; <a href="#discovery" style="color:inherit">Sections 05–06</a> present Funding as its reference implementation.</p>
+    <p class="section-body">Analysis in this system is organized by domain — Funding, Zoning, and Policy each answer a different question about a block's recommendations, but all three are architected to follow the same two-phase pattern. Funding is built end-to-end on this pattern. Zoning is built, but it deliberately departs from the pattern, as the note below the table explains. Policy is defined against the pattern but not yet implemented. This section describes the pattern generically; <a href="#discovery" style="color:inherit">Sections 05–06</a> present Funding as its reference implementation.</p>
 
     <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:24px 0 12px;letter-spacing:-.01em">Phase 1 — Discovery (block-agnostic)</h3>
     <p class="section-body">An interactive session that builds a domain catalogue from external sources: a source is fetched, the agent asks what it cannot determine from the text, reports honestly what the source actually contains, extracts structured items with verbatim excerpts checked against the source, and confirms each item's geographic reach. A human confirms every stage before anything is persisted. The output is a domain catalogue table, independent of any specific block.</p>
@@ -1444,10 +1452,10 @@ flowchart TD
           </tr>
           <tr>
             <td><span style="color:var(--silver);font-weight:600">Zoning</span></td>
-            <td style="color:var(--text-muted)">PG County Parcel GIS, Maryland iMAP</td>
-            <td style="color:var(--text-faint)">not yet defined</td>
-            <td><code>zoning_signals</code> <span style="color:var(--text-faint)">(schema exists, unused)</span></td>
-            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ scaffold — contract only</span></td>
+            <td style="color:var(--text-muted)">PG County zoning GIS; Zoning Ordinance use tables (§27-5101)</td>
+            <td><code>zoning_use_table.json</code> <span style="color:var(--text-faint)">(extracted, not an LLM catalogue)</span></td>
+            <td><code>zoning_signals</code> <span style="color:var(--text-faint)">(one row per block × zone)</span></td>
+            <td><span class="decision-status status-locked">✓ built — deterministic lookup</span></td>
           </tr>
           <tr>
             <td><span style="color:#A78BFA;font-weight:600">Policy</span></td>
@@ -1461,7 +1469,7 @@ flowchart TD
     </div>
 
     <div class="callout">
-      <strong>Why this matters architecturally:</strong> building Zoning or Policy to completion means implementing the same two LangGraph phases already proven by Funding — a discovery graph over a new source type, and a fit-analysis graph over a new catalogue — not designing a new pattern. The risk in delivering them is domain-specific extraction quality (parcel GIS and plan PDFs are harder to parse than funding notices), not architectural novelty.
+      <strong>What building Zoning showed:</strong> the two-phase LLM pattern fits when the answer has to be judged, not when it is written down. A zone is on the county map and its permitted uses are in an ordinance table, so the zoning version is deterministic. Phase 1 becomes an extraction script and a GIS sync, and Phase 2 becomes a table lookup that cites its sources ("determine, don't infer"). Human review moves into each recommendation's implementation plan, where the SME answers only what the sources cannot settle: legacy LCD zones, overlays and loose recommendation-to-use readings. Policy, which needs plan documents read and judged, is where the LLM pattern applies next.
     </div>
   </section>
 
@@ -1690,14 +1698,14 @@ flowchart TD
       <span class="score-op">=</span>
       <div class="score-term"><span class="score-value">0.40 ×</span><span class="score-label">funding score</span></div>
       <span class="score-op">+</span>
-      <div class="score-term"><span class="score-value">0.35 ×</span><span class="score-label">zoning score*</span></div>
+      <div class="score-term"><span class="score-value">0.35 ×</span><span class="score-label">zoning score</span></div>
       <span class="score-op">+</span>
       <div class="score-term"><span class="score-value">0.25 ×</span><span class="score-label">policy score*</span></div>
     </div>
-    <p class="section-body" style="margin-top:-16px;font-size:0.8rem">* zoning and policy are a hardcoded <code>50.0</code> today — <code>ZoningAgent</code> and <code>PolicyAgent</code> are scaffolds. See <a href="#limitations" style="color:inherit">Limitations</a>.</p>
+    <p class="section-body" style="margin-top:-16px;font-size:0.8rem">* policy is a hardcoded <code>50.0</code> today, because <code>PolicyAgent</code> is a scaffold. Zoning scores each "Increase" recommendation by its best fronting zone: by right 100, special exception 50, prohibited 0. Legacy and unresolved zones are left out, not scored as prohibited. It falls back to <code>50.0</code> only when a block has nothing scorable. See <a href="#limitations" style="color:inherit">Limitations</a>.</p>
 
     <div class="callout" style="background:var(--gold-dim);border-left-color:var(--gold)">
-      <strong>The gold layer is ~40% real, 60% placeholder by weight.</strong> Funding is a genuinely computed score over reviewer-approved signals. Zoning and policy contribute their configured weight against a constant. The dev console marks the placeholder sub-scores with an asterisk — the honest claim is "reasoned, reviewable funding matching," not "a fully-scored feasibility index."
+      <strong>The gold layer is ~75% computed, 25% placeholder by weight.</strong> Funding is computed over reviewer-approved signals, and zoning over the use tables. Policy contributes its weight against a constant, and the dev console marks it with an asterisk. The zoning sub-score is 100 on 63 of 68 blocks, so it adds little to ranking blocks against each other. The honest claim is "reasoned funding matching plus cited zoning checks", not "a fully-scored feasibility index."
     </div>
 
     <h3 style="font-family:'Sora',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text);margin:28px 0 12px;letter-spacing:-.01em">Funding sub-score: tiered, not summed</h3>
@@ -1732,10 +1740,10 @@ score = <span class="c-fn">min</span>(
               <tbody>
                 <tr><td class="field-name"><code>block_id</code></td><td>bigint</td><td>Unique — one profile per block</td></tr>
                 <tr><td class="field-name"><code>feasibility_score</code></td><td>numeric 0–100</td><td>Weighted composite</td></tr>
-                <tr><td class="field-name"><code>funding_score / zoning_score / policy_score</code></td><td>numeric</td><td>Only <code>funding_score</code> is computed from real signals today</td></tr>
+                <tr><td class="field-name"><code>funding_score / zoning_score / policy_score</code></td><td>numeric</td><td><code>funding_score</code> and <code>zoning_score</code> are computed; <code>policy_score</code> is a placeholder</td></tr>
                 <tr><td class="field-name"><code>top_actions</code></td><td>jsonb</td><td>Ranked action strings, e.g. "Apply for &lt;programme&gt; to fund &lt;rec_label&gt; — deadline &lt;date&gt;"</td></tr>
                 <tr><td class="field-name"><code>narrative</code></td><td>text</td><td><strong>Deterministic Python string template</strong> (<code>_build_narrative()</code>) — not LLM-generated. Named top opportunity, covered recommendations, nearest deadline, sub-score.</td></tr>
-                <tr><td class="field-name"><code>funding_signal_ids / zoning_signal_ids / policy_signal_ids</code></td><td>jsonb</td><td>Zoning/policy arrays are always empty today</td></tr>
+                <tr><td class="field-name"><code>funding_signal_ids / zoning_signal_ids / policy_signal_ids</code></td><td>jsonb</td><td>Policy array is always empty today; zoning lists the block's <code>zoning_signals</code> rows</td></tr>
                 <tr><td class="field-name"><code>thread_id</code></td><td>text</td><td>The Stage B thread that produced this profile</td></tr>
               </tbody>
             </table>
@@ -1845,7 +1853,7 @@ score = <span class="c-fn">min</span>(
   <section class="section" id="agents">
     <div class="section-label">10 · Agent Orchestration Architecture</div>
     <h2 class="section-title">Agent Orchestration Architecture (LangGraph)</h2>
-    <p class="section-body">The framework choice hasn't changed — LangGraph's <code>interrupt()</code> and checkpointing are exactly what a human-approves-everything design needs. What changed is the topology: instead of fanning out to three parallel specialists, there are two independent graphs (Stage A and Stage B) and a thin coordinator, plus two scaffold agents that satisfy the same interface but don't run.</p>
+    <p class="section-body">The framework choice hasn't changed — LangGraph's <code>interrupt()</code> and checkpointing are exactly what a human-approves-everything design needs. What changed is the topology: instead of fanning out to three parallel specialists, there are two independent graphs (Stage A and Stage B) and a thin coordinator, plus <code>ZoningAgent</code>, which satisfies the same interface without a graph (it is a deterministic lookup), and one scaffold agent, <code>PolicyAgent</code>, that does not run yet.</p>
 
     <div class="framework-compare">
       <div class="framework-card recommended">
@@ -1911,13 +1919,19 @@ flowchart TD
     F4 --> O3
     O3 --> GP[("block_implementation_profiles")]
 
-    subgraph PLN["ZoningAgent / PolicyAgent (scaffolds, not invoked)"]
-        Z["returns not_implemented"]
+    subgraph ZN["ZoningAgent (no graph, no LLM)"]
+        Z["zoning_signals + use tables<br/>→ findings + zoning score"]
+    end
+    Z --> O3
+
+    subgraph PLN["PolicyAgent (scaffold, not invoked)"]
+        PZ["returns not_implemented"]
     end
 
     style FDA fill:#0E2A28,stroke:#20C5B5,color:#A0D8D4
     style FA  fill:#2A1F06,stroke:#DDA920,color:#EDD490
     style ORC fill:#0E1F2E,stroke:#7AAED4,color:#A8CCE4
+    style ZN  fill:#0E1F2E,stroke:#5A88AD,color:#A8CCE4
     style PLN fill:#1F1F1F,stroke:#3D5E7A,color:#8FA8BF
       </div>
     </div>
@@ -1961,14 +1975,15 @@ flowchart TD
         </ul>
         <div class="interrupt-label">⏸ 4 interrupts — deliberately not a SpecialistAgent</div>
       </div>
-      <div class="agent-card scaffold">
-        <div class="agent-role">Scaffold</div>
+      <div class="agent-card zoning">
+        <div class="agent-role">Deterministic · Block-scoped</div>
         <div class="agent-name">ZoningAgent</div>
         <ul class="tool-list">
-          <li class="tool-item">build_graph() → NotImplementedError</li>
-          <li class="tool-item">run() → {"status": "not_implemented"}</li>
+          <li class="tool-item">assess_block() — zones + use tables</li>
+          <li class="tool-item">score_block() — for compute_gold</li>
+          <li class="tool-item">build_graph() → None (no LLM)</li>
         </ul>
-        <div class="interrupt-label" style="color:var(--text-faint);background:var(--tag-bg);border-color:var(--border)">▸ satisfies SpecialistAgent, never invoked</div>
+        <div class="interrupt-label" style="color:var(--silver);background:var(--tag-bg);border-color:var(--border)">▸ reviewed in the implementation plan</div>
       </div>
       <div class="agent-card scaffold">
         <div class="agent-role">Scaffold</div>
@@ -2115,19 +2130,23 @@ flowchart TD
 │   ├── <span class="tree-file">orchestrator.py</span>  <span class="tree-owner">thin coordinator — fan-out, score, gold</span>
 │   ├── <span class="tree-file">funding_discovery.py</span> <span class="tree-owner">Stage A — ALL PROMPTS AT TOP</span>
 │   ├── <span class="tree-file">funding.py</span>       <span class="tree-owner">Stage B — SpecialistAgent</span>
-│   ├── <span class="tree-file">zoning.py / policy.py</span> <span class="tree-note">scaffolds — return not_implemented</span>
+│   ├── <span class="tree-file">zoning.py</span>        <span class="tree-owner">ZoningAgent — deterministic, no graph</span>
+│   ├── <span class="tree-file">policy.py</span>        <span class="tree-note">scaffold — returns not_implemented</span>
 │   └── <span class="tree-file">deps.py</span>          <span class="tree-shared">lru_cache singletons</span>
 ├── <span class="tree-dir">tools/</span>
 │   ├── <span class="tree-file">web_source.py</span>    <span class="tree-owner">fetch() / search() / excerpt_is_genuine()</span>
 │   ├── <span class="tree-file">grants_gov.py</span>    <span class="tree-note">protocol adapter only — no keywords, no ranking</span>
 │   ├── <span class="tree-file">llm_extractor.py</span> <span class="tree-owner">structured_call() + assess_recommendation_fit()</span>
 │   ├── <span class="tree-file">cdbg.py</span>          <span class="tree-note">UNWIRED Sep 29 — still on disk</span>
-│   └── <span class="tree-file">tract_eligibility.py</span> <span class="tree-note">UNWIRED Sep 29 — still on disk</span>
+│   ├── <span class="tree-file">tract_eligibility.py</span> <span class="tree-note">UNWIRED Sep 29 — still on disk</span>
+│   ├── <span class="tree-file">zoning_lookup.py</span> <span class="tree-owner">county GIS queries — sync script only</span>
+│   └── <span class="tree-file">zoning.py</span>        <span class="tree-owner">findings, references, SME questions, score</span>
 ├── <span class="tree-dir">repositories/</span>        <span class="tree-shared">all DB access — agents never write SQL</span>
 ├── <span class="tree-dir">api/</span>
 │   ├── <span class="tree-file">discovery.py</span>     <span class="tree-note">Stage A — 3 generic endpoints, body untyped by design</span>
 │   ├── <span class="tree-file">blocks.py</span>        <span class="tree-note">Stage B — list / get / profile / analyze</span>
-│   └── <span class="tree-file">threads.py</span>       <span class="tree-note">Stage B — review / approve / gold</span>
+│   ├── <span class="tree-file">threads.py</span>       <span class="tree-note">Stage B — review / approve / gold</span>
+│   └── <span class="tree-file">zoning.py</span>        <span class="tree-note">GET /blocks/{id}/zoning</span>
 └── <span class="tree-dir">db/</span>
     └── <span class="tree-file">schema.sql</span>       <span class="tree-shared">re-runnable — every statement guarded</span>
 
@@ -2135,6 +2154,8 @@ flowchart TD
 <span class="tree-dir">scripts/</span>
 ├── <span class="tree-file">load_bowie_data.py</span>   <span class="tree-note">GeoJSON + CSV → blocks, block_recommendations</span>
 ├── <span class="tree-file">sync_tract_eligibility.py</span> <span class="tree-note">still works, but nothing reads the table it fills</span>
+├── <span class="tree-file">extract_use_table.py</span> <span class="tree-note">§27-5101 → backend/data/zoning_use_table.json</span>
+├── <span class="tree-file">sync_block_zoning.py</span> <span class="tree-note">county zoning GIS → zoning_signals</span>
 └── <span class="tree-file">reset_and_reload.py</span>  <span class="tree-note">wipe + reload, --confirm required</span>
     </div>
 
@@ -2166,8 +2187,8 @@ flowchart TD
         <div class="pattern-desc"><code>MemorySaver</code> on both agents. A server restart loses any paused session — Stage A has no recovery path at all.</div>
       </div>
       <div class="pattern-card gap">
-        <div class="pattern-name">Zoning / policy are placeholders</div>
-        <div class="pattern-desc">Constant <code>50.0</code>, not a score. 60% of the feasibility weight rides on two agents that have never run.</div>
+        <div class="pattern-name">Policy is a placeholder; zoning has gaps</div>
+        <div class="pattern-desc">Policy is a constant <code>50.0</code> carrying 25% of the feasibility weight. Zoning doesn't check accessory uses (§27-5201) or temporary uses (§27-5301). It also doesn't check airport overlays, because no county layer exists for them, and it can't resolve LCD legacy zones without the SME.</div>
       </div>
       <div class="pattern-card gap">
         <div class="pattern-name">Deterministic eligibility unwired</div>
@@ -2214,7 +2235,7 @@ flowchart TD
       </div>
       <div class="open-q">
         <div class="open-q-num">→</div>
-        <div class="open-q-text">Build <code>ZoningAgent</code> against a second city's real GIS source to prove the <code>SpecialistAgent</code> contract actually generalizes, rather than assuming it does from Funding alone.</div>
+        <div class="open-q-text">Point <code>ZoningAgent</code> at a second city's zoning GIS and use table to test portability. The county-specific parts are the layer URLs, the use-table extractor and <code>zoning_rules.json</code>; the finding and scoring logic is generic.</div>
       </div>
     </div>
   </section>
@@ -2325,9 +2346,9 @@ flowchart TD
           <tr>
             <td class="decision-area">ADR-014<br>Feasibility weights</td>
             <td><span class="decision-choice">0.40 funding / 0.35 zoning / 0.25 policy</span></td>
-            <td class="decision-rationale">Config-driven in <code>config.py</code>, not hardcoded. Zoning and policy currently multiply a constant <code>50.0</code>, not a computed score — see Limitations.</td>
+            <td class="decision-rationale">Config-driven in <code>config.py</code>, not hardcoded. Policy still multiplies a constant <code>50.0</code>; zoning is computed (points per outcome are also in <code>config.py</code>). See Limitations.</td>
             <td class="decision-cost cost-free">—</td>
-            <td><span class="decision-status status-open">~ 40% real, 60% placeholder</span></td>
+            <td><span class="decision-status status-open">~ 75% computed, 25% placeholder</span></td>
           </tr>
           <tr>
             <td class="decision-area">ADR-015<br>Funding sub-score formula</td>
@@ -2356,7 +2377,7 @@ flowchart TD
       </div>
       <div class="open-q">
         <div class="open-q-num">Q4</div>
-        <div class="open-q-text"><strong>Build order for Zoning/Policy:</strong> implement them against Bowie's own PG County GIS and Master Plan first (deepens the existing city), or hold off and prove portability against a second city first (widens it)? These pull in different directions and haven't been decided.</div>
+        <div class="open-q-text"><strong>Build order for Zoning/Policy:</strong> decided for zoning. It was built against Bowie's own PG County GIS and Zoning Ordinance, deepening the existing city first. Still open for policy: the 2022 Bowie-Mitchellville and Vicinity Master Plan, or a second city?</div>
       </div>
     </div>
   </section>
@@ -2429,14 +2450,14 @@ flowchart TD
           <tr>
             <td>Phase 1 — Discovery</td>
             <td><span style="color:var(--silver)">Zoning</span></td>
-            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ not started</span></td>
-            <td style="color:var(--text-muted)">No connector or extraction logic exists</td>
+            <td><span class="decision-status status-locked">✓ implemented (scripted)</span></td>
+            <td style="color:var(--text-muted)">Use tables extracted from §27-5101; all 68 blocks synced from the county zoning GIS</td>
           </tr>
           <tr>
             <td>Phase 2 — Fit Analysis</td>
             <td><span style="color:var(--silver)">Zoning</span></td>
-            <td><span class="decision-status" style="background:var(--tag-bg);color:var(--text-faint);border:1px solid var(--border)">▸ scaffold only</span></td>
-            <td style="color:var(--text-muted)"><code>ZoningAgent</code> satisfies <code>SpecialistAgent</code>, returns <code>not_implemented</code></td>
+            <td><span class="decision-status status-locked">✓ implemented (deterministic)</span></td>
+            <td style="color:var(--text-muted)">A cited finding per recommendation on each plan's zoning steps; SME questions only for what the sources can't settle</td>
           </tr>
           <tr>
             <td>Phase 1 — Discovery</td>
@@ -2454,7 +2475,7 @@ flowchart TD
             <td>Gold composite score</td>
             <td>All domains</td>
             <td><span class="decision-status status-open">~ partial</span></td>
-            <td style="color:var(--text-muted)">Funding sub-score is computed; zoning/policy sub-scores are a constant 50.0</td>
+            <td style="color:var(--text-muted)">Funding and zoning sub-scores are computed; policy is a constant 50.0</td>
           </tr>
           <tr>
             <td>Presentation layer</td>
@@ -2508,7 +2529,7 @@ flowchart TD
       </div>
       <div class="demo-checklist-item">
         <span class="check-icon">⚠️</span>
-        <span class="check-text"><strong>The feasibility score is approximately 40% real.</strong> Funding is genuinely computed; zoning and policy are a hardcoded 50.0 until those agents are implemented. This should be stated explicitly in any presentation of the composite score.</span>
+        <span class="check-text"><strong>The feasibility score is about 75% computed.</strong> Funding and zoning are computed; policy is a hardcoded 50.0 until its agent is built. State this in any presentation of the composite score. Also say that the zoning sub-score is 100 on most blocks, so the per-recommendation zoning findings carry the real information.</span>
         <span class="check-badge" style="background:rgba(224,92,92,.1);color:#E05C5C;border:1px solid rgba(224,92,92,.25)">Section 07</span>
       </div>
       <div class="demo-checklist-item">
