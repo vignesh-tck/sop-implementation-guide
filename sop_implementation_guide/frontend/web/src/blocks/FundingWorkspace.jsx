@@ -1,17 +1,18 @@
 import { Fragment, useState } from "react";
-import { money } from "../api.js";
+import { deadlineLabel, money, num, scoreColour } from "../api.js";
 import { rankRecs } from "./AllRecommendations.jsx";
-import { FundingList } from "./PlanView.jsx";
 import ProfileCard from "./ProfileCard.jsx";
-import { FitRow } from "./ReviewTable.jsx";
 import { fitKey } from "./useBlockFunding.js";
 
 // The block's funding review, shown in place of the map. Three steps: analyze
 // proposes programs for every recommendation, the reviewer checks them and
 // approves once for the block, then gold rolls the result into the block's
-// feasibility profile. One row per recommendation shows its strongest match;
-// opening a row shows every program assessed for it, where individual matches
-// can be kept, dropped or rescored before approving.
+// feasibility profile.
+//
+// Simple by default, detail on request: a row is one line per recommendation;
+// opening it lists the proposed programs with a keep box each; a program's
+// fit score, reasoning and source sit behind its own "Details". Nothing the
+// reviewer may need is gone, it is only further in.
 
 function amountOf(f) {
   if (!f) return "—";
@@ -69,38 +70,105 @@ function StepChips({ phase, gold }) {
   return <div className="step-chips">{chip("analyze", "1 · Analyze")}{chip("approve", "2 · Approve")}{chip("gold", "3 · Compute gold")}</div>;
 }
 
-// Every program assessed for one recommendation, while it can still be changed.
-function FitPicker({ row, onEdit }) {
-  const [showWeak, setShowWeak] = useState(false);
-  const strong = row.fits.filter((x) => x.e.approved || (x.e.fit_score ?? 0) >= row.floor);
-  const shown = showWeak ? row.fits : strong;
-  const weak = row.fits.length - strong.length;
+// One program proposed for one recommendation. Editable while the review is
+// open (keep box, fit score); read-only once approved.
+function Match({ f, e, editable, floor, onEdit }) {
+  const [open, setOpen] = useState(false);
+  const dl = deadlineLabel(f.deadline);
+  const score = e.fit_score;
   return (
-    <div className="fit-picker">
-      {row.fits.length === 0 ? (
-        <p className="assess">No programs were assessed for this recommendation.</p>
-      ) : (
-        <table>
-          <thead><tr><th>Keep</th><th>Fit</th><th>Program / why it fits / source</th><th>Deadline</th><th>Award</th></tr></thead>
-          <tbody>
-            {shown.map(({ f, e }) => (
-              <FitRow key={f.program_name} recId={row.rec.rec_id} f={f} edit={{ ...e, floor: row.floor }}
-                onChange={(p) => onEdit(fitKey(row.rec.rec_id, f.program_name), p)} />
-            ))}
-          </tbody>
-        </table>
+    <li className={"match" + (editable && !e.approved ? " dropped" : "")}>
+      <div className="match-main">
+        {editable && (
+          <input type="checkbox" checked={!!e.approved} aria-label={`Keep ${f.program_name}`}
+            onChange={(ev) => onEdit({ approved: ev.target.checked })} />
+        )}
+        <span className="match-name">
+          {f.program_name}
+          {f.assessment_failed && <span className="warn-text" title="Not assessed by the model; 0.50 is a placeholder"> ⚠</span>}
+        </span>
+        <span className="assess match-facts">
+          {amountOf(f)}{f.deadline && <> · <span className={"deadline" + (dl.soon ? " soon" : "")}>due {dl.text}</span></>}
+        </span>
+        <button type="button" className="link small" onClick={() => setOpen((o) => !o)}>{open ? "Hide" : "Details"}</button>
+      </div>
+      {open && (
+        <div className="match-detail">
+          <div>
+            Fit{" "}
+            {editable ? (
+              <input type="number" className={"score-edit" + (e.edited ? " edited" : "")} min="0" max="1" step="0.05"
+                value={score == null ? "" : score}
+                style={{ color: e.edited ? "var(--amber)" : scoreColour(score) }}
+                onChange={(ev) => {
+                  const raw = ev.target.value;
+                  // Rescoring a program keeps it: dropping an edited row by accident was the easy mistake.
+                  onEdit({ fit_score: raw === "" ? null : parseFloat(raw), edited: true, approved: true });
+                }} />
+            ) : (
+              <b style={{ color: scoreColour(score) }}>{num(score, 2)}</b>
+            )}
+            {editable && <span className="assess"> · model proposed {num(f.fit_score, 2)}, keep threshold {floor}</span>}
+          </div>
+          {f.narrative && <p>{f.narrative}</p>}
+          {f.recommended_action && <p className="assess">Next action: {f.recommended_action}</p>}
+          <div className="assess">
+            Source:{" "}
+            {f.source_url ? <a href={f.source_url} target="_blank" rel="noopener noreferrer">{f.source_name || "link"} ↗</a> : f.source_name || "none recorded"}
+            {f.is_extracted && ` · extracted${f.extraction_confidence != null ? ` (confidence ${num(f.extraction_confidence, 2)})` : ""}`}
+            {f.application_url && <> · <a href={f.application_url} target="_blank" rel="noopener noreferrer">apply ↗</a></>}
+          </div>
+        </div>
       )}
-      {weak > 0 && (
-        <button type="button" className="link" onClick={() => setShowWeak((v) => !v)}>
-          {showWeak ? "Hide weaker matches" : `Show ${weak} weaker match${weak > 1 ? "es" : ""} (below ${row.floor})`}
+    </li>
+  );
+}
+
+// The programs behind one row. While reviewing: the ones above the threshold or
+// kept, with the weaker ones one click further. After approval: what was kept.
+function MatchList({ row, editable, onEdit }) {
+  const [showWeak, setShowWeak] = useState(false);
+  const main = editable ? row.fits.filter((x) => x.e.approved || (x.e.fit_score ?? 0) >= row.floor) : row.kept;
+  const weak = editable ? row.fits.filter((x) => !main.includes(x)) : [];
+  const shown = showWeak ? [...main, ...weak] : main;
+  if (!row.fits.length) return <p className="assess">No programs were assessed for this recommendation.</p>;
+  return (
+    <>
+      {shown.length ? (
+        <ul className="matches">
+          {shown.map(({ f, e }) => (
+            <Match key={f.program_name} f={f} e={e} editable={editable} floor={row.floor}
+              onEdit={(p) => onEdit(fitKey(row.rec.rec_id, f.program_name), p)} />
+          ))}
+        </ul>
+      ) : (
+        <p className="assess">{editable ? `No program scored above ${row.floor}.` : "No funding approved for this recommendation."}</p>
+      )}
+      {weak.length > 0 && (
+        <button type="button" className="link small" onClick={() => setShowWeak((v) => !v)}>
+          {showWeak ? "Hide weaker matches" : `Show ${weak.length} weaker match${weak.length > 1 ? "es" : ""}`}
         </button>
       )}
+    </>
+  );
+}
+
+// The gold result in one line; the full profile on request.
+function GoldSummary({ profile, title }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="gold-line">
+      <span>{title}: feasibility <b>{num(profile.feasibility_score)}</b> / 100 · funding {num(profile.funding_score)} ·
+        zoning {num(profile.zoning_score)}</span>{" "}
+      <button type="button" className="link small" onClick={() => setOpen((o) => !o)}>{open ? "Hide profile" : "Show profile"}</button>
+      {open && <ProfileCard profile={profile} title="Block implementation profile" />}
     </div>
   );
 }
 
 export default function FundingWorkspace({ block, s, actions, onClose }) {
   const [openRow, setOpenRow] = useState(null);
+  const [noteOpen, setNoteOpen] = useState(false);
   const phase = phaseOf(s);
   const rows = buildRows(s, phase);
   const id = block.id;
@@ -173,7 +241,7 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
           </div>
         ) : (
           <div className="banner warn">
-            Check the proposed source on each recommendation (open a row to change it), then approve once for the whole block.
+            Check the proposed source on each recommendation, then approve once for the whole block. Open a row to change what is kept.
           </div>
         )
       )}
@@ -203,7 +271,6 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
               const [label, cls] = STATUS[phase](r);
               const down = r.rec.direction === "Decrease";
               const isOpen = openRow === r.rec.rec_id;
-              const more = r.kept.length - 1;
               return (
                 <Fragment key={r.rec.rec_id}>
                   <tr className={canOpen ? "openable" + (isOpen ? " open" : "") : ""}
@@ -213,10 +280,7 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
                       <span className={"pill " + (down ? "no" : "yes")}>{down ? "reduce" : "increase"}</span>{" "}
                       <b>{r.rec.rec_label}</b>
                     </td>
-                    <td>
-                      {r.top ? r.top.program_name : <span className="assess">—</span>}
-                      {more > 0 && <span className="assess"> +{more} more</span>}
-                    </td>
+                    <td>{r.top ? r.top.program_name : <span className="assess">—</span>}</td>
                     <td className="nowrap">{r.top ? amountOf(r.top) : <span className="assess">—</span>}</td>
                     <td className="nowrap">
                       <span className={"status-chip " + cls}>{label}</span>
@@ -227,13 +291,7 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
                     <tr className="fw-detail">
                       <td />
                       <td colSpan={4}>
-                        {phase === "review" ? (
-                          <FitPicker row={r} onEdit={(key, p) => actions.setEdit(id, key, p)} />
-                        ) : r.kept.length ? (
-                          <FundingList funding={r.kept.map((x) => x.f)} withNarrative />
-                        ) : (
-                          <p className="assess">No funding approved for this recommendation.</p>
-                        )}
+                        <MatchList row={r} editable={phase === "review"} onEdit={(key, p) => actions.setEdit(id, key, p)} />
                       </td>
                     </tr>
                   )}
@@ -247,17 +305,17 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
         </table>
       </div>
 
-      {phase === "review" && (
+      {phase === "review" && (noteOpen || s.feedback ? (
         <label className="fw-note">
-          Optional note recorded with every match you keep
+          Note recorded with every match you keep
           <textarea rows={2} placeholder="approved" value={s.feedback} onChange={(e) => actions.setFeedback(id, e.target.value)} />
         </label>
-      )}
+      ) : (
+        <button type="button" className="link small fw-note-link" onClick={() => setNoteOpen(true)}>+ Add a note to this approval</button>
+      ))}
 
-      {s.goldProfile && <ProfileCard profile={s.goldProfile} title="Gold layer — block implementation profile" />}
-      {!s.goldProfile && phase === "earlier" && s.profile && (
-        <ProfileCard profile={s.profile} title="Block implementation profile (from an earlier run)" />
-      )}
+      {s.goldProfile && <GoldSummary profile={s.goldProfile} title="Gold computed" />}
+      {!s.goldProfile && phase === "earlier" && s.profile && <GoldSummary profile={s.profile} title="Earlier profile" />}
     </div>
   );
 }

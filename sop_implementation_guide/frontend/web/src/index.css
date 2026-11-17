@@ -668,7 +668,20 @@ table.facts .cases { word-break: break-word; margin-bottom: .2rem; }
 .fw-table tr.open td { background: color-mix(in srgb, var(--orange) 5%, transparent); }
 .fw-table .chev { margin-left: .4rem; }
 .fw-table tr.fw-detail > td { background: var(--bg); padding: .5rem .75rem .75rem; }
-.fit-picker table td { vertical-align: top; }
-.fit-picker > .link { margin-top: .4rem; font-size: .8rem; }
+button.link.small { font-size: .8rem; }
+.warn-text { color: var(--amber); }
+.matches { list-style: none; margin: 0 0 .3rem; padding: 0; }
+.match { padding: .35rem 0; border-bottom: 1px dashed var(--border); }
+.match:last-child { border-bottom: none; }
+.match.dropped .match-name { color: var(--muted); text-decoration: line-through; }
+.match-main { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.match-main input[type=checkbox] { accent-color: var(--orange); width: 15px; height: 15px; align-self: center; }
+.match-name { font-weight: 600; }
+.match-facts { flex: 1; min-width: 8rem; }
+.match-detail { margin: .35rem 0 .2rem 1.5rem; padding-left: .6rem; border-left: 2px solid var(--border); font-size: .84rem; }
+.match-detail p { margin: .3rem 0; line-height: 1.45; }
+.match-detail a { color: var(--silver); }
+.fw-note-link { margin-top: .8rem; }
+.gold-line { margin-top: 1rem; font-size: .88rem; }
 .fw-note { display: flex; flex-direction: column; gap: .3rem; margin-top: .9rem; }
 .fw .card { margin-top: 1rem; }
