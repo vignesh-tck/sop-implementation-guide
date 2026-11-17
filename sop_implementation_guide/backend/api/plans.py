@@ -3,7 +3,7 @@ Implementation plans — the steps to get one recommendation done.
 
 Select a recommendation, get its plan: the pathway template for that kind of
 change, with any approved funding for that exact recommendation attached to the
-funding step. A reviewer (an SME) edits the steps and finalises the plan. See
+funding step and the block's zoning finding attached to the zoning steps. A reviewer (an SME) edits the steps and finalises the plan. See
 backend/tools/pathways.py for how a plan is assembled.
 """
 
@@ -19,6 +19,8 @@ from backend.db.session import get_supabase
 from backend.repositories.funding import FundingRepository
 from backend.repositories.plans import PlanRepository, PlanTableMissing
 from backend.repositories.recommendations import BlockRepository
+from backend.repositories.zoning import ZoningRepository
+from backend.tools import zoning
 from backend.tools.pathways import build_plan, clean_step, load_templates, pathway_for
 
 router = APIRouter(prefix="/blocks", tags=["plans"])
@@ -60,13 +62,17 @@ def _funding_for(db: Client, block_id: int, rec_id: int) -> list[dict]:
     return fits
 
 
-def _plan_response(db: Client, block_id: int, rec: dict) -> dict:
+def _plan_response(db: Client, block: dict, rec: dict) -> dict:
+    block_id = block["id"]
     storage_ready = True
     try:
         saved = PlanRepository(db).get_for_rec(block_id, rec["id"])
     except PlanTableMissing:
         saved, storage_ready = None, False
-    plan = build_plan(rec, _funding_for(db, block_id, rec["id"]), saved, load_templates(db))
+    finding = zoning.assess({**rec, "block_id": block_id}, ZoningRepository(db).get_for_block(block_id), block)
+    plan = build_plan(
+        rec, _funding_for(db, block_id, rec["id"]), saved, load_templates(db), zoning=finding, block=block
+    )
     return {"block_id": block_id, "storage_ready": storage_ready, **plan}
 
 
@@ -92,10 +98,17 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
             funding_counts[s["rec_id"]] = funding_counts.get(s["rec_id"], 0) + 1
 
     templates = load_templates(db)
+    zoning_rows = ZoningRepository(db).get_for_block(block_id)
+    lookup = zoning.block_lookup(zoning_rows)
     rows = []
     for rec in block.get("recommendations", []):
         pathway = pathway_for(rec.get("rec_label"), templates)
         plan = saved.get(rec.get("id")) or {}
+        mapping = zoning.mapping_for(rec.get("rec_label"))
+        zoning_best = (
+            zoning.best_outcome([zoning.zone_finding(c, mapping) for c in lookup["zones"]])
+            if lookup and mapping else None
+        )
         rows.append({
             "rec_id": rec.get("id"),
             "rec_label": rec.get("rec_label"),
@@ -107,14 +120,17 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
             "plan_status": plan.get("status") or "template",
             "reviewed_by": plan.get("reviewed_by"),
             "funding_count": funding_counts.get(rec.get("id"), 0),
+            # Best zoning outcome on the block (by_right / special_exception /
+            # prohibited), or None when unmapped, unresolved or not looked up.
+            "zoning_best": zoning_best,
         })
     return {"block_id": block_id, "storage_ready": storage_ready, "recommendations": rows}
 
 
 @router.get("/{block_id}/recommendations/{rec_id}/plan")
 def get_plan(block_id: int, rec_id: int, db: Client = Depends(get_supabase)):
-    _, rec = _block_and_rec(db, block_id, rec_id)
-    return _plan_response(db, block_id, rec)
+    block, rec = _block_and_rec(db, block_id, rec_id)
+    return _plan_response(db, block, rec)
 
 
 @router.put("/{block_id}/recommendations/{rec_id}/plan")
@@ -125,7 +141,7 @@ def save_plan(block_id: int, rec_id: int, body: PlanUpdate, db: Client = Depends
     Only the step wording is stored. Funding is attached on read, so it stays
     current after the plan is saved.
     """
-    _, rec = _block_and_rec(db, block_id, rec_id)
+    block, rec = _block_and_rec(db, block_id, rec_id)
     templates = load_templates(db)
     pathway = pathway_for(rec.get("rec_label"), templates)
     if not pathway:
@@ -154,4 +170,4 @@ def save_plan(block_id: int, rec_id: int, body: PlanUpdate, db: Client = Depends
         })
     except PlanTableMissing:
         raise HTTPException(status_code=503, detail=MISSING_TABLE)
-    return _plan_response(db, block_id, rec)
+    return _plan_response(db, block, rec)

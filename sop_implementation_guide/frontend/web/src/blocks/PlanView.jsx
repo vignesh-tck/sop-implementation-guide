@@ -17,6 +17,22 @@ function statusLine(plan) {
 // the template's wording until the SME edits or confirms it.
 function SourceTags({ s, plan }) {
   const final = plan.status === "final";
+  if (s.zoning) {
+    const resolved = s.input_status === "attached" || s.input_status === "partial";
+    return (
+      <>
+        {s.input_status === "missing" ? (
+          <span className="tag derived" title="Run python -m scripts.sync_block_zoning">{s.source_label} · not run</span>
+        ) : (
+          <span className={"tag " + (resolved ? "ok" : "derived")} title={s.source_note}>{s.source_label}</span>
+        )}
+        {(s.input_status === "partial" || s.input_status === "needs_sme") && !(s.edited || final) && (
+          <span className="tag derived" title="The lookup could not settle part of this; see the questions">Needs SME</span>
+        )}
+        {s.edited ? <span className="tag edited">SME edited</span> : final && <span className="tag ok">SME confirmed</span>}
+      </>
+    );
+  }
   if (s.input_status === "needs_sme") {
     return s.edited || final ? (
       <span className="tag ok" title={`Supplied by the reviewer. ${s.source_note || ""}`}>SME</span>
@@ -70,6 +86,75 @@ function FundingList({ funding }) {
         );
       })}
     </ul>
+  );
+}
+
+// Reference numbers after a sentence, e.g. [1][4], matching the step's reference list.
+function Cites({ refs }) {
+  if (!refs?.length) return null;
+  return <sup className="cites">{refs.map((n) => `[${n}]`).join("")}</sup>;
+}
+
+// The zoning finding: the answer first, then the background, then what is still
+// open. Every sentence carries the numbers of the references that back it.
+function ZoningFinding({ z, detail, seeStep }) {
+  if (detail === "summary") {
+    return <div className="zoning-summary">Zoning: {z.summary}. Full finding in step {seeStep}.</div>;
+  }
+  const groups = [];
+  for (const p of z.narrative) {
+    const last = groups[groups.length - 1];
+    if (last && last.section === p.section) last.items.push(p);
+    else groups.push({ section: p.section, items: [p] });
+  }
+  return (
+    <div className="zoning-finding">
+      <div className="zoning-summary"><b>Zoning:</b> {z.summary}</div>
+      {groups.map((g) => (
+        <div key={g.section} className="zoning-section">
+          <div className="zoning-h">{z.sections?.[g.section] || g.section}</div>
+          {g.items.map((p, i) => <p key={i}>{p.text}<Cites refs={p.refs} /></p>)}
+        </div>
+      ))}
+      {z.questions.length > 0 && <SmeQuestions items={z.questions} />}
+    </div>
+  );
+}
+
+function SmeQuestions({ items }) {
+  return (
+    <div className="sme-ask">
+      <div className="zoning-h">What we need from the SME</div>
+      <ol>{items.map((q, i) => <li key={i}>{q.text}<Cites refs={q.refs} /></li>)}</ol>
+    </div>
+  );
+}
+
+// A step no source fills yet: why the step needs it, then the specific question.
+function SmeAsk({ s }) {
+  if (!s.sme_ask && !s.sme_why) return null;
+  return (
+    <div className="sme-ask-block">
+      {s.sme_why && <p className="assess">{s.sme_why}</p>}
+      {s.sme_ask && <SmeQuestions items={[{ text: s.sme_ask }]} />}
+    </div>
+  );
+}
+
+// Every step shows where its content comes from. A step nothing supplies yet
+// still lists what to check, so there is never a step without a reference.
+function References({ refs, seeStep }) {
+  if (seeStep) return <div className="refs-list kv">References: as in step {seeStep}.</div>;
+  if (!refs?.length) return null;
+  return (
+    <ol className="refs-list">
+      {refs.map((r, i) => (
+        <li key={i}>
+          {r.url ? <a href={r.url} target="_blank" rel="noopener noreferrer">{r.label} ↗</a> : <span>{r.label}</span>}
+          {r.detail && <span className="assess"> · {r.detail}</span>}
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -187,6 +272,7 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
             {plan.funding_count > 0
               ? ` ${plan.funding_count} approved funding match(es) attached.`
               : " No approved funding for this recommendation yet."}
+            {plan.zoning_summary && ` Zoning: ${plan.zoning_summary}.`}
           </div>
 
           {!plan.storage_ready && (
@@ -203,7 +289,7 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
               </thead>
               <tbody>
                 {rows.map((s, i) => (
-                  <tr key={i} className={s.input_status === "attached" ? "has-funding" : ""}>
+                  <tr key={i} className={s.funding && s.input_status === "attached" ? "has-funding" : s.zoning ? "has-zoning" : ""}>
                     <td className="n">{i + 1}</td>
                     {editing ? (
                       <>
@@ -222,7 +308,10 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
                       <>
                         <td>
                           <div>{s.title}</div>
-                          {s.input_status === "attached" && <FundingList funding={s.funding} />}
+                          {s.funding && s.input_status === "attached" && <FundingList funding={s.funding} />}
+                          {s.zoning && <ZoningFinding z={s.zoning} detail={s.zoning_detail} seeStep={s.zoning_see_step} />}
+                          {s.input_status === "needs_sme" && !s.zoning && !s.edited && plan.status !== "final" && <SmeAsk s={s} />}
+                          <References refs={s.references} seeStep={s.zoning_detail === "summary" ? s.zoning_see_step : null} />
                         </td>
                         <td>{s.owner || <span className="assess">—</span>}</td>
                         <td className="assess">{s.waits_on || "—"}</td>
@@ -237,6 +326,7 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
           </div>
           <div className="kv source-legend">
             <b>Source:</b> <span className="tag ok">Funding agent</span> found by an agent ·{" "}
+            <span className="tag ok">Zoning lookup</span> looked up on the county map and the use tables ·{" "}
             <span className="tag">Template</span> draft wording, not yet reviewed ·{" "}
             <span className="tag edited">SME edited</span> / <span className="tag ok">SME confirmed</span> set by the reviewer ·{" "}
             <span className="tag derived">Needs SME</span> no agent or lookup supplies this yet, so the reviewer fills it in

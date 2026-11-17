@@ -6,6 +6,7 @@ from backend.api.discovery import router as discovery_router
 from backend.api.pathways import router as pathways_router
 from backend.api.plans import router as plans_router
 from backend.api.threads import router as threads_router
+from backend.api.zoning import router as zoning_router
 
 app = FastAPI(
     title="SoP Implementation Engine",
@@ -36,6 +37,7 @@ app.include_router(threads_router)
 app.include_router(discovery_router)
 app.include_router(plans_router)
 app.include_router(pathways_router)
+app.include_router(zoning_router)
 
 
 @app.get("/health")

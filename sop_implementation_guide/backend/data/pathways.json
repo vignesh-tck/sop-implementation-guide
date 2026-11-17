@@ -6,11 +6,23 @@
   "filled_by": {
     "template":      {"label": "Template",             "kind": "template", "live": true,  "note": "Fixed wording from this template; the same on every block until an SME edits it."},
     "funding":       {"label": "Funding agent",        "kind": "agent",    "live": true,  "note": "FundingAgent's approved funding matches for this recommendation."},
-    "zoning":        {"label": "Zoning agent",         "kind": "agent",    "live": false, "note": "ZoningAgent (parcel zone and permitted-use check) is not built yet, so the SME supplies this."},
-    "policy":        {"label": "Policy agent",         "kind": "agent",    "live": false, "note": "PolicyAgent (supporting or blocking plans and codes) is not built yet, so the SME supplies this."},
-    "parcel":        {"label": "Parcel lookup",        "kind": "lookup",   "live": false, "note": "County parcel records (owner and site) are not connected yet, so the SME supplies this."},
-    "road_owner":    {"label": "Road-owner lookup",    "kind": "lookup",   "live": false, "note": "Whether the road is State (MD SHA), County or City is not looked up yet, so the SME supplies this."},
-    "program_terms": {"label": "Program-terms lookup", "kind": "lookup",   "live": false, "note": "The funding program's post-award rules are not extracted yet, so the SME supplies this."}
+    "zoning":        {"label": "Zoning lookup",        "kind": "lookup",   "live": true,  "note": "The zones fronting the block from the county zoning map, checked against the Zoning Ordinance's use tables (§27-5101). A lookup, not a model: every finding cites its source."},
+    "policy":        {"label": "Policy agent",         "kind": "agent",    "live": false, "note": "PolicyAgent (supporting or blocking plans and codes) is not built yet, so the SME supplies this.",
+                      "why": "A grant or approval is stronger when an adopted plan already calls for the change. The area plan for this block is the 2022 Bowie-Mitchellville and Vicinity Master Plan, which the 2024 rezoning implements.",
+                      "ask": "Which adopted plan or policy supports {thing} on {street}, and where (chapter, strategy or page)?",
+                      "ref": {"label": "2022 Approved Bowie-Mitchellville and Vicinity Master Plan (M-NCPPC)", "url": "https://www.pgplanning.org/community-planning/long-range-planning/bowie-mitchellville-and-vicinity-master-plan"}},
+    "parcel":        {"label": "Parcel lookup",        "kind": "lookup",   "live": false, "note": "County parcel records (owner and site) are not connected yet, so the SME supplies this.",
+                      "why": "Who owns the land decides who acts: the City can only start work on land it controls, and private owners have to agree to anything on theirs.",
+                      "ask": "Who owns the parcels along {street} that this would touch: the City, M-NCPPC, another public agency, or private owners?",
+                      "ref": {"label": "Maryland SDAT real property records (owner of record per parcel)", "url": null}},
+    "road_owner":    {"label": "Road-owner lookup",    "kind": "lookup",   "live": false, "note": "Whether the road is State (MD SHA), County or City is not looked up yet, so the SME supplies this.",
+                      "why": "The road owner approves and permits anything in the right-of-way. On a state route that is MD SHA, which adds its own studies and access permits.",
+                      "ask": "Who owns {street}: the State (MD SHA), Prince George's County or the City of Bowie?",
+                      "ref": {"label": "Road ownership: MD SHA, Prince George's County DPW&T or City of Bowie records", "url": null}},
+    "program_terms": {"label": "Program-terms lookup", "kind": "lookup",   "live": false, "note": "The funding program's post-award rules are not extracted yet, so the SME supplies this.",
+                      "why": "An award usually comes with conditions, such as matching funds, design approval or construction deadlines, and reporting, which set the timing of the later steps.",
+                      "ask": "What does the chosen funding program require after award (match, deadlines for design and construction, reporting)?",
+                      "ref": {"label": "The chosen program's notice of funding or award agreement", "url": null}}
   },
 
   "pathways": [

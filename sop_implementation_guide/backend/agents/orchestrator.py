@@ -2,8 +2,9 @@
 OrchestratorAgent — fans out to all three specialists, aggregates signals,
 computes feasibility score, triggers human approval, writes gold layer.
 
-For midterm: FundingAgent runs fully; ZoningAgent and PolicyAgent return
-placeholder scores so the gold layer can still be computed end-to-end.
+FundingAgent and ZoningAgent supply real sub-scores. PolicyAgent is still a
+scaffold, so policy is a placeholder 50; zoning falls back to 50 only for a
+block whose zones have not been looked up or cannot be scored.
 """
 
 import uuid
@@ -61,7 +62,7 @@ class OrchestratorAgent:
     def compute_gold(self, thread_id: str) -> dict:
         """
         Compute and write the gold layer for a block after all signals are reviewed.
-        Uses placeholder scores for zoning/policy (midterm — FundingAgent only).
+        Zoning comes from ZoningAgent; policy is still a placeholder.
         """
         db = get_supabase()
         block_id = self.resolve_block_id(thread_id, db)
@@ -79,8 +80,12 @@ class OrchestratorAgent:
         funding_signals = funding_repo.get_for_block(block_id, reviewed_only=True)
         funding_score = self._score_funding(funding_signals)
 
-        # Placeholders until ZoningAgent + PolicyAgent are implemented
-        zoning_score = 50.0
+        zoning_score, zoning_detail, zoning_signal_ids = self.zoning_agent.score_block(block_id, db)
+        zoning_placeholder = zoning_score is None
+        if zoning_placeholder:
+            # Not looked up, or nothing on the block is scorable (legacy zones only).
+            zoning_score = 50.0
+        # Placeholder until PolicyAgent is implemented
         policy_score = 50.0
 
         feasibility = gold_repo.compute_feasibility_score(
@@ -88,7 +93,10 @@ class OrchestratorAgent:
         )
 
         top_actions = self._derive_actions(funding_signals)
-        narrative = self._build_narrative(block_id, funding_signals, funding_score, feasibility)
+        narrative = self._build_narrative(
+            block_id, funding_signals, funding_score, feasibility,
+            zoning_score, zoning_detail, zoning_placeholder,
+        )
 
         profile = {
             "block_id": block_id,
@@ -99,7 +107,7 @@ class OrchestratorAgent:
             "top_actions": top_actions,
             "narrative": narrative,
             "funding_signal_ids": [s["id"] for s in funding_signals if s.get("id")],
-            "zoning_signal_ids": [],
+            "zoning_signal_ids": zoning_signal_ids,
             "policy_signal_ids": [],
             "thread_id": thread_id,
         }
@@ -174,7 +182,14 @@ class OrchestratorAgent:
         return actions
 
     def _build_narrative(
-        self, block_id: int, signals: list[dict], funding_score: float, feasibility: float
+        self,
+        block_id: int,
+        signals: list[dict],
+        funding_score: float,
+        feasibility: float,
+        zoning_score: float,
+        zoning_detail: dict,
+        zoning_placeholder: bool,
     ) -> str:
         programs = self._best_per_program(signals)
         covered = {s.get("rec_label") for s in signals if s.get("rec_label")}
@@ -199,5 +214,13 @@ class OrchestratorAgent:
             soonest = min(s["deadline"] for s in dated)
             parts.append(f"Nearest application deadline is {soonest}.")
         parts.append(f"Funding sub-score: {funding_score:.0f}/100.")
-        parts.append("Zoning and policy analysis pending.")
+        if not zoning_detail.get("looked_up"):
+            parts.append("Zoning not looked up yet (placeholder 50).")
+        elif zoning_placeholder:
+            parts.append("Zoning could not be scored: no recommendation here resolves to a zone the use "
+                         "tables cover (placeholder 50).")
+        else:
+            parts.append(f"Zoning sub-score: {zoning_score:.0f}/100 across "
+                         f"{zoning_detail['scored']} recommendation(s) checked against the use tables.")
+        parts.append("Policy analysis pending.")
         return " ".join(parts)

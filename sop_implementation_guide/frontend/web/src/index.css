@@ -400,5 +400,32 @@ td.pick input { accent-color: var(--orange); width: 16px; height: 16px; }
 .plan-table td.source { white-space: nowrap; }
 .plan-table td.source .tag { margin: 0 .25rem .2rem 0; }
 .source-hint { color: var(--muted); font-size: .72rem; }
+
+/* ---- zoning finding, SME questions and references on plan steps ---- */
+.plan-table tr.has-zoning td { background: color-mix(in srgb, var(--silver) 6%, transparent); }
+.zoning-finding { margin-top: .4rem; font-size: .84rem; max-width: 62rem; }
+.zoning-finding p { margin: .2rem 0 .35rem; line-height: 1.45; }
+.zoning-summary { margin-top: .3rem; font-size: .84rem; }
+.zoning-section { margin-top: .45rem; }
+.zoning-h {
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); font-weight: 700; margin-bottom: .1rem;
+}
+.cites { color: var(--silver); font-size: .66rem; margin-left: .15rem; white-space: nowrap; }
+.sme-ask {
+  margin-top: .5rem; padding: .45rem .6rem; border-left: 3px solid var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, transparent); border-radius: 4px; font-size: .84rem;
+}
+.sme-ask ol { margin: .2rem 0 0; padding-left: 1.2rem; }
+.sme-ask li { margin: .15rem 0; line-height: 1.4; }
+.sme-ask-block { margin-top: .35rem; }
+.sme-ask-block p { margin: .2rem 0; }
+.refs-list {
+  margin: .45rem 0 0; padding: .3rem 0 0 1.3rem; border-top: 1px dashed var(--border);
+  font-size: .74rem; color: var(--muted);
+}
+.refs-list li { margin: .1rem 0; line-height: 1.35; word-break: break-word; }
+.refs-list a { color: var(--silver); }
+div.refs-list { padding-left: 0; }
 .source-legend { margin-top: .5rem; line-height: 1.9; }
 .source-legend b { font-size: .82rem; }

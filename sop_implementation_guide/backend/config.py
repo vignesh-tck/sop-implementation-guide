@@ -39,5 +39,12 @@ class Settings(BaseSettings):
     # 100 and the sub-score stopped discriminating at all.
     max_counted_per_tier: int = 2
 
+    # Zoning sub-score points per recommendation, by the best outcome among the
+    # zones fronting its block (backend/tools/zoning.py). Legacy and unresolved
+    # zones are left out rather than scored as prohibited.
+    zoning_points_by_right: float = 100.0
+    zoning_points_special_exception: float = 50.0
+    zoning_points_prohibited: float = 0.0
+
 
 settings = Settings()

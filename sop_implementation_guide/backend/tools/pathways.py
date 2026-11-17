@@ -14,14 +14,21 @@ up without a restart.
 A plan is the template plus whatever this system can attach to it. Each step's
 `filled_by` names the source meant to supply it: the template itself, an agent
 (funding, zoning, policy) or a lookup (parcel, road owner, program terms). The
-`live` flag on each source says whether it actually supplies anything yet. Today
-only the funding agent does: its step gets the approved funding signals for that
-exact recommendation. A step whose source is not live is labelled as needing the
-SME, so the reviewer can tell findings from blanks they have to fill.
+`live` flag on each source says whether it actually supplies anything yet. Two
+do: the funding agent (approved funding signals for that exact recommendation)
+and the zoning lookup (the block's zones checked against the use tables, see
+tools/zoning.py). A step whose source is not live is labelled as needing the
+SME, with why the step needs it and the specific question to answer, so the
+reviewer can tell findings from blanks they have to fill.
 
-Funding is re-attached on every read, including for a plan someone already saved.
-The saved plan holds the reviewer's wording of the steps; the money is live, so a
-signal approved after the plan was finalised still appears on it.
+Every step carries references: what a live source cited, the reference a
+reviewer should check for an unconnected source, and the template version or
+the reviewer who set the wording. A step never renders without one.
+
+Funding and zoning are re-attached on every read, including for a plan someone
+already saved. The saved plan holds the reviewer's wording of the steps; the
+findings are live, so a signal approved or a zone looked up after the plan was
+finalised still appears on it.
 """
 
 import json
@@ -167,32 +174,105 @@ def clean_step(step: dict) -> dict:
     return out
 
 
-def _attach(step: dict, funding: list[dict], sources: dict) -> dict:
+def _template_ref(templates: dict) -> dict:
+    by = f", last edited by {templates['updated_by']}" if templates.get("updated_by") else ""
+    return {
+        "label": f"Pathway template {templates.get('version')}",
+        "url": None,
+        "detail": (templates.get("status") or "Draft template") + by,
+    }
+
+
+def _references(s: dict, key: str, source: dict, templates: dict, saved: dict | None) -> list[dict]:
     """
-    Say where the step's content comes from, and attach funding on a funding step.
+    Where this step's content comes from, as a list a reviewer can follow.
+
+    Every step has at least one entry. A step nothing supplies yet says so
+    rather than showing an empty list, and a reviewer's edit is cited as the
+    reviewer.
+    """
+    refs: list[dict] = []
+    if s.get("zoning"):
+        refs += s["zoning"]["references"]
+    elif s.get("funding"):
+        for f in s["funding"]:
+            refs.append({
+                "label": f.get("program_name") or "Funding program",
+                "url": f.get("source_url") or f.get("application_url"),
+                "detail": ", ".join(x for x in (f.get("source_name"), f.get("source_vintage")) if x) or None,
+            })
+    elif key == "funding":
+        refs.append({"label": "Funding agent", "url": None,
+                     "detail": "No approved funding for this recommendation yet"})
+    elif source.get("kind") != "template":
+        if source.get("ref"):
+            refs.append(source["ref"])
+        refs.append({"label": source.get("label", key), "url": None,
+                     "detail": "Not connected yet; the SME's answer becomes the reference"})
+
+    # The wording itself: the template, or the reviewer who changed or confirmed it.
+    if saved and (s.get("edited") or saved.get("status") == "final") and saved.get("reviewed_by"):
+        verb = "edited" if s.get("edited") else "confirmed"
+        when = (saved.get("finalized_at") or saved.get("updated_at") or "")[:10]
+        refs.append({"label": f"SME {verb}: {saved['reviewed_by']}", "url": None,
+                     "detail": f"Saved {when}" if when else None})
+    else:
+        refs.append(_template_ref(templates))
+    return refs
+
+
+def _attach(
+    step: dict,
+    funding: list[dict],
+    sources: dict,
+    zoning: dict | None = None,
+    ctx: dict | None = None,
+    templates: dict | None = None,
+    saved: dict | None = None,
+) -> dict:
+    """
+    Say where the step's content comes from, and attach what a live source found.
 
     input_status is one of: 'template' (fixed wording), 'attached' / 'missing'
-    (a live agent did or didn't return anything), or 'needs_sme' (the source
+    (a live source did or didn't return anything), 'partial' (a live source
+    answered part of it and asks the SME the rest), or 'needs_sme' (the source
     meant to supply it isn't built, so the reviewer does).
     """
     s = dict(step)
     key = s.get("filled_by") or "template"
     source = sources.get(key, {})
+    ctx = ctx or {}
     s["source_label"] = source.get("label", key)
     s["source_kind"] = source.get("kind", "template")
     s["source_note"] = source.get("note")
     if key == "funding" and source.get("live"):
         s["funding"] = funding
         s["input_status"] = "attached" if funding else "missing"
+    elif key == "zoning" and source.get("live") and zoning is not None:
+        s["zoning"] = zoning
+        s["input_status"] = zoning["status"]
     elif s["source_kind"] == "template":
         s["input_status"] = "template"
     else:
         s["input_status"] = "needs_sme"
+        # Explain before asking: why the step needs this, then the question itself.
+        if source.get("why"):
+            s["sme_why"] = source["why"]
+        if source.get("ask"):
+            s["sme_ask"] = source["ask"].format(
+                thing=ctx.get("thing") or "this", street=ctx.get("street") or "this street"
+            )
+    s["references"] = _references(s, key, source, templates or {}, saved)
     return s
 
 
 def build_plan(
-    rec: dict, funding: list[dict], saved: dict | None = None, templates: dict | None = None
+    rec: dict,
+    funding: list[dict],
+    saved: dict | None = None,
+    templates: dict | None = None,
+    zoning: dict | None = None,
+    block: dict | None = None,
 ) -> dict:
     """
     The plan for one recommendation.
@@ -201,10 +281,16 @@ def build_plan(
     funding: that recommendation's approved funding fits, strongest first.
     saved: its implementation_plans row, if a reviewer has saved one.
     templates: the templates in force (load_templates(db)); the file if omitted.
+    zoning: the zoning finding for this recommendation (tools/zoning.assess).
+    block: the blocks row, for the street name in SME questions.
     """
     templates = templates or load_templates()
     pathway = pathway_for(rec.get("rec_label"), templates)
     sources = templates.get("filled_by", {})
+    ctx = {
+        "street": (block or {}).get("street_name"),
+        "thing": (rec.get("rec_label") or "").lower() or None,
+    }
 
     if saved:
         steps = saved.get("steps") or []
@@ -233,5 +319,28 @@ def build_plan(
         "updated_at": saved.get("updated_at") if saved else None,
         "finalized_at": saved.get("finalized_at") if saved else None,
         "funding_count": len(funding),
-        "steps": [_attach(s, funding, sources) for s in steps],
+        "zoning_summary": zoning["summary"] if zoning else None,
+        "steps": _mark_zoning_detail(
+            [_attach(s, funding, sources, zoning, ctx, templates, saved) for s in steps]
+        ),
     }
+
+
+def _mark_zoning_detail(steps: list[dict]) -> list[dict]:
+    """
+    Show the full zoning finding on the first zoning step only.
+
+    A land-use plan has two zoning steps (look up the zone, check the use). Both
+    rest on the same finding, so later ones point back to the first rather than
+    repeating it.
+    """
+    first = None
+    for i, s in enumerate(steps, start=1):
+        if s.get("zoning"):
+            if first is None:
+                first = i
+                s["zoning_detail"] = "full"
+            else:
+                s["zoning_detail"] = "summary"
+                s["zoning_see_step"] = first
+    return steps

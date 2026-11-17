@@ -1,0 +1,211 @@
+{
+  "version": "v0-draft",
+  "updated": "2026-11-17",
+  "status": "Zone facts, use-table values and rezoning context come from official sources and are cited on every finding. The mapping from SoP recommendation types to ordinance uses is our assumption until an SME confirms it.",
+
+  "buffer_m": 25,
+
+  "sources": {
+    "zoning_map": {
+      "label": "Prince George's County zoning map, GIS layer \"Zoning (Full Description)\"",
+      "url": "https://gisdata.pgplanning.org/arcgis/rest/services/Applications/ZoningCertificationLetter/MapServer/59"
+    },
+    "prior_zoning": {
+      "label": "Prince George's County prior zoning map (before April 1, 2022), GIS layer \"Zoning Prior (Full Description)\"",
+      "url": "https://gisdata.pgplanning.org/arcgis/rest/services/Applications/ZoningCertificationLetter/MapServer/65"
+    },
+    "cases": {
+      "label": "M-NCPPC development case layers (Zoning Map Amendment, Comprehensive Design Plan, Specific Design Plan, Special Exception)",
+      "url": "https://gisdata.pgplanning.org/arcgis/rest/services/Applications/ZoningCertificationLetter/MapServer"
+    },
+    "sma_2024": {
+      "label": "2024 Approved Bowie-Mitchellville and Vicinity Sectional Map Amendment (CR-052-2024, June 4, 2024)",
+      "url": "https://www.pgplanning.org/wp-content/uploads/2024/10/2024-BMV-SMA-June-2024-Final-v2-1.pdf"
+    },
+    "lcd_rule": {
+      "label": "Zoning Ordinance §27-4205(c), Legacy Comprehensive Design (LCD) Zone",
+      "url": "https://online.encodeplus.com/regs/princegeorgescounty-md/doc-viewer.aspx#secid-637"
+    },
+    "multiple_uses": {
+      "label": "Zoning Ordinance §27-5101(b), Multiple Principal Uses",
+      "url": "https://online.encodeplus.com/regs/princegeorgescounty-md/doc-viewer.aspx#secid-649"
+    },
+    "overlay_table": {
+      "label": "Zoning Ordinance Table 27-5101(f), Principal Use Table for Overlay Zones",
+      "url": "https://online.encodeplus.com/regs/princegeorgescounty-md/doc-viewer.aspx#secid-649"
+    }
+  },
+
+  "zones": {
+    "ROS":    {"name": "Reserved Open Space"},
+    "AG":     {"name": "Agriculture and Preservation"},
+    "AR":     {"name": "Agricultural-Residential"},
+    "RE":     {"name": "Residential Estate"},
+    "RR":     {"name": "Residential, Rural"},
+    "RSF-95": {"name": "Residential, Single-Family - 95"},
+    "RSF-65": {"name": "Residential, Single-Family - 65"},
+    "RSF-A":  {"name": "Residential, Single-Family - Attached"},
+    "RMF-12": {"name": "Residential, Multifamily - 12"},
+    "RMF-20": {"name": "Residential, Multifamily - 20"},
+    "RMF-48": {"name": "Residential, Multifamily - 48"},
+    "CN":     {"name": "Commercial, Neighborhood"},
+    "CS":     {"name": "Commercial, Service"},
+    "CGO":    {"name": "Commercial, General and Office"},
+    "IE":     {"name": "Industrial, Employment"},
+    "IH":     {"name": "Industrial, Heavy"},
+    "NAC":    {"name": "Neighborhood Activity Center"},
+    "TAC-C": {
+      "name": "Town Activity Center (Core)",
+      "context": [
+        {"text": "TAC-C did not exist in this planning area before the 2024 Sectional Map Amendment (0.00 acres before, 90.69 after), so every TAC-C property here was placed in the zone in 2024.",
+         "ref": {"source": "sma_2024", "page": 17, "detail": "Table 1, Prior and Approved Zoning Inventory"}},
+        {"text": "The amendment rezoned land including properties on Town Center Boulevard from TAC-E to TAC-C \"to create the Core of the Bowie Local Town Center\" (master plan strategy CZ 5.1; changes ZC 60-62).",
+         "ref": {"source": "sma_2024", "page": 79, "detail": "ZC 60, TAC-E to TAC-C, 74.81 acres"}}
+      ]
+    },
+    "TAC-E": {
+      "name": "Town Activity Center (Edge)",
+      "context": [
+        {"text": "The 2024 amendment uses TAC-E for the edge of the Bowie Local Town Center (master plan strategy CZ 5.2), for example ZC 58 (CGO to TAC-E) and ZC 59 (LCD to TAC-E).",
+         "ref": {"source": "sma_2024", "page": 77, "detail": "ZC 58, CGO to TAC-E, 32.27 acres"}},
+        {"text": "It also moved other TAC-E land out of the center \"to limit mixed-use development outside of the center\" (ZC 65-71), and TAC-E fell from 606.91 to 454.20 acres.",
+         "ref": {"source": "sma_2024", "page": 85, "detail": "ZC 65, TAC-E to CS, 18.69 acres"}}
+      ]
+    },
+    "LCD": {
+      "name": "Legacy Comprehensive Design",
+      "legacy": true,
+      "context": [
+        {"text": "No zoning map amendment can now place land in LCD, so the zone only shrinks as sites move out of it.",
+         "ref": {"source": "lcd_rule", "detail": "§27-4205(a), zoning of land to LCD prohibited"}},
+        {"text": "The 2024 amendment cut LCD in this planning area from 4,177.77 to 2,870.63 acres, moving some of it into the town center, for example ZC 59 (LCD to TAC-E, 17.75 acres).",
+         "ref": {"source": "sma_2024", "page": 78, "detail": "ZC 59, LCD to TAC-E"}}
+      ]
+    },
+    "LMXC": {"name": "Legacy Mixed-Use Community", "legacy": true}
+  },
+
+  "legacy_rule": {
+    "text": "The use tables do not apply in LCD. Development follows the site's approved Basic Plan, Comprehensive Design Plan (CDP) and Specific Design Plan (SDP), and the uses permitted are those of the comprehensive design zone the land was in before April 1, 2022.",
+    "ref": {"source": "lcd_rule", "detail": "§27-4205(c)(3), procedures, standards and permitted uses"}
+  },
+
+  "prior_design_zones": {
+    "M-A-C": "Major Activity Center",
+    "L-A-C": "Local Activity Center",
+    "E-I-A": "Employment and Institutional Area",
+    "R-U":   "Residential Urban Development",
+    "R-M":   "Residential Medium Development",
+    "R-S":   "Residential Suburban Development",
+    "V-M":   "Village-Medium",
+    "V-L":   "Village-Low",
+    "R-L":   "Residential Low Development"
+  },
+
+  "case_layers": {
+    "26": "Zoning Map Amendment / Basic Plan",
+    "46": "Comprehensive Design Plan",
+    "29": "Specific Design Plan",
+    "31": "Special Exception"
+  },
+
+  "overlay_layers": {
+    "14": "Transit District Overlay",
+    "22": "Development District Overlay",
+    "68": "Neighborhood Conservation Overlay",
+    "23": "Chesapeake Bay Critical Area Overlay",
+    "19": "Military Installation Overlay - Safety",
+    "20": "Military Installation Overlay - Noise",
+    "21": "Military Installation Overlay - Height"
+  },
+  "overlays_not_checked": "Aviation Policy Area (APA) overlays are not in the county layers we query, so they are not checked.",
+
+  "rec_uses": {
+    "Restaurants": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Alcohol production facility, small-scale; shared commercial kitchen; Restaurant; and Restaurant, quick-service (without drive-through)", "label": "restaurant"}]},
+    "Coffee Shops/Tea Houses": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Alcohol production facility, small-scale; shared commercial kitchen; Restaurant; and Restaurant, quick-service (without drive-through)", "label": "restaurant (quick-service, no drive-through)"}]},
+    "Bars/Night Clubs": {"mode": "any", "confidence": "low",
+      "note": "A bar that serves food is a restaurant under the ordinance; a nightclub is a separate use. We read this recommendation as a nightclub, the stricter case.",
+      "uses": [{"row": "Nightclub", "label": "nightclub"}]},
+    "Bank/Financial": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Bank or other financial institution", "label": "bank or other financial institution"}]},
+    "Hospital, Medical Facility, Health Clinic": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Hospital", "label": "hospital"},
+      {"row": "Medical or dental office or lab", "label": "medical or dental office"},
+      {"row": "State-licensed medical clinic", "label": "state-licensed medical clinic"}]},
+    "Hotel/Hospitality": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Hotel or motel", "label": "hotel or motel"}]},
+    "Post Office, Police Station Courthouse, DMV": {"mode": "any", "confidence": "low",
+      "note": "The use tables list police and fire stations as \"Emergency services facility\" but have no row for a post office, courthouse or DMV. Government buildings may be exempt from the use tables under another section, which we have not confirmed.",
+      "uses": [{"row": "Emergency services facility", "label": "emergency services facility (police)"}]},
+    "Gym/Fitness Center": {"mode": "any", "confidence": "low",
+      "note": "The ordinance has no gym row. We read a gym as \"Recreation facility, indoor\"; a small studio could instead fall under the art, dance and yoga studio row.",
+      "uses": [{"row": "Recreation facility, indoor", "label": "indoor recreation facility"}]},
+    "Museum, Auditorium Concert Hall, Theater": {"mode": "any", "confidence": "medium", "uses": [
+      {"row": "Cultural facility", "label": "cultural facility"},
+      {"row": "Performance arts center", "label": "performance arts center"},
+      {"row": "Cinema", "label": "cinema"}]},
+    "Single Family Home/Duplex Attached": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Dwelling, single-family detached", "label": "single-family house"},
+      {"row": "Dwelling, two-family", "label": "duplex"},
+      {"row": "Dwelling, townhouse", "label": "townhouse"}]},
+    "Religious Institution/buildings": {"mode": "any", "confidence": "medium",
+      "note": "Places of worship on lots under 2 acres, or in converted houses, have their own rows; this uses the general row.",
+      "uses": [{"row": "Place of worship, all others", "label": "place of worship"}]},
+    "Corner Store/Convenience Store": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Convenience store", "label": "convenience store"}]},
+    "Offices": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Office, general business and professional", "label": "general office"}]},
+    "Libraries/Bookstores": {"mode": "any", "confidence": "medium", "uses": [
+      {"row": "Cultural facility", "label": "library (cultural facility)"},
+      {"row": "Consumer goods establishment", "label": "bookstore (consumer goods)"}]},
+    "Condo/Apartment Housing": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Dwelling, multifamily", "label": "multifamily dwelling"}]},
+    "Vertical mixed used buildings": {"mode": "all", "confidence": "medium",
+      "note": "The ordinance has no single mixed-use row. A mixed-use building is several principal uses on one lot, which §27-5101(b) allows when each use is allowed, so this needs both housing and ground-floor retail.",
+      "note_ref": "multiple_uses",
+      "uses": [
+        {"row": "Dwelling, multifamily", "label": "apartments above"},
+        {"row": "Consumer goods establishment", "label": "ground-floor retail"}]},
+    "Big Box Shops": {"mode": "any", "confidence": "low",
+      "note": "\"Big box\" is a building form, not a use. We read it as large retail (consumer goods or combination retail).",
+      "uses": [
+        {"row": "Consumer goods establishment", "label": "retail store"},
+        {"row": "Combination retail", "label": "combination retail"}]},
+    "Strip Mall": {"mode": "any", "confidence": "low",
+      "note": "A strip mall is a development form, not a use. We read it as retail stores.",
+      "uses": [{"row": "Consumer goods establishment", "label": "retail store"}]},
+    "Shopping Mall": {"mode": "any", "confidence": "low",
+      "note": "A shopping mall is a development form, not a use. We read it as retail stores.",
+      "uses": [
+        {"row": "Consumer goods establishment", "label": "retail store"},
+        {"row": "Combination retail", "label": "combination retail"}]},
+    "Gas/Service Station": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Gas station", "label": "gas station"}]},
+    "Drive-thru": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Restaurant, quick-service (with drive-through)", "label": "drive-through restaurant"}]},
+    "Surface parking lot": {"mode": "any", "confidence": "medium",
+      "note": "A parking lot serving a store is an accessory use; this is the row for a lot as a principal use.",
+      "uses": [{"row": "Parking facility", "label": "parking facility"}]},
+    "Public Garden": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Community garden", "label": "community garden"},
+      {"row": "Arboretum or botanical garden, park or greenway, or public water-oriented recreational and educational area", "label": "botanical garden or park"}]},
+    "Plaza/Square/Courtyard": {"mode": "any", "confidence": "low",
+      "note": "The ordinance has no plaza row. We read a public plaza as \"park or greenway\"; a plaza inside a private development is usually required open space, not a principal use.",
+      "uses": [{"row": "Arboretum or botanical garden, park or greenway, or public water-oriented recreational and educational area", "label": "park or greenway"}]},
+    "Park/Playground": {"mode": "any", "confidence": "high", "uses": [
+      {"row": "Arboretum or botanical garden, park or greenway, or public water-oriented recreational and educational area", "label": "park"}]},
+    "Playing or Sport Field": {"mode": "any", "confidence": "medium", "uses": [
+      {"row": "Recreation facility, outdoor", "label": "outdoor recreation facility"},
+      {"row": "Arboretum or botanical garden, park or greenway, or public water-oriented recreational and educational area", "label": "park"}]},
+    "Farmers Market": {"mode": "any", "confidence": "high",
+      "note": "This is the permanent-use row. A market run as a temporary use follows the temporary use table (Section 27-5301), which is not checked yet.",
+      "uses": [{"row": "Farmers’ market", "label": "farmers' market"}]},
+    "Community Center or Library": {"mode": "any", "confidence": "low",
+      "note": "The ordinance has no community center row. We read it as a cultural facility or a nonprofit recreational use.",
+      "uses": [
+        {"row": "Cultural facility", "label": "cultural facility"},
+        {"row": "Nonprofit recreational use", "label": "nonprofit recreational use"}]}
+  }
+}

@@ -5,6 +5,11 @@ import { num } from "../api.js";
 // opens its implementation plan. Open by default: choosing a recommendation is
 // where the planner starts, so the list is the entry point, not reference detail.
 const STATUS = { final: "final", draft: "draft" };
+const ZONING = {
+  by_right: { text: "zoning: by right", cls: "ok" },
+  special_exception: { text: "zoning: special exception", cls: "derived" },
+  prohibited: { text: "zoning: prohibited", cls: "gone" },
+};
 
 export default function AllRecommendations({ recommendations, selectedRecId, onSelect }) {
   const [open, setOpen] = useState(true);
@@ -60,6 +65,11 @@ export default function AllRecommendations({ recommendations, selectedRecId, onS
                 <span className="dim"> · {r.pathway_name || "no pathway"}</span>
               </span>
               {r.funding_count > 0 && <span className="tag ok" title="Approved funding matches">funding {r.funding_count}</span>}
+              {ZONING[r.zoning_best] && (
+                <span className={"tag " + ZONING[r.zoning_best].cls} title="Best zoning outcome on this block, from the use tables">
+                  {ZONING[r.zoning_best].text}
+                </span>
+              )}
               {STATUS[r.plan_status] && (
                 <span className={"tag " + (r.plan_status === "final" ? "ok" : "edited")}>{STATUS[r.plan_status]}</span>
               )}
