@@ -36,6 +36,7 @@ class ZoningAgent(SpecialistAgent):
 
     def assess_block(self, block_id: int, db: Client | None = None) -> dict:
         db = db or get_supabase()
+        zoning.refresh_active(db)
         block = BlockRepository(db).get_with_recs(block_id)
         if not block:
             return {"status": "not_found", "agent": "ZoningAgent", "block_id": block_id}
@@ -70,6 +71,7 @@ class ZoningAgent(SpecialistAgent):
         queries in all; the rest is computed here from the stored rows.
         """
         db = db or get_supabase()
+        data_version = zoning.refresh_active(db)
         rules = zoning.load_rules()
         use_src = zoning.load_use_table()["source"]
         block_repo = BlockRepository(db)
@@ -166,6 +168,8 @@ class ZoningAgent(SpecialistAgent):
         }]
         fetched = sorted(b["fetched_at"] for b in blocks if b["fetched_at"])
         return {
+            "data_version": data_version,
+            "settings": zoning.active_settings(),
             "rules_version": rules["version"],
             "rules_status": rules["status"],
             "buffer_m": rules.get("buffer_m", 25),
@@ -204,6 +208,7 @@ class ZoningAgent(SpecialistAgent):
     def score_block(self, block_id: int, db: Client | None = None) -> tuple[float | None, dict, list]:
         """(score or None, detail, zoning_signals ids) for the gold layer."""
         db = db or get_supabase()
+        zoning.refresh_active(db)
         block = BlockRepository(db).get_with_recs(block_id) or {}
         rows = ZoningRepository(db).get_for_block(block_id)
         score, detail = zoning.score_block(block.get("recommendations", []), rows)

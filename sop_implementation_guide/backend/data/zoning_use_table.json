@@ -1,12 +1,19 @@
 {
  "source": {
   "name": "Prince George's County Zoning Ordinance, Section 27-5101 Principal Use Tables",
+  "page_title": "27-5101. Principal Use Tables",
   "url": "https://online.encodeplus.com/regs/princegeorgescounty-md/doc-viewer.aspx#secid-649",
   "standards_url": "https://online.encodeplus.com/regs/princegeorgescounty-md/doc-viewer.aspx#secid-650",
   "special_exception_url": "https://online.encodeplus.com/regs/princegeorgescounty-md/doc-viewer.aspx#secid-608",
   "amended_through": "CB-070-2026",
   "extracted": "2026-11-17",
-  "extracted_by": "scripts/extract_use_table.py"
+  "extracted_by": "scripts/extract_use_table.py",
+  "row_counts": {
+   "27-5101(c)": 200,
+   "27-5101(d)": 200,
+   "27-5101(e)": 200,
+   "27-5101(f)": 199
+  }
  },
  "key": {
   "P": "Permitted by right, subject to the ordinance's other regulations.",

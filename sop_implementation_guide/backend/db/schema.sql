@@ -417,3 +417,52 @@ CREATE TABLE IF NOT EXISTS pathway_templates (
     note        TEXT,
     created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- =============================================================
+-- ZONING DATA VERSIONS AND REFRESH RUNS  (added Nov 2026)
+--
+-- The Zoning tab can re-extract the use table and re-look-up block zones from
+-- sources the user names. A refresh never changes anything on its own: it runs
+-- in the background into zoning_refresh_runs, the user reviews the diff, and
+-- only "apply" writes a new zoning_data_versions row (and the blocks' rows in
+-- zoning_signals). The hosted server's disk is wiped on redeploy, so the data
+-- in force lives here, not in a file.
+--
+-- With no versions (or no tables), the app uses backend/data/zoning_use_table.json
+-- and the default GIS settings, which together are version 0.
+-- =============================================================
+
+-- The zoning data in force: the highest version wins. Insert-only, so every
+-- earlier version stays restorable.
+CREATE TABLE IF NOT EXISTS zoning_data_versions (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    version     INT NOT NULL UNIQUE,
+    use_table   JSONB NOT NULL,     -- same shape as zoning_use_table.json
+    settings    JSONB NOT NULL,     -- GIS layers, zone field, buffer
+    applied_by  TEXT NOT NULL,
+    note        TEXT,
+    run_id      BIGINT,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- One row per refresh the user starts. status: running -> ready (diff awaits
+-- review) -> applied | discarded, or failed.
+CREATE TABLE IF NOT EXISTS zoning_refresh_runs (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    status        TEXT NOT NULL DEFAULT 'running'
+                  CHECK (status IN ('running', 'ready', 'failed', 'applied', 'discarded')),
+    inputs        JSONB NOT NULL,
+    requested_by  TEXT NOT NULL,
+    note          TEXT,
+    progress      JSONB,            -- {done, total, step}
+    diff          JSONB,            -- what the refresh would change
+    proposed      JSONB,            -- the extracted use table and block lookups
+    error         TEXT,
+    reviewed_by   TEXT,
+    applied_version INT,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    finished_at   TIMESTAMPTZ,
+    reviewed_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_zoning_refresh_runs_created ON zoning_refresh_runs(created_at DESC);

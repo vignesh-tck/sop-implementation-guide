@@ -496,3 +496,22 @@ table.facts .cases { word-break: break-word; margin-bottom: .2rem; }
 .zone-context ul { margin: .2rem 0 0; padding-left: 1.2rem; }
 .zone-context li { margin-bottom: .2rem; line-height: 1.45; }
 .zone-context a { color: var(--silver); }
+
+/* ---- zoning refresh ---- */
+.refresh-panel fieldset { border: 1px solid var(--border); border-radius: 6px; padding: .5rem .75rem .65rem; margin: 0 0 .6rem; }
+.refresh-panel legend { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; padding: 0 .3rem; }
+.refresh-panel label.radio { display: flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--text); margin: .15rem 0; }
+.refresh-panel label.field { display: flex; flex-direction: column; gap: .2rem; margin-top: .4rem; font-size: .78rem; }
+.refresh-panel label.field input { font-size: .82rem; }
+.refresh-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: 0 .75rem; }
+@media (max-width: 700px) { .refresh-grid { grid-template-columns: minmax(0, 1fr); } }
+.refresh-run { border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; margin-bottom: .4rem; }
+.refresh-run .zl-top { flex-wrap: wrap; }
+.refresh-progress { margin-top: .5rem; }
+.refresh-progress .bar { height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: .3rem; overflow: hidden; }
+.refresh-progress .bar > div { height: 100%; background: var(--orange); transition: width .4s; }
+.refresh-diff { margin-top: .5rem; }
+.refresh-diff .zoning-h { margin-top: .7rem; }
+.refresh-diff table.facts td { font-size: .82rem; }
+.refresh-history { margin-top: .75rem; font-size: .82rem; }
+.refresh-history summary { cursor: pointer; color: var(--muted); }

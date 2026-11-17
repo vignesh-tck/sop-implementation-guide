@@ -58,3 +58,17 @@ export function References({ refs, seeStep }) {
     </ol>
   );
 }
+
+// A zoning outcome as a coloured badge: P, SE, X, LCD or ?.
+export const OUTCOME = {
+  by_right: { short: "P", text: "Permitted by right" },
+  special_exception: { short: "SE", text: "Special exception" },
+  prohibited: { short: "X", text: "Prohibited" },
+  legacy: { short: "LCD", text: "Legacy zone: set by approved plans" },
+  unknown: { short: "?", text: "Not resolved" },
+};
+
+export function Outcome({ outcome }) {
+  const o = OUTCOME[outcome] || OUTCOME.unknown;
+  return <span className={"outcome " + (outcome || "unknown")} title={o.text}>{o.short}</span>;
+}

@@ -59,9 +59,61 @@ def load_rules() -> dict:
 
 
 @lru_cache(maxsize=1)
-def load_use_table() -> dict:
+def load_file_use_table() -> dict:
+    """The use table committed in the repo: version 0, and the fallback."""
     with open(DATA / "zoning_use_table.json", encoding="utf-8") as f:
         return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# The zoning data in force
+#
+# The use table and the GIS settings can be refreshed from the Zoning tab. An
+# applied refresh is a row in zoning_data_versions (the hosted server's disk is
+# wiped on redeploy, so it can't be a file). Version 0 is the committed file
+# plus the default GIS settings. refresh_active(db) is called at the start of
+# each request that reads zoning; it costs one small query, and reloads the
+# full version only when a newer one has been applied.
+# ---------------------------------------------------------------------------
+
+_ACTIVE: dict = {"version": 0, "use_table": None, "settings": None, "applied_by": None,
+                 "created_at": None, "note": None}
+
+
+def refresh_active(db) -> dict:
+    """Load the newest applied data version if it changed. Returns its metadata."""
+    from backend.repositories.zoning import ZoningTablesMissing, ZoningVersionRepository
+
+    repo = ZoningVersionRepository(db)
+    try:
+        latest = repo.latest_number()
+    except ZoningTablesMissing:
+        latest = 0
+    if latest != _ACTIVE["version"]:
+        if latest == 0:
+            _ACTIVE.update(version=0, use_table=None, settings=None, applied_by=None, created_at=None, note=None)
+        else:
+            row = repo.get_version(latest)
+            _ACTIVE.update(version=latest, use_table=row["use_table"], settings=row["settings"],
+                           applied_by=row.get("applied_by"), created_at=row.get("created_at"),
+                           note=row.get("note"))
+    return active_version()
+
+
+def active_version() -> dict:
+    return {k: _ACTIVE[k] for k in ("version", "applied_by", "created_at", "note")}
+
+
+def load_use_table() -> dict:
+    """The use table in force: the newest applied version, else the committed file."""
+    return _ACTIVE["use_table"] or load_file_use_table()
+
+
+def active_settings() -> dict:
+    """GIS settings in force: defaults overlaid with the newest applied version's."""
+    from backend.tools.zoning_lookup import default_settings
+
+    return {**default_settings(load_rules()), **(_ACTIVE["settings"] or {})}
 
 
 def _norm(s: str) -> str:
@@ -69,16 +121,30 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-@lru_cache(maxsize=1)
 def _use_index() -> dict[str, dict]:
+    return build_index(load_use_table())
+
+
+# id(doc) -> (doc, index). The doc is kept so its id can't be reused by another
+# object while cached, and is compared by identity before a hit is trusted.
+_INDEX_CACHE: dict[int, tuple[dict, dict]] = {}
+
+
+def build_index(doc: dict) -> dict[str, dict]:
     """
     Base-zone use rows by name, merged across tables (c), (d) and (e).
 
     The overlay table (f) is left out: its X and P* mean "overrides the base
     zone", not "allowed here", so mixing it in would corrupt the base answer.
+    Cached per document, so switching data versions rebuilds it once.
     """
+    hit = _INDEX_CACHE.get(id(doc))
+    if hit and hit[0] is doc:
+        return hit[1]
+    if len(_INDEX_CACHE) > 4:
+        _INDEX_CACHE.clear()
     idx: dict[str, dict] = {}
-    for u in load_use_table()["uses"]:
+    for u in doc["uses"]:
         if u["table"] == "27-5101(f)":
             continue
         e = idx.setdefault(_norm(u["use"]), {"use": u["use"], "zones": {}, "tables": {}, "standards": []})
@@ -88,6 +154,7 @@ def _use_index() -> dict[str, dict]:
         for s in u["standards"]:
             if s not in e["standards"]:
                 e["standards"].append(s)
+    _INDEX_CACHE[id(doc)] = (doc, idx)
     return idx
 
 
@@ -109,8 +176,13 @@ def block_lookup(rows: list[dict]) -> dict | None:
 # Determination
 # ---------------------------------------------------------------------------
 
-def zone_finding(code: str, mapping: dict | None) -> dict:
-    """What the ordinance says about one recommendation's uses in one zone."""
+def zone_finding(code: str, mapping: dict | None, index: dict | None = None) -> dict:
+    """
+    What the ordinance says about one recommendation's uses in one zone.
+
+    index: a use index from build_index(); the one in force if omitted. A
+    refresh passes the proposed table's index to show what would change.
+    """
     zinfo = load_rules()["zones"].get(code, {})
     f = {"zone": code, "name": zinfo.get("name"), "uses": []}
     if zinfo.get("legacy"):
@@ -121,7 +193,7 @@ def zone_finding(code: str, mapping: dict | None) -> dict:
         return f
 
     for u in mapping["uses"]:
-        row = _use_index().get(_norm(u["row"]))
+        row = (index if index is not None else _use_index()).get(_norm(u["row"]))
         value = row["zones"].get(code) if row else None
         f["uses"].append({
             "label": u["label"],
@@ -300,7 +372,9 @@ def assess(rec: dict, rows: list[dict], block: dict | None = None) -> dict:
 
     buffer_m = lookup.get("buffer_m", rules.get("buffer_m", 25))
     looked_up = (lookup.get("fetched_at") or "")[:10]
-    r_map = refs.source("zoning_map", detail=f"Zones within {buffer_m} m of the block centerline, looked up {looked_up}")
+    # Cite the layer this block was actually looked up from, which a refresh can change.
+    map_ref = source_ref("zoning_map", detail=f"Zones within {buffer_m} m of the block centerline, looked up {looked_up}")
+    r_map = refs.add(map_ref["label"], lookup.get("layer_url") or map_ref["url"], map_ref["detail"])
 
     # What we found.
     codes = lookup["zones"]
@@ -354,7 +428,8 @@ def assess(rec: dict, rows: list[dict], block: dict | None = None) -> dict:
         say("ordinance", f"{zl}: {lr['text']}", r_rule)
 
         prior = [p for p in lookup.get("prior_zones", []) if p in rules["prior_design_zones"]]
-        r_prior = refs.source("prior_zoning", detail=f"Prior zones within {buffer_m} m")
+        prior_ref = source_ref("prior_zoning", detail=f"Prior zones within {buffer_m} m")
+        r_prior = refs.add(prior_ref["label"], lookup.get("prior_layer_url") or prior_ref["url"], prior_ref["detail"])
         if prior:
             prior_txt = _join([f"{p} ({rules['prior_design_zones'][p]})" for p in prior], "or")
             say("ordinance", f"On the prior map, the comprehensive design zone near this block was {prior_txt}.", r_prior)
@@ -447,7 +522,7 @@ def assess(rec: dict, rows: list[dict], block: dict | None = None) -> dict:
 # Block score
 # ---------------------------------------------------------------------------
 
-def score_block(recs: list[dict], rows: list[dict]) -> tuple[float | None, dict]:
+def score_block(recs: list[dict], rows: list[dict], index: dict | None = None) -> tuple[float | None, dict]:
     """
     Zoning sub-score 0-100 for a block, or None if nothing on it can be scored.
 
@@ -471,10 +546,57 @@ def score_block(recs: list[dict], rows: list[dict]) -> tuple[float | None, dict]
         mapping = mapping_for(rec.get("rec_label"))
         if rec.get("direction") == "Decrease" or mapping is None:
             continue
-        best = best_outcome([zone_finding(c, mapping) for c in lookup["zones"]])
+        best = best_outcome([zone_finding(c, mapping, index) for c in lookup["zones"]])
         if best is None:
             detail["unscorable"] += 1
             continue
         scores.append(points[best])
     detail["scored"] = len(scores)
     return (round(sum(scores) / len(scores), 1) if scores else None), detail
+
+
+# ---------------------------------------------------------------------------
+# Stored rows
+# ---------------------------------------------------------------------------
+
+def signal_rows(block_id: int, lookup: dict, run_id: str) -> list[dict]:
+    """
+    zoning_signals rows for one block's lookup: one per zone, or a single row
+    with current_zone NULL when the lookup found no zone, so "looked up, no
+    zone" stays distinguishable from "not looked up".
+    """
+    rules = load_rules()
+    park = mapping_for("Park/Playground")
+    mixed = mapping_for("Vertical mixed used buildings")
+
+    def allows(code: str, mapping: dict) -> bool | None:
+        outcome = zone_finding(code, mapping)["outcome"]
+        if outcome in ("by_right", "special_exception"):
+            return True
+        return False if outcome == "prohibited" else None
+
+    raw = {"lookup": lookup, "rules_version": rules["version"], "data_version": _ACTIVE["version"]}
+    if not lookup["zones"]:
+        return [{
+            "block_id": block_id, "current_zone": None, "zone_description": None,
+            "barrier_notes": f"No zoning polygon within {lookup['buffer_m']} m of the block.",
+            "raw_data": raw, "thread_id": run_id, "reviewed": False,
+        }]
+    out = []
+    for code in lookup["zones"]:
+        zinfo = rules["zones"].get(code, {})
+        out.append({
+            "block_id": block_id,
+            "current_zone": code,
+            "zone_description": zinfo.get("name"),
+            "allows_parks": allows(code, park),
+            "allows_mixed_use": allows(code, mixed),
+            "barrier_notes": (
+                "Legacy zone: uses are set by the site's approved plans (§27-4205(c)(3))."
+                if zinfo.get("legacy") else None
+            ),
+            "raw_data": raw,
+            "thread_id": run_id,
+            "reviewed": False,
+        })
+    return out

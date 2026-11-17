@@ -1,19 +1,12 @@
 import { useEffect, useState } from "react";
 import { call, num } from "../api.js";
-import { References, ZoningFinding } from "./ZoningParts.jsx";
+import RefreshPanel from "./RefreshPanel.jsx";
+import { OUTCOME, Outcome, References, ZoningFinding } from "./ZoningParts.jsx";
 
 // The data behind every zoning finding, in the open: which zones each block
 // fronts and why, what the ordinance allows for each recommendation type in each
 // zone, and every source with its date. Nothing here is computed in the browser;
 // it is what GET /zoning/overview and GET /blocks/{id}/zoning return.
-
-const OUTCOME = {
-  by_right: { short: "P", text: "Permitted by right" },
-  special_exception: { short: "SE", text: "Special exception" },
-  prohibited: { short: "X", text: "Prohibited" },
-  legacy: { short: "LCD", text: "Legacy zone: set by approved plans" },
-  unknown: { short: "?", text: "Not resolved" },
-};
 
 const STATUS = {
   attached: { text: "resolved", cls: "ok" },
@@ -30,11 +23,6 @@ function ZoneChips({ zones, legacy }) {
   return zones.map((z) => (
     <span key={z} className={"zone-chip" + (legacy.has(z) ? " legacy" : "")}>{z}</span>
   ));
-}
-
-function Outcome({ outcome }) {
-  const o = OUTCOME[outcome] || OUTCOME.unknown;
-  return <span className={"outcome " + (outcome || "unknown")} title={o.text}>{o.short}</span>;
 }
 
 // ---------------------------------------------------------------- Blocks
@@ -320,9 +308,10 @@ function UseTablePanel({ ov }) {
 
 // ---------------------------------------------------------------- Sources
 
-function SourcesPanel({ ov }) {
+function SourcesPanel({ ov, onApplied }) {
   return (
     <div className="sources-grid">
+      <div className="wide"><RefreshPanel onApplied={onApplied} /></div>
       <div className="card">
         <h4>Sources</h4>
         <References refs={ov.sources} />
@@ -389,9 +378,12 @@ export default function ZoningView() {
     window.history.replaceState(null, "", `#zoning/${t}`);
   }
 
-  useEffect(() => {
+  // Reloaded after a refresh is applied, so every view shows the new data version.
+  function load() {
     call("GET", "/zoning/overview").then(setOv).catch((e) => setError(e.message));
-  }, []);
+  }
+
+  useEffect(load, []);
 
   if (error) return <main className="view"><div className="pathways-wrap"><div className="banner err">Could not load zoning data — {error}</div></div></main>;
   if (!ov) return <main className="view"><div className="pathways-wrap"><div className="card spin">Loading zoning data…</div></div></main>;
@@ -414,6 +406,10 @@ export default function ZoningView() {
             <span><b>{st.overlay_blocks}</b> blocks in an overlay</span>
             <span><b>{f.attached || 0}</b> findings resolved · <b>{f.partial || 0}</b> resolved, SME to confirm · <b>{f.needs_sme || 0}</b> need the SME</span>
             <span>Use table current through <b>{ov.use_table.amended_through}</b></span>
+            <span>
+              Data version <b>{ov.data_version.version}</b>
+              {ov.data_version.version ? ` · applied by ${ov.data_version.applied_by} ${date(ov.data_version.created_at)}` : " · committed defaults"}
+            </span>
           </div>
         </div>
         <nav className="subtabs">
@@ -423,7 +419,7 @@ export default function ZoningView() {
         </nav>
         {tab === "blocks" && <BlocksPanel ov={ov} />}
         {tab === "table" && <UseTablePanel ov={ov} />}
-        {tab === "sources" && <SourcesPanel ov={ov} />}
+        {tab === "sources" && <SourcesPanel ov={ov} onApplied={load} />}
       </div>
     </main>
   );

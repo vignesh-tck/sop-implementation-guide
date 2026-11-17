@@ -64,6 +64,7 @@ def _funding_for(db: Client, block_id: int, rec_id: int) -> list[dict]:
 
 def _plan_response(db: Client, block: dict, rec: dict) -> dict:
     block_id = block["id"]
+    zoning.refresh_active(db)
     storage_ready = True
     try:
         saved = PlanRepository(db).get_for_rec(block_id, rec["id"])
@@ -98,6 +99,7 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
             funding_counts[s["rec_id"]] = funding_counts.get(s["rec_id"], 0) + 1
 
     templates = load_templates(db)
+    zoning.refresh_active(db)
     zoning_rows = ZoningRepository(db).get_for_block(block_id)
     lookup = zoning.block_lookup(zoning_rows)
     rows = []

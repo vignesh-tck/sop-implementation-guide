@@ -38,54 +38,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("sync_block_zoning")
 
 
-def bbox(blocks: list[dict]) -> tuple[float, float, float, float]:
-    pts = []
-    for b in blocks:
-        for path in zoning_lookup._paths(b["geometry_geojson"]):
-            pts += path
-    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-    return min(xs), min(ys), max(xs), max(ys)
-
-
-def rows_for(block_id: int, lookup: dict, run_id: str) -> list[dict]:
-    """One row per zone; a lookup that found no zone still writes one row, with current_zone NULL."""
-    rules = zoning.load_rules()
-    park = zoning.mapping_for("Park/Playground")
-    mixed = zoning.mapping_for("Vertical mixed used buildings")
-
-    def allows(code: str, mapping: dict) -> bool | None:
-        outcome = zoning.zone_finding(code, mapping)["outcome"]
-        if outcome in ("by_right", "special_exception"):
-            return True
-        return False if outcome == "prohibited" else None
-
-    raw = {"lookup": lookup, "rules_version": rules["version"]}
-    if not lookup["zones"]:
-        return [{
-            "block_id": block_id, "current_zone": None, "zone_description": None,
-            "barrier_notes": f"No zoning polygon within {lookup['buffer_m']} m of the block.",
-            "raw_data": raw, "thread_id": run_id, "reviewed": False,
-        }]
-    out = []
-    for code in lookup["zones"]:
-        zinfo = rules["zones"].get(code, {})
-        out.append({
-            "block_id": block_id,
-            "current_zone": code,
-            "zone_description": zinfo.get("name"),
-            "allows_parks": allows(code, park),
-            "allows_mixed_use": allows(code, mixed),
-            "barrier_notes": (
-                "Legacy zone: uses are set by the site's approved plans (§27-4205(c)(3))."
-                if zinfo.get("legacy") else None
-            ),
-            "raw_data": raw,
-            "thread_id": run_id,
-            "reviewed": False,
-        })
-    return out
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--block", type=int, action="append", help="Only these block ids (repeatable)")
@@ -94,6 +46,10 @@ def main() -> int:
     db = get_supabase()
     repo = ZoningRepository(db)
     rules = zoning.load_rules()
+    # Use the GIS settings in force (a refresh from the Zoning tab can change them).
+    version = zoning.refresh_active(db)["version"]
+    settings = zoning.active_settings()
+    log.info("Zoning data version %s; zoning layer %s", version, settings["zoning_layer_url"])
 
     query = db.table("blocks").select("id, street_name, geometry_geojson").order("id")
     if args.block:
@@ -104,7 +60,9 @@ def main() -> int:
         return 1
 
     try:
-        covered = zoning_lookup.sanity_check(bbox(blocks))
+        covered = zoning_lookup.sanity_check(
+            zoning_lookup.bbox([b["geometry_geojson"] for b in blocks]), settings, rules
+        )
     except zoning_lookup.ZoningLookupError as e:
         log.error("Could not reach the county zoning layer: %s", e)
         return 1
@@ -118,12 +76,12 @@ def main() -> int:
     ok = failed = 0
     for b in blocks:
         try:
-            lookup = zoning_lookup.lookup_block(b["geometry_geojson"], rules)
+            lookup = zoning_lookup.lookup_block(b["geometry_geojson"], rules, settings)
         except zoning_lookup.ZoningLookupError as e:
             log.warning("  block %s -> lookup FAILED (%s); keeping its previous rows", b["id"], e)
             failed += 1
             continue
-        repo.replace_for_block(b["id"], rows_for(b["id"], lookup, run_id))
+        repo.replace_for_block(b["id"], zoning.signal_rows(b["id"], lookup, run_id))
         extras = []
         if lookup["cases"]:
             extras.append(f"{sum(len(v) for v in lookup['cases'].values())} cases")
