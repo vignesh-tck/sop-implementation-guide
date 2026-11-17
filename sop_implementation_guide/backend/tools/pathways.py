@@ -320,6 +320,10 @@ def build_plan(
         "finalized_at": saved.get("finalized_at") if saved else None,
         "funding_count": len(funding),
         "zoning_summary": zoning["summary"] if zoning else None,
+        # The whole finding and funding list, for the recommendation's own Zoning
+        # and Funding views; the steps below carry the same data where it applies.
+        "zoning": zoning,
+        "funding": funding,
         "steps": _mark_zoning_detail(
             [_attach(s, funding, sources, zoning, ctx, templates, saved) for s in steps]
         ),

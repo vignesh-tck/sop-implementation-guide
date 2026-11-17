@@ -1,27 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { call, money, num } from "../api.js";
 import ReviewTable, { fitKey } from "./ReviewTable.jsx";
 import SignalsView from "./SignalsView.jsx";
 import ProfileCard from "./ProfileCard.jsx";
-import AllRecommendations from "./AllRecommendations.jsx";
-import PlanView from "./PlanView.jsx";
+import AllRecommendations, { rankRecs } from "./AllRecommendations.jsx";
+import RecommendationView from "./RecommendationView.jsx";
 
-// The recommendation that opens first: the one with the largest predicted gain.
-function topRecId(recs) {
-  const ranked = [...(recs || [])].sort(
-    (a, b) => (b.predicted_score_increase ?? -Infinity) - (a.predicted_score_increase ?? -Infinity)
-  );
-  return ranked[0]?.rec_id ?? null;
-}
+// A block in two levels. The front page is block-level only: its facts, its
+// recommendations and the block-wide funding analysis. Picking a recommendation
+// replaces that page with the recommendation's own view (RecommendationView),
+// with a way back, so the list and a plan never compete for the same scroll.
 
 export default function BlockDetail({ block, onProfileComputed }) {
   const [existingProfile, setExistingProfile] = useState(null);
   const [existingSignals, setExistingSignals] = useState(null);
   const [existingLoading, setExistingLoading] = useState(false);
   const [allRecommendations, setAllRecommendations] = useState(null);
+  // null = the block's front page; otherwise the recommendation stepped into.
   const [selectedRecId, setSelectedRecId] = useState(null);
-  // Bumped when funding is approved, so the open plan re-reads and picks up the new money.
-  const [planRefresh, setPlanRefresh] = useState(0);
+  // The panel scrolls as one; each move between list and recommendation starts at the top.
+  const scrollRef = useRef(null);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [selectedRecId]);
 
   const [thread, setThread] = useState(null); // { id, approved }
   const [analyzing, setAnalyzing] = useState(false);
@@ -71,7 +70,6 @@ export default function BlockDetail({ block, onProfileComputed }) {
       setExistingProfile(profile);
       setExistingSignals(signals);
       setAllRecommendations(plans?.recommendations || null);
-      setSelectedRecId(topRecId(plans?.recommendations));
       setExistingLoading(false);
     });
   }, [block]);
@@ -152,7 +150,6 @@ export default function BlockDetail({ block, onProfileComputed }) {
       const r = await call("POST", `/threads/${thread.id}/approve`, { fits, feedback: note });
       setThread((t) => ({ ...t, approved: true }));
       setApproveResult({ ...r, kept: fits.filter((f) => f.approved).length, total: fits.length });
-      setPlanRefresh((n) => n + 1);
       refreshPlans();
     } catch (e) {
       setApproveError(e.message);
@@ -180,25 +177,47 @@ export default function BlockDetail({ block, onProfileComputed }) {
     }
   }
 
-  return (
-    <section className="detail">
-      <h3>
-        {block.street_name || "(unnamed)"} <span className="meta">#{block.id}</span>
-      </h3>
-      <div className="sub">
-        {block.intersection_a || "—"} → {block.intersection_b || "—"} · tract {block.tract_geoid || "—"} ·
-        median HH income {money(block.median_hh_income)} · SoP {num(block.sop_index_norm)}/100
+  const header = (
+    <div className="block-head">
+      <div className="eyebrow-sm">Block {block.id}</div>
+      <h3>{block.street_name || "(unnamed)"}</h3>
+      <div className="assess">{block.intersection_a || "—"} → {block.intersection_b || "—"}</div>
+      <div className="chips">
+        <span className="chip brand">SoP {num(block.sop_index_norm)} / 100</span>
+        <span className="chip">Median HH income {money(block.median_hh_income)}</span>
+        <span className="chip">Tract {block.tract_geoid || "—"}</span>
       </div>
+    </div>
+  );
 
-      <AllRecommendations
-        recommendations={allRecommendations}
-        selectedRecId={selectedRecId}
-        onSelect={setSelectedRecId}
-      />
+  // Stepped into one recommendation: prev/next follow the list's order.
+  const ranked = rankRecs(allRecommendations);
+  const idx = ranked.findIndex((r) => r.rec_id === selectedRecId);
+  if (selectedRecId != null && idx >= 0) {
+    return (
+      <section className="detail" ref={scrollRef}>
+        {header}
+        <RecommendationView
+          key={block.id}
+          blockId={block.id}
+          recId={selectedRecId}
+          position={idx + 1}
+          total={ranked.length}
+          onBack={() => setSelectedRecId(null)}
+          onPrev={idx > 0 ? () => setSelectedRecId(ranked[idx - 1].rec_id) : null}
+          onNext={idx < ranked.length - 1 ? () => setSelectedRecId(ranked[idx + 1].rec_id) : null}
+          onChanged={refreshPlans}
+        />
+      </section>
+    );
+  }
 
-      {selectedRecId != null && (
-        <PlanView blockId={block.id} recId={selectedRecId} refreshKey={planRefresh} onSaved={refreshPlans} />
-      )}
+  return (
+    <section className="detail" ref={scrollRef}>
+      {header}
+
+      {existingLoading && !allRecommendations && <div className="spin">Loading recommendations…</div>}
+      <AllRecommendations recommendations={allRecommendations} onSelect={setSelectedRecId} />
 
       <div className="card">
         <h4>Funding analysis — attaches approved funding to each plan</h4>

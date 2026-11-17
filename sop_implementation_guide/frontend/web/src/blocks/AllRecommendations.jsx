@@ -1,85 +1,64 @@
-import { useState } from "react";
 import { num } from "../api.js";
 
-// The block's full recommendation list, from GET /blocks/{id}/plans. Picking one
-// opens its implementation plan. Open by default: choosing a recommendation is
-// where the planner starts, so the list is the entry point, not reference detail.
-const STATUS = { final: "final", draft: "draft" };
-const ZONING = {
-  by_right: { text: "zoning: by right", cls: "ok" },
-  special_exception: { text: "zoning: special exception", cls: "derived" },
-  prohibited: { text: "zoning: prohibited", cls: "gone" },
+// The block's recommendations, from GET /blocks/{id}/plans, ranked by predicted
+// gain. This is the block's front page: one row per recommendation and nothing
+// else, so picking one is the obvious next move. Each row's dot is that
+// recommendation's own zoning answer, so what can be built shows before opening.
+
+export const ZONING_DOT = {
+  by_right: { cls: "ok", text: "Zoning: permitted by right" },
+  special_exception: { cls: "cond", text: "Zoning: needs a special exception" },
+  prohibited: { cls: "no", text: "Zoning: prohibited" },
 };
+const NOT_CHECKED = { cls: "none", text: "Zoning: not checked or not resolved" };
 
-export default function AllRecommendations({ recommendations, selectedRecId, onSelect }) {
-  const [open, setOpen] = useState(true);
-  if (!recommendations?.length) return null;
-
-  const toggle = () => setOpen((o) => !o);
-
-  // Highest predicted score increase first; recs without a score go last.
-  const sorted = [...recommendations].sort(
+// Highest predicted gain first; recommendations without a score go last.
+export function rankRecs(recs) {
+  return [...(recs || [])].sort(
     (a, b) => (b.predicted_score_increase ?? -Infinity) - (a.predicted_score_increase ?? -Infinity)
   );
+}
+
+export default function AllRecommendations({ recommendations, onSelect }) {
+  if (!recommendations) return null;
+  if (!recommendations.length) return <div className="card assess">No recommendations on this block.</div>;
+  const sorted = rankRecs(recommendations);
 
   return (
-    <div className="card">
-      <div
-        className="all-recs-head"
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        onClick={toggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggle();
-          }
-        }}
-      >
-        <h4 style={{ margin: 0 }}>Recommendations ({recommendations.length}) — pick one to see its plan</h4>
-        <span className="caret">{open ? "▾" : "▸"}</span>
+    <div className="rec-list-wrap">
+      <div className="rec-list-head">
+        <h4>Recommendations ({recommendations.length})</h4>
+        <span className="legend-dots" aria-hidden="true">
+          <span className="zdot ok" /> by right <span className="zdot cond" /> conditional <span className="zdot none" /> not checked
+        </span>
       </div>
-      {open && (
-        <ol className="all-recs-list">
-          {sorted.map((r, i) => (
-            <li
-              key={r.rec_id}
-              className={"pick" + (r.rec_id === selectedRecId ? " selected" : "")}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSelect(r.rec_id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelect(r.rec_id);
-                }
-              }}
-            >
-              <span className="rank">{i + 1}</span>
-              <span className={"pill " + (r.direction === "Decrease" ? "no" : "yes")}>
-                {r.direction === "Decrease" ? "reduce" : "increase"}
-              </span>
-              <span className="label">
-                {r.rec_label}
-                <span className="dim"> · {r.pathway_name || "no pathway"}</span>
-              </span>
-              {r.funding_count > 0 && <span className="tag ok" title="Approved funding matches">funding {r.funding_count}</span>}
-              {ZONING[r.zoning_best] && (
-                <span className={"tag " + ZONING[r.zoning_best].cls} title="Best zoning outcome on this block, from the use tables">
-                  {ZONING[r.zoning_best].text}
+      <ol className="rec-list">
+        {sorted.map((r) => {
+          const z = ZONING_DOT[r.zoning_best] || NOT_CHECKED;
+          const down = r.direction === "Decrease";
+          return (
+            <li key={r.rec_id}>
+              <button type="button" className="rec-row" onClick={() => onSelect(r.rec_id)}>
+                <span className={"zdot " + z.cls} title={z.text} aria-label={z.text} />
+                <span className={"pill " + (down ? "no" : "yes")}>{down ? "reduce" : "increase"}</span>
+                <span className="rec-name">
+                  <span className="rec-label">{r.rec_label}</span>
+                  <span className="rec-dim">
+                    {r.dimension || "—"}
+                    {r.funding_count > 0 && <> · <span className="ok-text">{r.funding_count} funding</span></>}
+                    {r.plan_status === "final" && <> · <span className="ok-text">plan final</span></>}
+                    {r.plan_status === "draft" && <> · <span className="edited-text">plan draft</span></>}
+                  </span>
                 </span>
-              )}
-              {STATUS[r.plan_status] && (
-                <span className={"tag " + (r.plan_status === "final" ? "ok" : "edited")}>{STATUS[r.plan_status]}</span>
-              )}
-              {r.predicted_score_increase != null && (
-                <span className="kv">+{num(r.predicted_score_increase, 1)}</span>
-              )}
+                {r.predicted_score_increase != null && (
+                  <span className="rec-gain">{r.predicted_score_increase >= 0 ? "+" : ""}{num(r.predicted_score_increase, 1)}</span>
+                )}
+                <span className="chev" aria-hidden="true">›</span>
+              </button>
             </li>
-          ))}
-        </ol>
-      )}
+          );
+        })}
+      </ol>
     </div>
   );
 }

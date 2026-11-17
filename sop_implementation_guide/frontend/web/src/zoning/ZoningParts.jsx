@@ -24,9 +24,9 @@ export function zoningAnswer(z) {
 
 // The zoning finding: the answer first, then the background, then what is still
 // open. Every sentence carries the numbers of the references that back it.
-// `hideSummary` drops the summary line and `omit` drops sections, for when the
-// caller already shows the answer above the finding.
-export function ZoningFinding({ z, detail, seeStep, hideSummary = false, omit = [] }) {
+// `hideSummary` drops the summary line, `omit` drops sections and `hideQuestions`
+// the SME questions, for when the caller lays those out itself.
+export function ZoningFinding({ z, detail, seeStep, hideSummary = false, omit = [], hideQuestions = false }) {
   if (detail === "summary") {
     return <div className="zoning-summary">Zoning: {z.summary}. Full finding in step {seeStep}.</div>;
   }
@@ -45,7 +45,7 @@ export function ZoningFinding({ z, detail, seeStep, hideSummary = false, omit = 
           {g.items.map((p, i) => <p key={i}>{p.text}<Cites refs={p.refs} /></p>)}
         </div>
       ))}
-      {z.questions.length > 0 && <SmeQuestions items={z.questions} />}
+      {!hideQuestions && z.questions.length > 0 && <SmeQuestions items={z.questions} />}
     </div>
   );
 }
