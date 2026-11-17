@@ -11,11 +11,13 @@ the seed and the fallback. A host's disk gets wiped on redeploy, so edits can't
 be written back to the file. Templates are read on every call, so an edit shows
 up without a restart.
 
-A plan is the template plus whatever this system can attach to it. Today that is
-funding only: the step a template marks `filled_by: "funding"` gets the approved
-funding signals for that exact recommendation. Every other lookup (zoning, road
-owner, policy, parcel records, program terms) is marked as not automated, so the
-reviewer can see which parts are assumptions waiting on them rather than findings.
+A plan is the template plus whatever this system can attach to it. Each step's
+`filled_by` names the source meant to supply it: the template itself, an agent
+(funding, zoning, policy) or a lookup (parcel, road owner, program terms). The
+`live` flag on each source says whether it actually supplies anything yet. Today
+only the funding agent does: its step gets the approved funding signals for that
+exact recommendation. A step whose source is not live is labelled as needing the
+SME, so the reviewer can tell findings from blanks they have to fill.
 
 Funding is re-attached on every read, including for a plan someone already saved.
 The saved plan holds the reviewer's wording of the steps; the money is live, so a
@@ -166,19 +168,26 @@ def clean_step(step: dict) -> dict:
 
 
 def _attach(step: dict, funding: list[dict], sources: dict) -> dict:
-    """Add the step's input status, and the funding itself on a funding step."""
+    """
+    Say where the step's content comes from, and attach funding on a funding step.
+
+    input_status is one of: 'template' (fixed wording), 'attached' / 'missing'
+    (a live agent did or didn't return anything), or 'needs_sme' (the source
+    meant to supply it isn't built, so the reviewer does).
+    """
     s = dict(step)
-    kind = s.get("filled_by") or "template"
-    source = sources.get(kind, {})
-    s["source_label"] = source.get("label", kind)
-    if kind == "funding":
+    key = s.get("filled_by") or "template"
+    source = sources.get(key, {})
+    s["source_label"] = source.get("label", key)
+    s["source_kind"] = source.get("kind", "template")
+    s["source_note"] = source.get("note")
+    if key == "funding" and source.get("live"):
         s["funding"] = funding
         s["input_status"] = "attached" if funding else "missing"
-    elif kind == "template":
+    elif s["source_kind"] == "template":
         s["input_status"] = "template"
     else:
-        s["input_status"] = "manual"
-    s["source_note"] = source.get("note")
+        s["input_status"] = "needs_sme"
     return s
 
 

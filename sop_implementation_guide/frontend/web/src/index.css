@@ -397,3 +397,8 @@ td.pick input { accent-color: var(--orange); width: 16px; height: 16px; }
   padding: .25rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; break-inside: avoid;
 }
 .pathway-recs select { font-size: .75rem; padding: .15rem .3rem; max-width: 9rem; }
+.plan-table td.source { white-space: nowrap; }
+.plan-table td.source .tag { margin: 0 .25rem .2rem 0; }
+.source-hint { color: var(--muted); font-size: .72rem; }
+.source-legend { margin-top: .5rem; line-height: 1.9; }
+.source-legend b { font-size: .82rem; }

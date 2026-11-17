@@ -228,7 +228,7 @@ export default function PathwaysView() {
                 <div className="table-wrap">
                   <table className="plan-table">
                     <thead>
-                      <tr><th>#</th><th>Step</th><th>Owner</th><th>Waits on</th><th>Time</th><th>Input</th><th /></tr>
+                      <tr><th>#</th><th>Step</th><th>Owner</th><th>Waits on</th><th>Time</th><th>Source</th><th /></tr>
                     </thead>
                     <tbody>
                       {pathway.steps.map((s, i) => (
@@ -241,7 +241,9 @@ export default function PathwaysView() {
                           <td>
                             <select value={s.filled_by || "template"} onChange={(e) => changeStep(i, "filled_by", e.target.value)}
                               title={data.filled_by[s.filled_by]?.note}>
-                              {sources.map(([k, src]) => <option key={k} value={k}>{src.label}</option>)}
+                              {sources.map(([k, src]) => (
+                                <option key={k} value={k}>{src.label}{src.live ? "" : " (not built, SME fills)"}</option>
+                              ))}
                             </select>
                           </td>
                           <td className="row-actions">
@@ -255,7 +257,9 @@ export default function PathwaysView() {
                   </table>
                 </div>
                 <div className="kv plan-meta">
-                  "Waits on" refers to step numbers. Check it after you move or remove a step.
+                  Source is where a step's content comes from: an agent, a lookup, or the template's own wording.
+                  A source marked "not built" shows as Needs SME on every plan until it exists.
+                  "Waits on" refers to step numbers, so check it after you move or remove a step.
                 </div>
                 <div className="btn-row">
                   <button onClick={() => changeSteps((st) => [...st, { ...NEW_STEP }])}>+ Add step</button>

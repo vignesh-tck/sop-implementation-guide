@@ -12,28 +12,40 @@ function statusLine(plan) {
   return "Template — not reviewed yet";
 }
 
-// Whether a step's wording is the template's guess, a reviewer's change, or confirmed.
-function provenance(step, plan) {
-  if (step.edited) return <span className="tag edited">edited</span>;
-  if (plan.status === "final") return <span className="tag ok">confirmed</span>;
-  return <span className="tag" title="From the draft template — not yet confirmed by a reviewer">assumed</span>;
-}
-
-function InputTag({ s }) {
-  if (s.input_status === "attached") {
-    return <span className="tag ok" title={s.source_note}>{s.source_label} · {s.funding.length}</span>;
-  }
-  if (s.input_status === "missing") {
-    return (
-      <span className="tag derived" title="Run funding analysis for this block, then approve the fits you want kept">
-        no funding yet
-      </span>
+// Where a step's content comes from. A live agent's findings are labelled with
+// that agent; a source that isn't built yet falls to the SME; anything else is
+// the template's wording until the SME edits or confirms it.
+function SourceTags({ s, plan }) {
+  const final = plan.status === "final";
+  if (s.input_status === "needs_sme") {
+    return s.edited || final ? (
+      <span className="tag ok" title={`Supplied by the reviewer. ${s.source_note || ""}`}>SME</span>
+    ) : (
+      <>
+        <span className="tag derived" title={s.source_note}>Needs SME</span>
+        <div className="source-hint">no {s.source_label} yet</div>
+      </>
     );
   }
-  if (s.input_status === "manual") {
-    return <span className="tag derived" title={s.source_note}>{s.source_label} — not automated</span>;
-  }
-  return <span className="tag">template</span>;
+  return (
+    <>
+      {s.input_status === "attached" && (
+        <span className="tag ok" title={s.source_note}>{s.source_label} · {s.funding.length}</span>
+      )}
+      {s.input_status === "missing" && (
+        <span className="tag derived" title="Run funding analysis for this block, then approve the fits you want kept">
+          {s.source_label} · none approved yet
+        </span>
+      )}
+      {s.edited ? (
+        <span className="tag edited">SME edited</span>
+      ) : final ? (
+        <span className="tag ok">SME confirmed</span>
+      ) : (
+        <span className="tag" title="Draft template wording, not yet reviewed by an SME">Template</span>
+      )}
+    </>
+  );
 }
 
 function FundingList({ funding }) {
@@ -171,8 +183,7 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
             Who does the work: <b>{plan.pathway.who}</b> · {plan.pathway.branch}
           </div>
           <div className="kv plan-meta">
-            Template {plan.template_version}. Steps tagged <i>assumed</i> are the draft template's guess until a
-            reviewer edits or finalizes the plan.
+            Template {plan.template_version}.
             {plan.funding_count > 0
               ? ` ${plan.funding_count} approved funding match(es) attached.`
               : " No approved funding for this recommendation yet."}
@@ -188,7 +199,7 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
           <div className="table-wrap">
             <table className="plan-table">
               <thead>
-                <tr><th>#</th><th>Step</th><th>Owner</th><th>Waits on</th><th>Time</th><th>Input</th>{editing && <th />}</tr>
+                <tr><th>#</th><th>Step</th><th>Owner</th><th>Waits on</th><th>Time</th><th>Source</th>{editing && <th />}</tr>
               </thead>
               <tbody>
                 {rows.map((s, i) => (
@@ -200,7 +211,7 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
                         <td><input value={s.owner || ""} onChange={(e) => change(i, "owner", e.target.value)} /></td>
                         <td><input value={s.waits_on || ""} onChange={(e) => change(i, "waits_on", e.target.value)} /></td>
                         <td><input value={s.time || ""} onChange={(e) => change(i, "time", e.target.value)} /></td>
-                        <td>{s.input_status ? <InputTag s={s} /> : <span className="tag">template</span>}</td>
+                        <td className="source"><SourceTags s={s} plan={plan} /></td>
                         <td className="row-actions">
                           <button type="button" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
                           <button type="button" title="Move down" onClick={() => move(i, 1)} disabled={i === rows.length - 1}>↓</button>
@@ -210,19 +221,25 @@ export default function PlanView({ blockId, recId, refreshKey, onSaved }) {
                     ) : (
                       <>
                         <td>
-                          <div>{s.title} {provenance(s, plan)}</div>
+                          <div>{s.title}</div>
                           {s.input_status === "attached" && <FundingList funding={s.funding} />}
                         </td>
                         <td>{s.owner || <span className="assess">—</span>}</td>
                         <td className="assess">{s.waits_on || "—"}</td>
                         <td className="nowrap">{s.time || <span className="assess">—</span>}</td>
-                        <td><InputTag s={s} /></td>
+                        <td className="source"><SourceTags s={s} plan={plan} /></td>
                       </>
                     )}
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="kv source-legend">
+            <b>Source:</b> <span className="tag ok">Funding agent</span> found by an agent ·{" "}
+            <span className="tag">Template</span> draft wording, not yet reviewed ·{" "}
+            <span className="tag edited">SME edited</span> / <span className="tag ok">SME confirmed</span> set by the reviewer ·{" "}
+            <span className="tag derived">Needs SME</span> no agent or lookup supplies this yet, so the reviewer fills it in
           </div>
 
           {editing ? (

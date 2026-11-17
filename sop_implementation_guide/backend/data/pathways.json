@@ -4,13 +4,13 @@
   "status": "Draft. Owners and times are a strawman from general practice, not yet reviewed by an SME.",
 
   "filled_by": {
-    "template":      {"label": "Template",          "automated": false, "note": "Set by this template; the same on every block."},
-    "funding":       {"label": "Funding match",     "automated": true,  "note": "Approved funding signals for this recommendation."},
-    "parcel":        {"label": "Parcel records",    "automated": false, "note": "Owner and site lookup. Not automated yet."},
-    "zoning":        {"label": "Zoning lookup",     "automated": false, "note": "Zone and permitted-use check. Not automated yet."},
-    "road_owner":    {"label": "Road-owner lookup", "automated": false, "note": "State, county or city road. Not automated yet."},
-    "policy":        {"label": "Policy match",      "automated": false, "note": "Supporting or blocking plans and codes. Not automated yet."},
-    "program_terms": {"label": "Program terms",     "automated": false, "note": "The funding program's own post-award rules. Not extracted yet."}
+    "template":      {"label": "Template",             "kind": "template", "live": true,  "note": "Fixed wording from this template; the same on every block until an SME edits it."},
+    "funding":       {"label": "Funding agent",        "kind": "agent",    "live": true,  "note": "FundingAgent's approved funding matches for this recommendation."},
+    "zoning":        {"label": "Zoning agent",         "kind": "agent",    "live": false, "note": "ZoningAgent (parcel zone and permitted-use check) is not built yet, so the SME supplies this."},
+    "policy":        {"label": "Policy agent",         "kind": "agent",    "live": false, "note": "PolicyAgent (supporting or blocking plans and codes) is not built yet, so the SME supplies this."},
+    "parcel":        {"label": "Parcel lookup",        "kind": "lookup",   "live": false, "note": "County parcel records (owner and site) are not connected yet, so the SME supplies this."},
+    "road_owner":    {"label": "Road-owner lookup",    "kind": "lookup",   "live": false, "note": "Whether the road is State (MD SHA), County or City is not looked up yet, so the SME supplies this."},
+    "program_terms": {"label": "Program-terms lookup", "kind": "lookup",   "live": false, "note": "The funding program's post-award rules are not extracted yet, so the SME supplies this."}
   },
 
   "pathways": [
