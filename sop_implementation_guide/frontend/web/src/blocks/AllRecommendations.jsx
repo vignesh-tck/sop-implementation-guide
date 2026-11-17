@@ -10,6 +10,11 @@ export default function AllRecommendations({ recommendations }) {
 
   const toggle = () => setOpen((o) => !o);
 
+  // Highest predicted score increase first; recs without a score go last.
+  const sorted = [...recommendations].sort(
+    (a, b) => (b.predicted_score_increase ?? -Infinity) - (a.predicted_score_increase ?? -Infinity)
+  );
+
   return (
     <div className="card">
       <div
@@ -30,7 +35,7 @@ export default function AllRecommendations({ recommendations }) {
       </div>
       {open && (
         <ol className="all-recs-list">
-          {recommendations.map((r, i) => (
+          {sorted.map((r, i) => (
             <li key={r.id}>
               <span className="rank">{i + 1}</span>
               <span className={"pill " + (r.direction === "Decrease" ? "no" : "yes")}>
