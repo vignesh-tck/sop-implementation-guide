@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Optional
 
-from backend.tools import grants_gov, web_source
+from backend.tools import grants_gov, source_store, web_source
 from backend.tools.llm_extractor import structured_call
 
 log = logging.getLogger(__name__)
@@ -290,10 +290,18 @@ def _source_key(src: dict) -> str:
 
 
 def fetch_source(src: dict, fresh: bool = False) -> dict:
-    """Fetch one source (cached). Raises PipelineError with a readable reason."""
+    """
+    One source's text: from memory, else from its saved copy, else downloaded
+    (and saved). Only fresh downloads again. Raises PipelineError with a readable reason.
+    """
     key = _source_key(src)
-    if not fresh and key in _SOURCE_CACHE:
-        return _SOURCE_CACHE[key]
+    if not fresh:
+        if key in _SOURCE_CACHE:
+            return _SOURCE_CACHE[key]
+        saved = source_store.load(key)
+        if saved:
+            _SOURCE_CACHE[key] = saved
+            return saved
     try:
         if src["kind"] == "grants_gov":
             text, hits = grants_gov.as_source_text(src["query"])
@@ -305,7 +313,19 @@ def fetch_source(src: dict, fresh: bool = False) -> dict:
     except Exception as e:  # noqa: BLE001 — every failure is reported to the user
         raise PipelineError(f"Could not read {src.get('label') or src.get('url') or src.get('query')}: {e}") from e
     _SOURCE_CACHE[key] = fetched
+    source_store.save(key, fetched)
     return fetched
+
+
+def source_links(doc: dict) -> list[dict]:
+    """
+    The pages a fetched source links to. For PDFs and plain text they are read
+    from the saved text again, so copies saved before a link-parsing fix benefit too.
+    """
+    ctype = doc.get("content_type") or ""
+    if "pdf" in ctype or ctype in ("text/plain", "text/csv"):
+        return web_source.text_links(doc.get("text"))
+    return doc.get("links") or []
 
 
 def source_meta(fetched: dict) -> dict:
@@ -677,8 +697,23 @@ def _page(url: str, fresh: bool = False) -> dict:
     return fetch_source({"kind": "url", "url": url}, fresh=fresh)
 
 
+class _Unreachable(Exception):
+    """A linked page could not be downloaded (as opposed to a failure while reading it)."""
+
+
+def _url_key(url: str) -> str:
+    """Pages that differ only in case or a trailing slash are read once."""
+    return url.rstrip("/").lower()
+
+
 def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, context: str,
-              say: Callable[[str], None]) -> list[str]:
+              say: Callable[[str], None], source_doc: Callable[[str], dict], dead: dict[str, str]) -> list[str]:
+    """
+    source_doc(source_id) gives a source's text as the run already holds it, so
+    research follows its links without downloading the source again. dead maps
+    linked pages that could not be read to why; they are not retried until a
+    fresh re-run.
+    """
     cfg = step["config"]
     wanted = cfg.get("fields") or []
     targets = [f for f in fields if f.get("extract", True) and (not wanted or f["name"] in wanted)]
@@ -696,25 +731,35 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
         return [f["name"] for f in targets if _blank(r["values"].get(f["name"]))]
 
     # 1. Plan: which pages to read for which record, one model call per source page, all in parallel.
+    # A record's links come from the source it was extracted from, as this run holds it.
     plan: dict[str, list[str]] = {}
-    groups: dict[str, list[dict]] = {}
+    groups: dict[tuple[str | None, str], list[dict]] = {}
     for r in todo:
-        groups.setdefault(r.get("source_url") or "", []).append(r)
+        groups.setdefault((r.get("source_id"), r.get("source_url") or ""), []).append(r)
     group_items = list(groups.items())
 
-    def links_for(item: tuple[str, list[dict]]) -> list[dict]:
-        src_url = item[0]
-        links = (_page(src_url).get("links") or []) if src_url else []
-        return [l for l in links if l["url"].rstrip("/") != (src_url or "").rstrip("/")][:250]
+    def links_for(item: tuple[tuple[str | None, str], list[dict]]) -> list[dict]:
+        (sid, src_url), _recs = item
+        if not sid:
+            return []
+        doc = source_doc(sid)
+        own = {_url_key(u) for u in (src_url, doc.get("url"), doc.get("final_url")) if u}
+        out, seen = [], set()
+        for l in source_links(doc):
+            k = _url_key(l["url"])
+            if k not in own and k not in seen:
+                seen.add(k)
+                out.append(l)
+        return out[:250]
 
     choose_schema = _obj({"choices": {"type": "array", "items": _obj({
         "id": {"type": "string"}, "links": {"type": "array", "items": {"type": "integer"}},
         "why": {"type": "string"}})}})
     choose_jobs: dict[str, str] = {}
     chosen: list[tuple[list[dict], list[dict], str | None]] = []
-    for (src_url, recs), links in zip(group_items, _parallel(links_for, group_items)):
+    for ((_sid, src_url), recs), links in zip(group_items, _parallel(links_for, group_items)):
         if isinstance(links, Exception):
-            warnings.append(f"could not reopen {src_url}: {links}")
+            warnings.append(f"could not get the links on {src_url}: {links}")
             links = []
         key = None
         if links:
@@ -758,11 +803,18 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
     # 2. Read each chosen page once, for every record that chose it. Pages are read and
     # questioned in parallel; their answers are applied below in a fixed order.
     pages: dict[str, list[dict]] = {}
+    first_url: dict[str, str] = {}
     recs_by_id = {r["id"]: r for r in todo}
     for rid, urls in plan.items():
         for u in urls:
-            if rid in recs_by_id:
+            u = first_url.setdefault(_url_key(u), u)
+            if rid in recs_by_id and recs_by_id[rid] not in pages.get(u, []):
                 pages.setdefault(u, []).append(recs_by_id[rid])
+    # Pages that failed before are not retried (a fresh re-run clears this).
+    skipped = {u: dead[_url_key(u)] for u in pages if _url_key(u) in dead}
+    for u, why in skipped.items():
+        for r in pages.pop(u):
+            r.setdefault("research", []).append({"url": u, "error": f"not retried: {why}"})
     filled_total, replaced_total, conflicts_total, discarded = 0, 0, 0, 0
     names = [f["name"] for f in targets]
     fill_schema = _obj({"results": {"type": "array", "items": _obj({
@@ -780,7 +832,10 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
     def read(item: tuple[str, list[dict]]) -> tuple[dict, str, list[dict] | None]:
         """Fetch a page and ask about it. Reads the cache, never writes it."""
         url, recs = item
-        doc = _page(url)
+        try:
+            doc = _page(url)
+        except PipelineError as e:
+            raise _Unreachable(e) from e
         digest = [{"id": r["id"], "known": {k: v for k, v in r["values"].items() if not _blank(v)},
                    "blank": blanks(r)} for r in recs]
         key = _hash(["research_page", MODEL, context, url, (doc.get("text") or "")[:SOURCE_CHARS], digest]
@@ -798,9 +853,15 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
     page_items = list(pages.items())
     if page_items:
         say(f"Reading {len(page_items)} page(s), {min(len(page_items), PARALLEL)} at a time")
+    unreadable: dict[str, str] = {}
     for (url, recs), got in zip(page_items, _parallel(read, page_items)):
         if isinstance(got, Exception):
-            warnings.append(f"could not read {url}: {got}")
+            why = _why(got, url)
+            if isinstance(got, _Unreachable):   # only a failed download is remembered, not a model error
+                unreadable[url] = why
+                dead[_url_key(url)] = why
+            else:
+                warnings.append(f"could not research {url}: {why}")
             for r in recs:
                 r.setdefault("research", []).append({"url": url, "error": str(got)})
             continue
@@ -851,10 +912,25 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
         warnings.append("Conflicts are listed on each record; the values were not changed. Check them.")
     if discarded:
         warnings.append(f"{discarded} value(s) discarded because their quote was not found on the page.")
+    if unreadable or skipped:
+        listed = "; ".join(f"{u} ({why})" for u, why in {**unreadable, **skipped}.items())
+        warnings.append(f"{len(unreadable) + len(skipped)} linked page(s) could not be read. These are links found on "
+                        f"your sources, not the sources themselves, and are not retried until a fresh re-run: {listed}")
     if nothing:
         warnings.append(f"No promising page for {len(nothing)} record(s)"
                         + ("" if cfg.get("web_search") else "; web_search could look further") + ".")
     return warnings
+
+
+def _why(e: Exception, url: str) -> str:
+    """A short reason a page failed: "HTTP 404" rather than the full nested message."""
+    m = re.search(r"HTTP (\d{3})", str(e))
+    if m:
+        return f"HTTP {m.group(1)}"
+    s = str(e)
+    for prefix in (f"Could not read {url}: ", f"Could not reach {url}: "):
+        s = s.replace(prefix, "")
+    return s[:160]
 
 
 FILL_PROMPT = """For each record below, set the field `{field}` ({type_desc}).
@@ -1302,6 +1378,26 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
 
 # ── Runner ───────────────────────────────────────────────────────────────────
 
+def step_signatures(definition: dict, context: str = "") -> list[str]:
+    """
+    One fingerprint per step of everything its output depends on: the fields,
+    the sources, the context, and this step and every step before it. A stored
+    output whose fingerprint still matches can be reused instead of recomputed.
+    """
+    schema = definition.get("schema") or {}
+    sig = _hash({
+        "context": context,
+        "fields": [{k: f.get(k) for k in ("name", "type", "required", "enum_values", "extract", "description")}
+                   for f in schema.get("fields", [])],
+        "sources": [{k: s.get(k) for k in ("id", "kind", "url", "query")} for s in definition.get("sources", [])],
+    })
+    sigs = []
+    for s in definition.get("steps") or []:
+        sig = _hash({"after": sig, "step": {k: s.get(k) for k in ("id", "type", "config")}})
+        sigs.append(sig)
+    return sigs
+
+
 def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh: bool = False,
         context: str = "", progress: Callable[[str], None] | None = None) -> dict:
     """
@@ -1311,6 +1407,11 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
     capped at PREVIEW_RECORDS), warnings and errors, coverage, and the model
     call cache. A step that fails stops the run there; earlier outputs stay.
     fresh refetches sources and ignores the model cache, for a real re-run.
+
+    Unless fresh, the run resumes where the last one left off: the leading
+    steps whose stored output still matches their fingerprint (and holds every
+    record) are reused as they are, and computing starts at the first step
+    that changed. Sources are read only if a step that runs needs them.
     """
     fields = (definition.get("schema") or {}).get("fields") or []
     sources = definition.get("sources") or []
@@ -1323,21 +1424,50 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             with lock:
                 progress(msg)
 
-    fetched, src_state = {}, {}
-    say(f"Reading {len(sources)} source(s)")
-    for s, got in zip(sources, _parallel(lambda s: fetch_source(s, fresh=fresh), sources)):
-        if isinstance(got, Exception):
-            src_state[s["id"]] = {"error": str(got)}
-        else:
-            fetched[s["id"]] = got
-            src_state[s["id"]] = source_meta(got)
+    sigs = step_signatures(definition, context)
+    last = next((i for i, s in enumerate(steps) if s["id"] == upto), len(steps) - 1) if upto else len(steps) - 1
+    prior = state.get("outputs") or {}
+    reused = []
+    if not fresh and fields:
+        for i, step in enumerate(steps[:last + 1]):
+            out = prior.get(step["id"])
+            if not out or out.get("error") or out.get("sig") != sigs[i] or len(out.get("records") or []) != out.get("count"):
+                break
+            reused.append(step["id"])
+
+    fetched, src_state = {}, dict(state.get("sources") or {})
+    if fresh or any(s["type"] == "extract" for s in steps[len(reused):last + 1]):
+        say(f"Reading {len(sources)} source(s)")
+        src_state = {}
+        for s, got in zip(sources, _parallel(lambda s: fetch_source(s, fresh=fresh), sources)):
+            if isinstance(got, Exception):
+                src_state[s["id"]] = {"error": str(got)}
+            else:
+                fetched[s["id"]] = got
+                src_state[s["id"]] = source_meta(got)
     state["sources"] = src_state
+
+    by_id = {s["id"]: s for s in sources}
+
+    def source_doc(sid: str) -> dict:
+        """The source as this run read it; if extract was reused, its saved copy."""
+        if sid not in fetched and sid in by_id:
+            fetched[sid] = fetch_source(by_id[sid])
+        return fetched.get(sid) or {}
+
+    dead = {} if fresh else dict(state.get("dead_links") or {})
 
     records: list[dict] = []
     outputs, errors = {}, []
+    if reused:
+        outputs = {sid: prior[sid] for sid in reused}
+        records = json.loads(json.dumps(prior[reused[-1]]["records"]))
+        say(f"Starting after {reused[-1]}: reusing the saved output of {', '.join(reused)}")
     if not fields:
         errors.append("No target schema yet.")
-    for step in steps if fields else []:
+    for i, step in enumerate(steps if fields else []):
+        if i < len(reused):
+            continue
         say(f"Running {step['id']} ({step['type']})")
         try:
             cfg = validate_step(kind, step["type"], step["config"], fields)
@@ -1346,7 +1476,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
                 new, warnings = _extract(step, sources, fetched, fields, context, cache, say)
                 records = records + new
             elif step["type"] == "research":
-                warnings = _research(step, records, fields, cache, context, say)
+                warnings = _research(step, records, fields, cache, context, say, source_doc, dead)
             elif step["type"] == "llm_fill":
                 warnings = _model_fill(step, records, fields, cache, step["config"]["instruction"], "llm_fill")
             elif step["type"] == "geo_tie":
@@ -1359,7 +1489,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             outputs[step["id"]] = {"error": str(e), "count": len(records)}
             break
         records = json.loads(json.dumps(records, default=str))  # snapshot, so later steps don't rewrite this one
-        outputs[step["id"]] = {"count": len(records), "warnings": warnings,
+        outputs[step["id"]] = {"count": len(records), "warnings": warnings, "sig": sigs[i],
                                "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields)}
         if upto and step["id"] == upto:
             break
@@ -1373,10 +1503,12 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
 
     # The cache only keeps entries this run used or still could, bounded.
     state["cache"] = dict(list(cache.items())[-120:])
+    state["dead_links"] = dict(list(dead.items())[-300:])
     state["outputs"] = outputs
     state["last_run"] = {
         "at": datetime.now(timezone.utc).isoformat(),
         "upto": upto,
+        "reused": reused,
         "complete": upto is None and not errors and len(outputs) == len(steps),
         "definition_hash": definition_hash(definition) if upto is None else None,
         "records": records,

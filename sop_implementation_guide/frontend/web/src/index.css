@@ -940,3 +940,10 @@ main.view.pl-view {
 }
 .pl-reader-text mark { background: color-mix(in srgb, var(--gold) 35%, transparent); color: inherit; border-radius: 2px; }
 .pl-reader-text mark.cur { background: var(--gold); color: #000; }
+.pl-warn-list { margin: .25rem 0 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .15rem; word-break: break-word; }
+.pl-reader-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--border); }
+.pl-reader-tabs button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: .3rem .6rem; font-weight: 500; color: var(--muted); margin-bottom: -1px; }
+.pl-reader-tabs button.on { color: var(--text); border-bottom-color: var(--orange); font-weight: 650; }
+.pl-reader-links { white-space: normal; font-family: inherit; }
+.pl-reader-links ol { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: .35rem; }
+.pl-reader-links a { word-break: break-all; }

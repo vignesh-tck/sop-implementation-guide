@@ -158,7 +158,7 @@ def add_source(db: Client, pipeline_id: int, kind: str, url: str | None = None, 
            **({"url": url} if kind == "url" else {"query": query}),
            "label": (label or "").strip() or (url if kind == "url" else f"Grants.gov: {query}")}
     try:
-        meta = engine.source_meta(engine.fetch_source(src))
+        meta = engine.source_meta(engine.fetch_source(src, fresh=True))   # downloaded now, then read from its saved copy
     except PipelineError as e:
         meta = {"error": str(e)}
     p["definition"]["sources"].append(src)
@@ -193,8 +193,9 @@ def source_text(db: Client, pipeline_id: int, source_id: str) -> dict:
     src = next((s for s in p["definition"]["sources"] if s["id"] == source_id), None)
     if not src:
         raise LookupError(f"No source {source_id}.")
-    fetched = engine.fetch_source(src)   # cached; refetched only after a server restart
-    return {**src, **engine.source_meta(fetched), "preview": None, "text": fetched.get("text") or ""}
+    fetched = engine.fetch_source(src)   # its saved copy; never downloaded again here
+    return {**src, **engine.source_meta(fetched), "preview": None, "text": fetched.get("text") or "",
+            "links": engine.source_links(fetched)}
 
 
 def finalize_sources(db: Client, pipeline_id: int) -> dict:
@@ -491,6 +492,7 @@ def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = Fal
         gaps = ", ".join(f"`{g}`" for g in cov["blocking_gaps"])
         text = (f"{'Preview to ' + upto if upto else ('Fresh re-run' if fresh else 'Run')} finished: "
                 f"{cov['records']} record(s)."
+                + (f" Started after {last['reused'][-1]}, reusing its saved output." if last.get("reused") else "")
                 + (f" Required fields with blanks: {gaps}." if gaps else "")
                 + (f" Errors: {'; '.join(last['errors'])}" if last["errors"] else ""))
         if upto is None:
@@ -530,7 +532,7 @@ def review_text(rv: dict, label: str = "Funding") -> str:
 def summarise_run(last: dict | None) -> dict | None:
     if not last:
         return None
-    return {k: last.get(k) for k in ("at", "upto", "complete", "coverage", "errors", "review", "removed",
+    return {k: last.get(k) for k in ("at", "upto", "reused", "complete", "coverage", "errors", "review", "removed",
                                      "override_notes")}
 
 

@@ -13,6 +13,7 @@ export default function SourceReader({ pipelineId, source, meta }) {
   const [got, setGot] = useState({ key: null, data: null, error: null });
   const [q, setQ] = useState("");
   const [cur, setCur] = useState(0);
+  const [tab, setTab] = useState("text");
   const pre = useRef(null);
 
   const sid = source?.id;
@@ -52,13 +53,29 @@ export default function SourceReader({ pipelineId, source, meta }) {
       </div>
       <div className="assess pl-reader-meta">
         {(data?.final_url || source.url) && <a href={data?.final_url || source.url} target="_blank" rel="noreferrer">{data?.final_url || source.url}</a>}
-        {data && <span>{data.content_type || "text"} · {data.chars.toLocaleString()} chars{data.truncated ? " (truncated: only this much is read)" : ""}</span>}
+        {data && <span>{data.content_type || "text"} · {data.chars.toLocaleString()} chars{data.truncated ? " (truncated: only this much is read)" : ""}
+          {data.fetched_at ? ` · downloaded ${data.fetched_at.slice(0, 16).replace("T", " ")}; runs read this copy` : ""}</span>}
       </div>
       {meta?.error ? <div className="banner err">{meta.error}</div>
         : got.key === key && got.error ? <div className="banner err">{got.error}</div>
         : loading ? <div className="assess">Loading the text…</div>
         : (
           <>
+            <div className="pl-reader-tabs">
+              <button className={tab === "text" ? "on" : ""} onClick={() => setTab("text")}>Text</button>
+              <button className={tab === "links" ? "on" : ""} onClick={() => setTab("links")}
+                      title="Pages linked from this source: what a research step can follow">Links ({data?.links?.length ?? 0})</button>
+            </div>
+            {tab === "links" ? (
+              <div className="pl-reader-text pl-reader-links">
+                {data?.links?.length ? (
+                  <ol>{data.links.map((l, i) => (
+                    <li key={i}><a href={l.url} target="_blank" rel="noreferrer">{l.url}</a>
+                      {l.text && <div className="assess">{l.text}</div>}</li>
+                  ))}</ol>
+                ) : <i>No links found on this source, so a research step has nothing to follow from it (web search can look further).</i>}
+              </div>
+            ) : (<>
             <div className="pl-reader-bar">
               <input placeholder="Find in this source" value={q} onChange={(e) => { setQ(e.target.value); setCur(0); }}
                      onKeyDown={(e) => e.key === "Enter" && setCur((c) => c + (e.shiftKey ? -1 : 1))} />
@@ -70,6 +87,7 @@ export default function SourceReader({ pipelineId, source, meta }) {
               {text ? parts.map((p, i) => (i % 2 ? <mark key={i} className={(i - 1) / 2 === at ? "cur" : ""}>{p}</mark> : p))
                 : <i>The source was read but contains no text.</i>}
             </pre>
+            </>)}
           </>
         )}
     </div>

@@ -290,10 +290,15 @@ function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy }) {
         {isLast && <span className="assess">previewing the last step runs the whole pipeline</span>}
       </div>
       {!out && <div className="assess">Not previewed with the current settings yet.</div>}
+      {out && view.last_run?.upto === step.id && view.last_run.reused?.length > 0 && (
+        <div className="assess">Started after {view.last_run.reused[view.last_run.reused.length - 1]}: the steps before it were unchanged, so their saved output was reused.</div>
+      )}
       {out?.error && <div className="banner err">{out.error}</div>}
       {out && !out.error && (
         <>
-          {out.warnings?.length > 0 && <div className="pl-warn">{out.warnings.join(" · ")}</div>}
+          {out.warnings?.length > 0 && (
+            <ul className="pl-warn pl-warn-list">{out.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+          )}
           {records.length < out.count && <div className="assess">First {records.length} of {out.count} records shown.</div>}
           <label className="assess"><input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} />
             {" "}Only records needing attention ({flagged})</label>

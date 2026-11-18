@@ -144,10 +144,20 @@ def html_links(body: str, base_url: str) -> list[dict]:
 _TEXT_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"')\]]+|\b[a-z0-9.-]+\.(?:gov|org|us|edu)/[^\s<>\"')\]]*", re.I)
 
 
+# A URL that a PDF wrapped at a hyphen: "https://mht.maryland.gov/planning-protection/maryland-\nheritage-areas".
+_WRAPPED_URL = re.compile(r"((?:https?://|www\.|\b[a-z0-9.-]+\.(?:gov|org|us|edu)/)[^\s<>\"')\]]*-)[ \t]*\r?\n[ \t]*(?=[a-z0-9])", re.I)
+
+
 def text_links(text: str) -> list[dict]:
     """URLs printed in plain or PDF text, as [{text, url}]."""
     out, seen = [], set()
-    for m in _TEXT_URL.finditer(text or ""):
+    text = text or ""
+    for _ in range(4):   # a URL can wrap more than once
+        joined = _WRAPPED_URL.sub(r"\1", text)
+        if joined == text:
+            break
+        text = joined
+    for m in _TEXT_URL.finditer(text):
         raw = m.group(0).rstrip(".,;:")
         url = raw if raw.lower().startswith("http") else "https://" + raw
         if url in seen:
