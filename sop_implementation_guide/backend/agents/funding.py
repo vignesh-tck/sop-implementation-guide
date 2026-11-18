@@ -18,6 +18,12 @@ not a verdict — nothing is written that the reviewer did not keep, and nothing
 earlier review kept survives a later one that takes it back.
 
 Everything here reads from Supabase, so no third-party API is on the demo path.
+
+Each run is a Block Funding analysis tied to one Funding dataset version (the
+latest unless one is named): the programmes assessed are that version's, and
+the signals written belong to that analysis. Approving completes the analysis
+and pins it to the block, so plans and the gold layer read it. An earlier
+run's signals are kept and stay re-pinnable.
 """
 
 from typing import TypedDict, Optional, Any
@@ -29,9 +35,11 @@ from langgraph.types import Command, interrupt
 from backend.agents.base import SpecialistAgent
 from backend.config import settings
 from backend.db.session import get_supabase
+from backend.repositories.datasets import BlockAnalysisRepository
 from backend.repositories.recommendations import BlockRepository
 from backend.repositories.funding import FundingRepository
 from backend.repositories.funding_programs import FundingProgramRepository
+from backend.tools import datasets
 from backend.tools.llm_extractor import assess_recommendation_fit
 
 
@@ -40,6 +48,8 @@ from backend.tools.llm_extractor import assess_recommendation_fit
 class FundingState(TypedDict):
     block_id: int
     thread_id: str
+    analysis_id: Optional[int]        # the block_analyses row this run writes into
+    dataset_version_id: Optional[int] # the Funding version assessed; None = live catalogue
     block_data: dict                 # from blocks table
     recommendations: list[dict]       # block_recommendations rows, rank order
     candidate_programs: list[dict]    # rows from funding_programs
@@ -103,8 +113,15 @@ def load_block(state: FundingState) -> dict:
 
 
 def load_programs(state: FundingState) -> dict:
-    """Read the funding catalogue filled by discovery sessions."""
-    programs = FundingProgramRepository(get_supabase()).list_candidates()
+    """
+    The programmes in this run's Funding version. Only with no versions at all
+    (before the dataset tables exist) does it fall back to the live catalogue.
+    """
+    db = get_supabase()
+    if state.get("dataset_version_id"):
+        programs = datasets.funding_programs(db, state["dataset_version_id"])[:50]
+    else:
+        programs = FundingProgramRepository(db).list_candidates()
     return {"candidate_programs": programs}
 
 
@@ -323,12 +340,14 @@ def write_signals(state: FundingState) -> dict:
     for s in state.get("rejected_signals") or []:
         if s.get("program_name"):
             by_rec.setdefault(s.get("rec_id"), []).append(s["program_name"])
+    analysis_id = state.get("analysis_id")
     for rec_id, names in by_rec.items():
-        removed_ids.extend(repo.delete_for_rec(state["block_id"], rec_id, names))
+        removed_ids.extend(repo.delete_for_rec(state["block_id"], rec_id, names, analysis_id))
 
     for s in state["final_signals"]:
         row = {
             "block_id": state["block_id"],
+            "analysis_id": analysis_id,
             "rec_id": s.get("rec_id"),
             "rec_label": s.get("rec_label"),
             "program_name": s.get("program_name"),
@@ -372,6 +391,17 @@ def write_signals(state: FundingState) -> dict:
         if result.get("id"):
             written_ids.append(result["id"])
 
+    # The run is now the block's funding answer: complete it and pin it, even
+    # when everything was rejected ("no funding fits on this version" is an answer).
+    if analysis_id is not None:
+        analyses = BlockAnalysisRepository(db)
+        analyses.complete(analysis_id, {
+            "signals": len(written_ids),
+            "recommendations": len({s.get("rec_id") for s in state["final_signals"]}),
+            "programs_assessed": len(state.get("candidate_programs") or []),
+        })
+        analyses.pin({"id": analysis_id, "block_id": state["block_id"], "kind": "funding"})
+
     return {"written_signal_ids": written_ids, "removed_signal_ids": removed_ids}
 
 
@@ -402,12 +432,32 @@ class FundingAgent(SpecialistAgent):
 
         return builder.compile(checkpointer=self._checkpointer)
 
-    def run(self, block_id: int, thread_id: str) -> dict:
-        """Start analysis. Graph will pause at human_review node."""
+    def run(self, block_id: int, thread_id: str, version: Optional[int] = None,
+            name: Optional[str] = None, created_by: Optional[str] = None) -> dict:
+        """
+        Start a Block Funding analysis against a Funding version (latest when
+        omitted). Graph will pause at human_review node. Raises ValueError for
+        a version that does not exist.
+        """
+        db = get_supabase()
+        v = datasets.resolve(db, "funding", version)
+        if version is not None and v is None:
+            raise ValueError(f"Funding version {version} does not exist.")
+        analysis_id = None
+        if v is not None:
+            analysis_id = BlockAnalysisRepository(db).create({
+                "block_id": block_id, "kind": "funding",
+                "dataset_version_id": v["id"], "dataset_version": v["version"],
+                "name": (name or "").strip() or None, "status": "running", "thread_id": thread_id,
+                "created_by": (created_by or "").strip() or None,
+            })["id"]
+
         config = {"configurable": {"thread_id": thread_id}}
         initial_state: FundingState = {
             "block_id": block_id,
             "thread_id": thread_id,
+            "analysis_id": analysis_id,
+            "dataset_version_id": v["id"] if v else None,
             "block_data": {},
             "recommendations": [],
             "candidate_programs": [],
@@ -418,7 +468,15 @@ class FundingAgent(SpecialistAgent):
             "written_signal_ids": [],
             "removed_signal_ids": [],
         }
-        return self._graph.invoke(initial_state, config=config)
+        try:
+            result = self._graph.invoke(initial_state, config=config)
+        except Exception as e:
+            if analysis_id is not None:
+                BlockAnalysisRepository(db).update(analysis_id, {"status": "failed", "error": str(e)[:1000]})
+            raise
+        if analysis_id is not None:
+            BlockAnalysisRepository(db).update(analysis_id, {"status": "in_review"})
+        return result
 
     def get_pending_review(self, thread_id: str) -> dict:
         """Return the current graph state (fits awaiting review)."""
@@ -430,6 +488,7 @@ class FundingAgent(SpecialistAgent):
         return {
             "block_id": values.get("block_id"),
             "thread_id": thread_id,
+            "analysis_id": values.get("analysis_id"),
             "recommendations": _grouped(
                 values.get("fits", []), values.get("recommendations", [])
             ),

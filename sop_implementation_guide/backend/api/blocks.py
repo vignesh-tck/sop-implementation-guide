@@ -1,8 +1,13 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from supabase import Client
 
+from backend.agents.zoning import analysis_label
 from backend.config import settings
 from backend.db.session import get_supabase
+from backend.repositories.datasets import BlockAnalysisRepository
 from backend.repositories.recommendations import BlockRepository
 from backend.repositories.funding import FundingRepository
 from backend.repositories.gold import GoldRepository
@@ -144,23 +149,38 @@ def get_signals(block_id: int, db: Client = Depends(get_supabase)):
     if not block:
         raise HTTPException(status_code=404, detail=f"Block {block_id} not found")
 
-    signals = FundingRepository(db).get_for_block(block_id)
-    return {"block_id": block_id, **_group_signals(block.get("recommendations", []), signals)}
+    pinned = BlockAnalysisRepository(db).pinned(block_id, "funding")
+    signals = FundingRepository(db).get_for_block(block_id, analysis_id=pinned["id"] if pinned else None)
+    return {"block_id": block_id, "analysis": analysis_label(pinned),
+            **_group_signals(block.get("recommendations", []), signals)}
+
+
+class AnalyzeRequest(BaseModel):
+    version: Optional[int] = None      # Funding dataset version; latest when omitted
+    name: Optional[str] = None
+    created_by: Optional[str] = None
 
 
 @router.post("/{block_id}/analyze")
 def start_analysis(
     block_id: int,
+    body: Optional[AnalyzeRequest] = None,
     db: Client = Depends(get_supabase),
     orchestrator: OrchestratorAgent = Depends(get_orchestrator),
 ):
+    """Start a Block Funding analysis against a Funding version (the latest unless named)."""
     if not BlockRepository(db).get_by_id(block_id):
         raise HTTPException(status_code=404, detail=f"Block {block_id} not found")
 
-    result = orchestrator.run_funding(block_id)
+    body = body or AnalyzeRequest()
+    try:
+        result = orchestrator.run_funding(block_id, body.version, body.name, body.created_by)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     return {
         "block_id": block_id,
         "thread_id": result["thread_id"],
+        "analysis_id": result["state"].get("analysis_id"),
         "status": "awaiting human review",
         "next_step": f"GET /threads/{result['thread_id']}/review",
     }

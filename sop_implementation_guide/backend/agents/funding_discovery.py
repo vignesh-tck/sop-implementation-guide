@@ -30,7 +30,7 @@ from backend.repositories.funding_programs import (
     DiscoverySessionRepository,
     FundingProgramRepository,
 )
-from backend.tools import grants_gov, web_source
+from backend.tools import datasets, grants_gov, web_source
 from backend.tools.llm_extractor import structured_call
 
 log = logging.getLogger(__name__)
@@ -544,6 +544,11 @@ def write_silver(state: DiscoveryState) -> dict:
             })
 
     _record_session(db, state, written)
+    # The catalogue changed, so it becomes the next Funding version.
+    if written:
+        datasets.try_snapshot("funding", db, note=state["goal"],
+                              source={"type": "discovery", "thread_id": state["thread_id"],
+                                      "programs_written": len(written)})
     return {"written": written}
 
 

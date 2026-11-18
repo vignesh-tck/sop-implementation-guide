@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 
@@ -53,9 +55,15 @@ SHORT = {
 
 
 @lru_cache(maxsize=1)
-def load_rules() -> dict:
+def load_file_rules() -> dict:
     with open(DATA / "zoning_rules.json", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_rules() -> dict:
+    """The rules in force: a pinned dataset version's (see using()), else the committed file."""
+    pinned = _PINNED.get()
+    return (pinned or {}).get("rules") or load_file_rules()
 
 
 @lru_cache(maxsize=1)
@@ -104,15 +112,41 @@ def active_version() -> dict:
     return {k: _ACTIVE[k] for k in ("version", "applied_by", "created_at", "note")}
 
 
+# ---------------------------------------------------------------------------
+# Evaluating against a dataset version
+#
+# A block analysis is tied to one Zoning dataset version (see
+# backend/tools/datasets.py), which may be older than the data in force.
+# using() makes that version's use table, rules and settings the ones every
+# function below reads, for the current request only: a ContextVar is per
+# thread, so concurrent requests on other versions are unaffected.
+# ---------------------------------------------------------------------------
+
+_PINNED: ContextVar[dict | None] = ContextVar("zoning_pinned_version", default=None)
+
+
+@contextmanager
+def using(use_table: dict | None, rules: dict | None, settings_: dict | None):
+    token = _PINNED.set({"use_table": use_table, "rules": rules, "settings": settings_})
+    try:
+        yield
+    finally:
+        _PINNED.reset(token)
+
+
 def load_use_table() -> dict:
-    """The use table in force: the newest applied version, else the committed file."""
-    return _ACTIVE["use_table"] or load_file_use_table()
+    """The use table in force: a pinned dataset version's, the newest applied version, else the file."""
+    pinned = _PINNED.get()
+    return (pinned or {}).get("use_table") or _ACTIVE["use_table"] or load_file_use_table()
 
 
 def active_settings() -> dict:
-    """GIS settings in force: defaults overlaid with the newest applied version's."""
+    """GIS settings in force: defaults overlaid with a pinned version's, else the newest applied one's."""
     from backend.tools.zoning_lookup import default_settings
 
+    pinned = _PINNED.get()
+    if pinned and pinned.get("settings"):
+        return {**default_settings(load_rules()), **pinned["settings"]}
     return {**default_settings(load_rules()), **(_ACTIVE["settings"] or {})}
 
 

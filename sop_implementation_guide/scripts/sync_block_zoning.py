@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.db.session import get_supabase
 from backend.repositories.zoning import ZoningRepository
-from backend.tools import zoning, zoning_lookup
+from backend.tools import datasets, zoning, zoning_lookup
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -92,6 +92,11 @@ def main() -> int:
         ok += 1
 
     log.info("Looked up %d blocks (%d failed)", ok, failed)
+    if ok:
+        snap = datasets.try_snapshot("zoning", db, note=f"Zoning sync of {ok} block(s)",
+                                     source={"type": "zoning_sync", "run_id": run_id})
+        if snap:
+            log.info("Saved as Zoning v%s. Blocks stay on their analysed version until re-run.", snap["version"])
     return 0 if failed == 0 else 1
 
 

@@ -33,7 +33,7 @@ from supabase import Client
 from backend.db.session import get_supabase
 from backend.repositories.recommendations import BlockRepository
 from backend.repositories.zoning import ZoningRepository, ZoningRunRepository, ZoningVersionRepository
-from backend.tools import zoning, zoning_lookup
+from backend.tools import datasets, zoning, zoning_lookup
 from backend.tools.use_table_extract import UseTableError, extract
 
 log = logging.getLogger(__name__)
@@ -315,7 +315,13 @@ def apply(db: Client, run_id: int, reviewed_by: str) -> dict:
 
     runs.update(run_id, {"status": "applied", "reviewed_by": reviewed_by, "reviewed_at": _now(),
                          "applied_version": version})
-    return {"version": version, "blocks_updated": len(lookups)}
+    # The applied data becomes the next Zoning dataset version. Blocks stay on
+    # the version they were analysed against until someone re-runs them.
+    snap = datasets.try_snapshot("zoning", db, note=run.get("note"), created_by=reviewed_by,
+                                 source={"type": "zoning_refresh", "run_id": run_id,
+                                         "zoning_data_version": version})
+    return {"version": version, "blocks_updated": len(lookups),
+            "dataset_version": datasets.label(snap)}
 
 
 def discard(db: Client, run_id: int, reviewed_by: str | None) -> None:

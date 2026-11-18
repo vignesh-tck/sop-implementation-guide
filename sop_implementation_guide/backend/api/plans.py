@@ -14,12 +14,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from supabase import Client
 
+from backend.agents.zoning import ZoningAgent, analysis_label
 from backend.api.blocks import _fit_from_signal
 from backend.db.session import get_supabase
+from backend.repositories.datasets import BlockAnalysisRepository, DatasetTablesMissing
 from backend.repositories.funding import FundingRepository
 from backend.repositories.plans import PlanRepository, PlanTableMissing
 from backend.repositories.recommendations import BlockRepository
-from backend.repositories.zoning import ZoningRepository
 from backend.tools import zoning
 from backend.tools.pathways import build_plan, clean_step, load_templates, pathway_for
 
@@ -62,19 +63,28 @@ def _funding_for(db: Client, block_id: int, rec_id: int) -> list[dict]:
     return fits
 
 
+def _analyses(db: Client, block_id: int, zoning_tie: dict) -> dict:
+    """Which Block Funding / Block Zoning analysis (and dataset version) this response reads."""
+    try:
+        funding = analysis_label(BlockAnalysisRepository(db).pinned(block_id, "funding"))
+    except DatasetTablesMissing:
+        funding = None
+    return {"funding": funding, "zoning": zoning_tie}
+
+
 def _plan_response(db: Client, block: dict, rec: dict) -> dict:
     block_id = block["id"]
-    zoning.refresh_active(db)
     storage_ready = True
     try:
         saved = PlanRepository(db).get_for_rec(block_id, rec["id"])
     except PlanTableMissing:
         saved, storage_ready = None, False
-    finding = zoning.assess({**rec, "block_id": block_id}, ZoningRepository(db).get_for_block(block_id), block)
+    with ZoningAgent().scope(block_id, db) as (zoning_rows, tie):
+        finding = zoning.assess({**rec, "block_id": block_id}, zoning_rows, block)
     plan = build_plan(
         rec, _funding_for(db, block_id, rec["id"]), saved, load_templates(db), zoning=finding, block=block
     )
-    return {"block_id": block_id, "storage_ready": storage_ready, **plan}
+    return {"block_id": block_id, "storage_ready": storage_ready, "analyses": _analyses(db, block_id, tie), **plan}
 
 
 @router.get("/{block_id}/plans")
@@ -99,18 +109,20 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
             funding_counts[s["rec_id"]] = funding_counts.get(s["rec_id"], 0) + 1
 
     templates = load_templates(db)
-    zoning.refresh_active(db)
-    zoning_rows = ZoningRepository(db).get_for_block(block_id)
-    lookup = zoning.block_lookup(zoning_rows)
     rows = []
+    with ZoningAgent().scope(block_id, db) as (zoning_rows, tie):
+        lookup = zoning.block_lookup(zoning_rows)
+        zoning_best_by_rec = {}
+        for rec in block.get("recommendations", []):
+            mapping = zoning.mapping_for(rec.get("rec_label"))
+            zoning_best_by_rec[rec.get("id")] = (
+                zoning.best_outcome([zoning.zone_finding(c, mapping) for c in lookup["zones"]])
+                if lookup and mapping else None
+            )
     for rec in block.get("recommendations", []):
         pathway = pathway_for(rec.get("rec_label"), templates)
         plan = saved.get(rec.get("id")) or {}
-        mapping = zoning.mapping_for(rec.get("rec_label"))
-        zoning_best = (
-            zoning.best_outcome([zoning.zone_finding(c, mapping) for c in lookup["zones"]])
-            if lookup and mapping else None
-        )
+        zoning_best = zoning_best_by_rec.get(rec.get("id"))
         rows.append({
             "rec_id": rec.get("id"),
             "rec_label": rec.get("rec_label"),
@@ -126,7 +138,8 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
             # prohibited), or None when unmapped, unresolved or not looked up.
             "zoning_best": zoning_best,
         })
-    return {"block_id": block_id, "storage_ready": storage_ready, "recommendations": rows}
+    return {"block_id": block_id, "storage_ready": storage_ready,
+            "analyses": _analyses(db, block_id, tie), "recommendations": rows}
 
 
 @router.get("/{block_id}/recommendations/{rec_id}/plan")

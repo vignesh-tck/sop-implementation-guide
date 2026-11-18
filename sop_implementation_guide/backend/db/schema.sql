@@ -310,12 +310,15 @@ ALTER TABLE funding_signals
     DROP CONSTRAINT IF EXISTS funding_signals_block_id_program_name_key;
 
 -- Guarded because ADD CONSTRAINT has no IF NOT EXISTS in Postgres, and this
--- file is meant to be re-runnable.
+-- file is meant to be re-runnable. Also skipped once the per-analysis key
+-- below exists: that key replaces this one, and re-adding this one would fail
+-- as soon as two analyses of a block hold the same match.
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
-        WHERE conname = 'funding_signals_block_rec_program_key'
+        WHERE conname IN ('funding_signals_block_rec_program_key',
+                          'funding_signals_analysis_rec_program_key')
     ) THEN
         ALTER TABLE funding_signals
             ADD CONSTRAINT funding_signals_block_rec_program_key
@@ -466,3 +469,106 @@ CREATE TABLE IF NOT EXISTS zoning_refresh_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_zoning_refresh_runs_created ON zoning_refresh_runs(created_at DESC);
+
+
+-- =============================================================
+-- DATASET VERSIONS AND BLOCK ANALYSES  (added Nov 2026)
+--
+-- Every approved write to the funding catalogue or the zoning data (a
+-- discovery session, a zoning refresh, the zoning sync script, and later a
+-- pipeline run) snapshots the whole dataset as a new, numbered, immutable
+-- version: Funding v1, v2 ... and Zoning v1, v2 ... A version may carry a name.
+--
+-- A block analysis (Block Funding or Block Zoning) records which version it
+-- ran against, and can be re-run against any version at any time. Each block
+-- has at most one pinned analysis per kind; plans, signals and the gold layer
+-- read the pinned one, so a newer dataset version never silently changes a
+-- block until someone re-runs it.
+--
+-- The working tables (funding_programs, zoning_signals, zoning_data_versions)
+-- are unchanged and stay the data the Zoning tab and discovery work on.
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS dataset_versions (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('funding', 'zoning')),
+    version       INT NOT NULL,
+    name          TEXT,                -- optional, e.g. "Nov 18 MD + federal"
+    note          TEXT,
+    -- What produced it: {type: 'seed' | 'discovery' | 'zoning_refresh' |
+    -- 'zoning_sync' | 'pipeline', ...ids}
+    source        JSONB,
+    record_count  INT DEFAULT 0,
+    summary       JSONB,               -- counts for list views
+    created_by    TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (kind, version)
+);
+
+-- The snapshot itself. Funding: one 'program' row per funding_programs row.
+-- Zoning: one 'use_table', one 'rules', one 'settings', and one 'block_zone'
+-- row per zoning_signals row.
+CREATE TABLE IF NOT EXISTS dataset_records (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    dataset_version_id  BIGINT NOT NULL REFERENCES dataset_versions(id) ON DELETE CASCADE,
+    record_type         TEXT NOT NULL,
+    record_key          TEXT NOT NULL,
+    data                JSONB NOT NULL,
+    UNIQUE (dataset_version_id, record_type, record_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dataset_records_version ON dataset_records(dataset_version_id, record_type);
+
+-- One row per Block Funding / Block Zoning run. status: running -> in_review
+-- (funding, awaiting approval) -> complete, or failed / discarded.
+CREATE TABLE IF NOT EXISTS block_analyses (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    block_id            BIGINT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+    kind                TEXT NOT NULL CHECK (kind IN ('funding', 'zoning')),
+    dataset_version_id  BIGINT REFERENCES dataset_versions(id),
+    dataset_version     INT,           -- denormalised for display
+    name                TEXT,
+    note                TEXT,
+    status              TEXT NOT NULL DEFAULT 'running'
+                        CHECK (status IN ('running', 'in_review', 'complete', 'failed', 'discarded')),
+    thread_id           TEXT,
+    result              JSONB,
+    error               TEXT,
+    pinned              BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by          TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    completed_at        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_block_analyses_block ON block_analyses(block_id, kind, created_at DESC);
+-- At most one pinned analysis per block and kind.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_block_analyses_pinned ON block_analyses(block_id, kind) WHERE pinned;
+
+-- Funding signals belong to the analysis that wrote them, so re-running a
+-- block keeps the earlier run's signals instead of overwriting them.
+ALTER TABLE funding_signals
+    ADD COLUMN IF NOT EXISTS analysis_id BIGINT REFERENCES block_analyses(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_funding_signals_analysis ON funding_signals(analysis_id);
+
+-- DESTRUCTIVE (constraint only, no data): the per-(block, rec, program) key
+-- would stop two analyses of one block from both holding the same match.
+ALTER TABLE funding_signals
+    DROP CONSTRAINT IF EXISTS funding_signals_block_rec_program_key;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'funding_signals_analysis_rec_program_key'
+    ) THEN
+        ALTER TABLE funding_signals
+            ADD CONSTRAINT funding_signals_analysis_rec_program_key
+            UNIQUE (analysis_id, rec_id, program_name);
+    END IF;
+END $$;
+
+-- Which analyses a gold profile was computed from.
+ALTER TABLE block_implementation_profiles
+    ADD COLUMN IF NOT EXISTS funding_analysis_id BIGINT,
+    ADD COLUMN IF NOT EXISTS zoning_analysis_id  BIGINT;

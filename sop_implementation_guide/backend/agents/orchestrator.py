@@ -15,6 +15,7 @@ from backend.agents.funding import FundingAgent
 from backend.agents.zoning import ZoningAgent
 from backend.agents.policy import PolicyAgent
 from backend.db.session import get_supabase
+from backend.repositories.datasets import BlockAnalysisRepository
 from backend.repositories.funding import FundingRepository
 from backend.repositories.gold import GoldRepository
 
@@ -25,10 +26,11 @@ class OrchestratorAgent:
         self.zoning_agent = ZoningAgent()
         self.policy_agent = PolicyAgent()
 
-    def run_funding(self, block_id: int) -> dict:
-        """Start FundingAgent for a block. Returns thread_id for tracking."""
+    def run_funding(self, block_id: int, version: int | None = None, name: str | None = None,
+                    created_by: str | None = None) -> dict:
+        """Start a Block Funding analysis against a Funding version. Returns thread_id for tracking."""
         thread_id = f"funding-{block_id}-{uuid.uuid4().hex[:8]}"
-        result = self.funding_agent.run(block_id, thread_id)
+        result = self.funding_agent.run(block_id, thread_id, version, name, created_by)
         return {"thread_id": thread_id, "state": result}
 
     def approve_funding(self, thread_id: str, feedback: Any = "approved") -> dict:
@@ -76,8 +78,10 @@ class OrchestratorAgent:
         funding_repo = FundingRepository(db)
         gold_repo = GoldRepository(db)
 
-        # Gather reviewed funding signals
-        funding_signals = funding_repo.get_for_block(block_id, reviewed_only=True)
+        # Reviewed funding signals of the block's pinned funding analysis
+        funding_analysis = BlockAnalysisRepository(db).pinned(block_id, "funding")
+        funding_signals = funding_repo.get_for_block(
+            block_id, reviewed_only=True, analysis_id=funding_analysis["id"] if funding_analysis else None)
         funding_score = self._score_funding(funding_signals)
 
         zoning_score, zoning_detail, zoning_signal_ids = self.zoning_agent.score_block(block_id, db)
@@ -97,6 +101,13 @@ class OrchestratorAgent:
             block_id, funding_signals, funding_score, feasibility,
             zoning_score, zoning_detail, zoning_placeholder,
         )
+        tied = []
+        if funding_analysis and funding_analysis.get("dataset_version") is not None:
+            tied.append(f"Funding v{funding_analysis['dataset_version']}")
+        if (zoning_detail.get("dataset_version") or {}).get("version") is not None:
+            tied.append(f"Zoning v{zoning_detail['dataset_version']['version']}")
+        if tied:
+            narrative += " Based on " + " and ".join(tied) + "."
 
         profile = {
             "block_id": block_id,
@@ -110,6 +121,8 @@ class OrchestratorAgent:
             "zoning_signal_ids": zoning_signal_ids,
             "policy_signal_ids": [],
             "thread_id": thread_id,
+            "funding_analysis_id": funding_analysis["id"] if funding_analysis else None,
+            "zoning_analysis_id": (zoning_detail.get("analysis") or {}).get("id"),
         }
 
         return gold_repo.upsert_profile(profile)
