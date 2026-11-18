@@ -47,10 +47,14 @@ How the work goes:
    URLs with add_source. Use read_source to see what a source really contains before designing steps.
 3. Steps: propose steps from the catalog with add_step, each with a one-line note saying why. Keep the
    pipeline short: usually one extract step per kind of source, then only the transforms the data needs
-   or the planner asks for. The planner approves each step, after reviewing its output in the panel,
-   where they can correct values, remove records and add records; those edits show in the state as
-   planner_edits, are re-applied on every run (values marked "manual"), and are theirs: do not try to
-   undo them with steps.
+   or the planner asks for. The planner designs each step with you, one at a time and in order: they
+   read its prompt in the panel, tune its instructions (the instructions/instruction config; the rest of
+   the prompt is fixed), preview its output and approve it. Write instructions they can read and edit:
+   plain sentences about what counts as an item and what to look for. Changing a step's config, or the
+   schema, sends that step and every later one back for approval.
+   Once every step is approved and the pipeline has run, the planner can override rows of the final
+   output (correct values, remove rows, add rows). Those show in the state as planner_overrides, are
+   re-applied on every run (values marked "manual"), and are theirs: do not try to undo them with steps.
 4. Preview with run_preview and report what came out honestly: record count, which required fields are
    blank and on how many records, excerpts that could not be verified, warnings.
    Work like an analyst, not an extractor: when fields are blank, first look at where the answers would
@@ -161,8 +165,8 @@ def state_snapshot(p: dict) -> dict:
         "sources": [{**{k: s.get(k) for k in ("id", "kind", "url", "query", "label")},
                      "fetch": {k: (st.get("sources") or {}).get(s["id"], {}).get(k)
                                for k in ("chars", "truncated", "error")}} for s in d["sources"]],
-        "steps": [{**{k: s.get(k) for k in ("id", "type", "config", "note", "status")},
-                   **({"planner_edits": s["edits"]} if s.get("edits") else {})} for s in d["steps"]],
+        "steps": [{k: s.get(k) for k in ("id", "type", "config", "note", "status")} for s in d["steps"]],
+        "planner_overrides": d.get("overrides"),
         "last_run": ({"at": last.get("at"), "upto": last.get("upto"), "records": cov.get("records"),
                       "required_gaps": {g: cov["fields"][g]["missing"] for g in cov.get("required_gaps", [])},
                       "errors": last.get("errors")} if last else None),

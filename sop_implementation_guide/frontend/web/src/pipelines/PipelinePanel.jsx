@@ -6,7 +6,7 @@ const KIND_TEXT = {
   derived: "computed by a step",
   inferred: "model judgement (approved step)",
   assumed: "value you stated",
-  manual: "you entered it in review",
+  manual: "your override",
 };
 
 function StatusTag({ status }) {
@@ -126,66 +126,51 @@ function SourcesCard({ view, act, disabled }) {
   );
 }
 
-// ── Steps ────────────────────────────────────────────────────────────────────
-
-function editCount(edits) {
-  return edits ? (edits.changed?.length || 0) + (edits.removed?.length || 0) + (edits.added?.length || 0) : 0;
-}
+// ── Steps: design each one (prompt, preview, approve), in order ──────────────
 
 function StepsCard({ view, act, disabled }) {
   const steps = view.definition.steps || [];
-  const [open, setOpen] = useState(null);
+  const firstOpen = steps.find((s) => s.status !== "approved")?.id ?? null;
+  const [open, setOpen] = useState(firstOpen);
   return (
     <div className="card">
       <h4>Steps</h4>
       <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
-        Preview a step, open <b>Review</b> to check its records (correct values, remove or add records), then approve it.
-        Your edits are kept on the step and re-applied every run.
+        Design each step in order: read its prompt, tune the instructions, preview what it produces, then approve it.
+        Changing a step sends it and every later step back for approval.
       </div>
       {steps.length === 0 && <div className="assess">The agent proposes steps once the schema and sources are in place.</div>}
       <ol className="pl-steps">
         {steps.map((s, i) => {
           const out = view.outputs[s.id];
           const cat = view.catalog[s.type] || {};
-          const n = editCount(s.edits);
-          const isOpen = open === s.id && out && !out.error;
+          const isOpen = open === s.id;
+          const blockedBy = steps.slice(0, i).filter((x) => x.status !== "approved").map((x) => x.id);
           return (
             <li key={s.id} className={(isOpen ? "sel " : "") + (out?.error ? "failed" : "")}>
-              <div className="pl-step-head">
+              <div className="pl-step-head pl-step-toggle" onClick={() => setOpen(isOpen ? null : s.id)}>
+                <span className="assess">{isOpen ? "▾" : "▸"}</span>
                 <b className="pl-id">{s.id}</b>
                 <b>{cat.label || s.type}</b>
-                {cat.model && <span className="tag derived" title="Calls the model; output is cached on its inputs">model</span>}
+                {cat.model && <span className="tag derived" title="Calls the model; its prompt is shown when you open the step">model</span>}
                 <StatusTag status={s.status} />
-                {n > 0 && <span className="tag manual" title="Your corrections to this step's output">{n} edit{n > 1 ? "s" : ""} by you</span>}
                 <span className="spacer" />
-                {out && !out.error && <span className="assess">{out.count} record(s){out.stale ? " · out of date" : ""}</span>}
+                {out && !out.error && <span className="assess">{out.count} record(s)</span>}
               </div>
               {s.note && <div className="pl-step-note">{s.note}</div>}
-              <code className="pl-config" title={JSON.stringify(s.config, null, 2)}>{short(s.config, 160)}</code>
-              {out?.error && <div className="banner err" style={{ margin: ".4rem 0 0" }}>{out.error}</div>}
-              {out?.stale && <div className="pl-warn">An earlier step's output was edited: preview again to update this one.</div>}
-              {out?.warnings?.length > 0 && !isOpen && <div className="pl-warn">{short(out.warnings.join(" · "), 220)}</div>}
-              <div className="pl-step-actions">
-                {out && !out.error ? (
-                  <button className={s.status !== "approved" ? "primary" : ""} onClick={() => setOpen(isOpen ? null : s.id)}>
-                    {isOpen ? "Close review ▴" : `Review ${out.count} record(s) ▾`}
-                  </button>
-                ) : (
-                  <button className={s.status !== "approved" ? "primary" : ""} disabled={disabled}
-                          onClick={() => act("POST", "/run", { upto: s.id }).then((r) => r && setOpen(s.id))}>
-                    Preview to review
-                  </button>
-                )}
-                {out && !out.error && <button disabled={disabled} onClick={() => act("POST", "/run", { upto: s.id })}>Preview again</button>}
-                {s.status !== "approved" && !isOpen && (
-                  <button disabled={disabled} title="Approve without reviewing the output"
-                          onClick={() => act("POST", `/steps/${s.id}/approve`)}>Approve</button>
-                )}
-                <button disabled={disabled || i === 0} title="Move up" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: -1 })}>↑</button>
-                <button disabled={disabled || i === steps.length - 1} title="Move down" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: 1 })}>↓</button>
-                <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove step</button>
-              </div>
-              {isOpen && <StepReview step={s} out={out} view={view} act={act} disabled={disabled} onDone={() => setOpen(null)} />}
+              {!isOpen && out?.error && <div className="banner err" style={{ margin: ".4rem 0 0" }}>{out.error}</div>}
+              {isOpen && (
+                <StepDesigner step={s} out={out} view={view} act={act} disabled={disabled}
+                              isLast={i === steps.length - 1} blockedBy={blockedBy}
+                              onApproved={() => setOpen(steps[i + 1]?.id ?? null)} />
+              )}
+              {isOpen && (
+                <div className="pl-step-actions">
+                  <button disabled={disabled || i === 0} title="Move up" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: -1 })}>↑</button>
+                  <button disabled={disabled || i === steps.length - 1} title="Move down" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: 1 })}>↓</button>
+                  <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove step</button>
+                </div>
+              )}
             </li>
           );
         })}
@@ -194,7 +179,117 @@ function StepsCard({ view, act, disabled }) {
   );
 }
 
-// ── Reviewing a step's output ────────────────────────────────────────────────
+// The prompt a model step sends: fixed text (locked) around the planner's instructions (editable).
+function PromptEditor({ step, prompt, act, disabled }) {
+  const [draft, setDraft] = useState(null);       // null = not editing
+  if (!prompt) return null;
+  if (prompt.error) return <div className="banner err">{prompt.error}</div>;
+  const value = draft ?? prompt.value;
+  const editing = draft !== null;
+  const save = () => act("PATCH", `/steps/${step.id}`, { config: { ...step.config, [prompt.key]: draft.trim() || null } })
+    .then((r) => r && setDraft(null));
+  const slot = (first) => (
+    first ? (
+      editing ? (
+        <textarea className="pl-slot-edit" rows={Math.min(10, Math.max(3, value.split("\n").length + 1))} value={value}
+                  placeholder={prompt.default} onChange={(e) => setDraft(e.target.value)} autoFocus />
+      ) : (
+        <span className="pl-slot" onClick={() => !disabled && setDraft(prompt.value)} title="Click to edit">
+          {prompt.value || <i>{prompt.default}</i>}
+        </span>
+      )
+    ) : <span className="pl-slot ref">{prompt.value || prompt.default} <i>(your instructions, as above)</i></span>
+  );
+  return (
+    <div className="pl-prompt">
+      <div className="pl-prompt-head">
+        <b>Prompt</b>
+        <span className="assess"><span className="pl-slot-key">highlighted</span> = your instructions, editable · grey = fixed rules (they keep every value quoted and checked)</span>
+      </div>
+      {prompt.prompts.map((pr, i) => (
+        <details key={i} open={i === 0}>
+          <summary>{pr.title}</summary>
+          <pre className="pl-prompt-text">{pr.before}{slot(i === 0)}{pr.after}</pre>
+        </details>
+      ))}
+      {prompt.fields && (
+        <details>
+          <summary>Fields requested ({prompt.fields.length}), sent as the answer format</summary>
+          <ul className="pl-prompt-fields">{prompt.fields.map((f) => <li key={f.name}><code>{f.name}</code>: {f.description}</li>)}</ul>
+          <div className="assess">These come from the target schema; ask in the chat to change a field's description.</div>
+        </details>
+      )}
+      <div className="btn-row">
+        {editing ? (
+          <>
+            <button className="primary" disabled={disabled || value === prompt.value} onClick={save}>Save instructions</button>
+            <button onClick={() => setDraft(null)}>Cancel</button>
+            {step.type === "geo_tie" && <button onClick={() => setDraft(prompt.default)}>Reset to default</button>}
+          </>
+        ) : (
+          <button disabled={disabled} onClick={() => setDraft(prompt.value)}>Edit instructions</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy, onApproved }) {
+  const fields = view.definition.schema?.fields || [];
+  const [onlyAttention, setOnlyAttention] = useState(false);
+  const prompt = view.prompts?.[step.id];
+  const records = out?.records || [];
+  const shown = onlyAttention ? records.filter((r) => attention(r, fields).length) : records;
+  const flagged = records.filter((r) => attention(r, fields).length).length;
+  const preview = () => act("POST", "/run", isLast ? {} : { upto: step.id });
+  return (
+    <div className="pl-review">
+      {prompt ? <PromptEditor step={step} prompt={prompt} act={act} disabled={disabled} /> : (
+        <div className="pl-settings">
+          <b>Settings</b> <span className="assess">(no model call; ask in the chat to change them)</span>
+          <pre className="pl-prompt-text">{JSON.stringify(step.config, null, 2)}</pre>
+        </div>
+      )}
+      <div className="pl-output-head">
+        <b>Output</b>
+        <button disabled={disabled} className={!out ? "primary" : ""} onClick={preview}>
+          {out ? "Preview again" : "Preview this step"}
+        </button>
+        {isLast && <span className="assess">previewing the last step runs the whole pipeline</span>}
+      </div>
+      {!out && <div className="assess">Not previewed with the current settings yet.</div>}
+      {out?.error && <div className="banner err">{out.error}</div>}
+      {out && !out.error && (
+        <>
+          {out.warnings?.length > 0 && <div className="pl-warn">{out.warnings.join(" · ")}</div>}
+          {records.length < out.count && <div className="assess">First {records.length} of {out.count} records shown.</div>}
+          <label className="assess"><input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} />
+            {" "}Only records needing attention ({flagged})</label>
+          <RecordsTable records={shown} fields={fields} rowNote={(r) => attention(r, fields).join("; ")}
+                        renderDetail={(r) => (
+                          <>
+                            {attention(r, fields).length > 0 && <div className="pl-bad">Check: {attention(r, fields).join("; ")}</div>}
+                            <RecordDetail r={r} fields={fields} />
+                          </>
+                        )} />
+          <div className="muted-note">Not right? Tune the instructions above (or ask the agent) and preview again. Rows are corrected on the final output, once every step is approved.</div>
+        </>
+      )}
+      <div className="pl-review-foot">
+        {step.status === "approved" ? <span className="tag ok">approved</span> : (
+          <button className="primary" disabled={disabled || !out || !!out?.error || blockedBy.length > 0}
+                  title={blockedBy.length ? `Approve ${blockedBy.join(", ")} first` : !out ? "Preview it first" : ""}
+                  onClick={() => act("POST", `/steps/${step.id}/approve`).then((r) => r && onApproved())}>
+            Approve {step.id}
+          </button>
+        )}
+        {blockedBy.length > 0 && step.status !== "approved" && <span className="assess">Approve {blockedBy.join(", ")} first: this step works on their output.</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── Final output: the planner's overrides ────────────────────────────────────
 
 function isEdited(r) {
   return r.added_by_you || Object.values(r.prov || {}).some((p) => p.kind === "manual");
@@ -247,81 +342,103 @@ function RecordEditor({ fields, values, onSave, onCancel, disabled, saveLabel = 
   );
 }
 
-function StepReview({ step, out, view, act, disabled, onDone }) {
+function overrideCount(o) {
+  return o ? (o.changed?.length || 0) + (o.removed?.length || 0) + (o.added?.length || 0) : 0;
+}
+
+function OutputCard({ view, act, disabled }) {
   const fields = view.definition.schema?.fields || [];
-  const [onlyAttention, setOnlyAttention] = useState(false);
+  const [focus, setFocus] = useState(false);
   const [q, setQ] = useState("");
-  const [editing, setEditing] = useState(null);     // record id, or "new"
-  const records = out.records || [];
-  const partial = records.length < out.count;
-  const edit = (body) => act("POST", `/steps/${step.id}/records`, body);
+  const [editing, setEditing] = useState(null);     // row id, or "new"
+  const records = view.last_records || [];
+  if (!view.last_run) return null;
+  const locked = view.output_locked;
+  const total = view.last_run?.coverage?.records ?? 0;
+  const review = view.last_run?.review;
+  const marks = review?.since ? review.marks || {} : {};
+  const changedBy = Object.fromEntries((review?.changed || []).map((c) => [c.id, c.fields]));
+  const edit = (body) => act("POST", "/output/records", body);
   const shown = records.filter((r) =>
-    (!onlyAttention || attention(r, fields).length || isEdited(r)) &&
+    (!focus || marks[r.id] || attention(r, fields).length || isEdited(r)) &&
     (!q.trim() || Object.values(r.values || {}).some((v) => String(v ?? "").toLowerCase().includes(q.trim().toLowerCase()))));
-  const flagged = records.filter((r) => attention(r, fields).length).length;
-  const n = editCount(step.edits);
+  const n = overrideCount(view.overrides);
+  const removed = view.last_run?.removed || [];
 
   return (
-    <div className="pl-review">
-      {out.warnings?.length > 0 && <div className="pl-warn">{out.warnings.join(" · ")}</div>}
-      {out.edit_notes?.length > 0 && <div className="pl-warn">{out.edit_notes.join(" · ")}</div>}
-      {partial && <div className="banner err">Only the first {records.length} of {out.count} records are kept for review; add a filter step to narrow the output.</div>}
+    <div className="card">
+      <h4>
+        {locked ? (view.last_run.upto ? `Output of the preview to ${view.last_run.upto}` : "Output of the last run") : "Final output"}{" "}
+        <span className="assess">({total} record(s){records.length < total ? `, first ${records.length} shown` : ""})</span>
+        {n > 0 && <span className="tag manual" style={{ marginLeft: ".4rem" }}>{n} override{n > 1 ? "s" : ""} by you</span>}
+      </h4>
+      {locked ? (
+        <div className="muted-note" style={{ marginTop: 0 }}>
+          Rows can be overridden here once the design is done. {locked}
+        </div>
+      ) : (
+        <div className="muted-note" style={{ marginTop: 0 }}>
+          Every step is approved. Correct values, remove rows or add rows the sources missed. Your overrides are kept and
+          re-applied each time the pipeline runs; values you enter are marked as yours.
+        </div>
+      )}
+      {view.last_run?.override_notes?.length > 0 && <div className="pl-warn">{view.last_run.override_notes.join(" · ")}</div>}
       <div className="pl-review-bar">
-        <input placeholder="Search records" value={q} onChange={(e) => setQ(e.target.value)} />
-        <label className="assess"><input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} />
-          {" "}Only records needing attention ({flagged}) or edited</label>
+        <input placeholder="Search rows" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="assess"><input type="checkbox" checked={focus} onChange={(e) => setFocus(e.target.checked)} />
+          {" "}Only rows needing attention{review?.since ? ", new or changed" : ""}{n ? ", or overridden" : ""}</label>
         <span className="spacer" />
-        <button disabled={disabled || partial || editing === "new"} onClick={() => setEditing("new")}>+ Add record</button>
+        {!locked && <button disabled={disabled || editing === "new"} onClick={() => setEditing("new")}>+ Add row</button>}
       </div>
       {editing === "new" && (
         <div className="pl-detail pl-new">
-          <b>New record</b> <span className="assess">for a programme the sources missed; its values are marked as entered by you.</span>
-          <RecordEditor fields={fields} values={{}} disabled={disabled} saveLabel="Add record"
+          <b>New row</b> <span className="assess">for a programme the sources missed; its values are marked as entered by you.</span>
+          <RecordEditor fields={fields} values={{}} disabled={disabled} saveLabel="Add row"
                         onSave={(values) => edit({ op: "add", values }).then((r) => r && setEditing(null))}
                         onCancel={() => setEditing(null)} />
         </div>
       )}
       <RecordsTable records={shown} fields={fields}
         rowNote={(r) => attention(r, fields).join("; ")}
+        rowTag={(r) => marks[r.id] && (
+          <span className={"tag " + (marks[r.id] === "new" ? "ok" : "edited")} style={{ marginLeft: ".3rem" }}
+                title={marks[r.id] === "changed" ? (changedBy[r.id] || []).map((d) => `${d.field}: ${short(d.old, 60) || "blank"} → ${short(d.new, 60) || "blank"}`).join("\n") : "Not in the last published version"}>
+            {marks[r.id]}
+          </span>
+        )}
         renderDetail={(r) => (
           <>
-            {editing === r.id ? (
+            {!locked && (editing === r.id ? (
               <RecordEditor fields={fields} values={r.values} disabled={disabled}
                             onSave={(values) => edit({ op: "set", record_id: r.id, values }).then((x) => x && setEditing(null))}
                             onCancel={() => setEditing(null)} />
             ) : (
               <div className="btn-row" style={{ marginTop: 0 }}>
-                <button disabled={disabled || partial} onClick={() => setEditing(r.id)}>Edit values</button>
-                <button disabled={disabled || partial} onClick={() => edit({ op: "remove", record_id: r.id })}>Remove record</button>
+                <button disabled={disabled} onClick={() => setEditing(r.id)}>Override values</button>
+                <button disabled={disabled} onClick={() => edit({ op: "remove", record_id: r.id })}>Remove row</button>
                 {isEdited(r) && !r.added_by_you && (
-                  <button disabled={disabled} onClick={() => edit({ op: "undo", record_id: r.id })}>Undo my edits</button>
+                  <button disabled={disabled} onClick={() => edit({ op: "undo", record_id: r.id })}>Undo my overrides</button>
                 )}
+              </div>
+            ))}
+            {changedBy[r.id] && (
+              <div className="pl-note"><b>Changed since v{review.since.dataset_version}:</b>
+                <ul>{changedBy[r.id].map((d) => <li key={d.field}><code>{d.field}</code>: {short(d.old, 100) || "blank"} → {short(d.new, 100) || "blank"}</li>)}</ul>
               </div>
             )}
             {attention(r, fields).length > 0 && <div className="pl-bad">Check: {attention(r, fields).join("; ")}</div>}
             {!r.added_by_you && <RecordDetail r={r} fields={fields} />}
           </>
         )} />
-      {out.removed?.length > 0 && (
+      {removed.length > 0 && (
         <div className="pl-removed">
-          <b>Removed by you ({out.removed.length})</b>
-          <ul>{out.removed.map(({ record: r }) => (
+          <b>Removed by you ({removed.length})</b>
+          <ul>{removed.map(({ record: r }) => (
             <li key={r.id}><span className="assess">{r.id}</span> {r.values?.[fields[0]?.name] || "(unnamed)"}
-              <button className="link" disabled={disabled} onClick={() => edit({ op: "undo", record_id: r.id })}>restore</button></li>
+              <button className="link" disabled={disabled || !!locked} onClick={() => edit({ op: "undo", record_id: r.id })}>restore</button></li>
           ))}</ul>
         </div>
       )}
-      <div className="pl-review-foot">
-        {step.status !== "approved" ? (
-          <button className="primary" disabled={disabled}
-                  onClick={() => act("POST", `/steps/${step.id}/approve`).then((r) => r && onDone())}>
-            Approve {step.id}{n ? ` with your ${n} edit${n > 1 ? "s" : ""}` : ""}
-          </button>
-        ) : <span className="tag ok">approved</span>}
-        <span className="assess">
-          {out.count} record(s) · {flagged} need attention{n ? ` · ${n} edit(s) by you, kept on re-runs` : ""}
-        </span>
-      </div>
     </div>
   );
 }
@@ -367,7 +484,7 @@ function RecordDetail({ r, fields }) {
                   {p?.quote && (p.verified ? <span className="tag ok">quote found</span> : <span className="tag gone">quote not found</span>)}
                   {p?.source_url && <> · <a href={p.source_url} target="_blank" rel="noreferrer">{host(p.source_url)}</a></>}
                   {p?.note && <div className="assess">{p.note}</div>}
-                  {p?.was && <div className="assess">The step had: {p.was.value == null || p.was.value === "" ? "blank" : `“${short(p.was.value, 120)}”`}</div>}
+                  {p?.was && <div className="assess">The pipeline produced: {p.was.value == null || p.was.value === "" ? "blank" : `“${short(p.was.value, 120)}”`}</div>}
                   {p?.quote && <blockquote>{p.quote}</blockquote>}
                   {p?.unmatched?.length > 0 && <div className="pl-bad">Not found: {p.unmatched.map((m, i) => <q key={i}>{m}</q>)}</div>}
                 </td>
@@ -443,49 +560,6 @@ function RecordsTable({ records, fields, renderDetail, rowNote, rowTag }) {
         </div>
       )}
     </>
-  );
-}
-
-function OutputCard({ view }) {
-  const [focus, setFocus] = useState(false);
-  const fields = view.definition.schema?.fields || [];
-  const records = view.last_records || [];
-  if (!records.length && !view.last_run) return null;
-  const total = view.last_run?.coverage?.records ?? 0;
-  const review = view.last_run?.review;
-  const marks = review?.since ? review.marks || {} : {};
-  const changedBy = Object.fromEntries((review?.changed || []).map((c) => [c.id, c.fields]));
-  const shown = focus ? records.filter((r) => marks[r.id] || attention(r, fields).length) : records;
-  return (
-    <div className="card">
-      <h4>
-        {view.last_run?.upto ? `Output of the preview to ${view.last_run.upto}` : "Output of the last run"}{" "}
-        <span className="assess">({total} record(s){records.length < total ? `, first ${records.length} shown` : ""})</span>
-      </h4>
-      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
-        What publishing would write. To correct records, review the step that produced them above.
-      </div>
-      <label className="assess"><input type="checkbox" checked={focus} onChange={(e) => setFocus(e.target.checked)} />
-        {" "}Only {review?.since ? "new or changed records, and records " : "records "}needing attention</label>
-      <RecordsTable records={shown} fields={fields}
-        rowNote={(r) => attention(r, fields).join("; ")}
-        rowTag={(r) => marks[r.id] && (
-          <span className={"tag " + (marks[r.id] === "new" ? "ok" : "edited")} style={{ marginLeft: ".3rem" }}
-                title={marks[r.id] === "changed" ? (changedBy[r.id] || []).map((d) => `${d.field}: ${short(d.old, 60) || "blank"} → ${short(d.new, 60) || "blank"}`).join("\n") : "Not in the last published version"}>
-            {marks[r.id]}
-          </span>
-        )}
-        renderDetail={(r) => (
-          <>
-            {changedBy[r.id] && (
-              <div className="pl-note"><b>Changed since v{review.since.dataset_version}:</b>
-                <ul>{changedBy[r.id].map((d) => <li key={d.field}><code>{d.field}</code>: {short(d.old, 100) || "blank"} → {short(d.new, 100) || "blank"}</li>)}</ul>
-              </div>
-            )}
-            <RecordDetail r={r} fields={fields} />
-          </>
-        )} />
-    </div>
   );
 }
 
@@ -614,7 +688,7 @@ export default function PipelinePanel({ view, act, pending }) {
       <SchemaCard view={view} act={act} disabled={disabled} />
       <SourcesCard view={view} act={act} disabled={disabled} />
       <StepsCard view={view} act={act} disabled={disabled} />
-      <OutputCard view={view} />
+      <OutputCard view={view} act={act} disabled={disabled} />
       <LoadCard view={view} act={act} disabled={disabled} />
     </div>
   );

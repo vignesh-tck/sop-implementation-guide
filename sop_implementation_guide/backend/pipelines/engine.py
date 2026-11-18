@@ -137,7 +137,9 @@ CATALOG: dict[str, dict] = {
         "description": "Recommend each programme's geographic reach: federal, state:MD, county:24033 "
                        "(Prince George's), tract:NMTC (only in designated tracts) or unknown, with a "
                        "reason. Marked 'inferred'.",
-        "config": {"field": "optional str, default geo_scope"},
+        "config": {"field": "optional str, default geo_scope",
+                   "instruction": "optional str: how to judge reach; replaces the default guidance (the allowed "
+                                  "values stay fixed)"},
     },
 }
 
@@ -573,7 +575,10 @@ CHOOSE_PROMPT = """You are a research analyst filling gaps in a dataset for a ci
 
 THE PIPELINE'S GOAL:
 {context}
+
+HOW TO RESEARCH (from the planner):
 {instructions}
+
 The records below were read from this page: {url}
 Each lists what is known, the fields still blank, and any leads the first reading noted. Known values
 read from an overview page are often thin (a heading, a one-line summary); the item's own page usually
@@ -594,6 +599,9 @@ FILL_FROM_PAGE_PROMPT = """You are a research analyst filling gaps in a dataset 
 
 THE PIPELINE'S GOAL:
 {context}
+
+HOW TO RESEARCH (from the planner):
+{instructions}
 
 PAGE: {url}
 ---
@@ -672,7 +680,7 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
                     "why": {"type": "string"}})}})
                 cache[key] = structured_call(CHOOSE_PROMPT.format(
                     context=context or "(none given)",
-                    instructions=f"\nHOW TO RESEARCH (from the planner): {cfg['instructions']}\n" if cfg.get("instructions") else "",
+                    instructions=cfg.get("instructions") or "(none given)",
                     url=src_url, n=per_rec, records=json.dumps(digest, indent=1, default=str),
                     links="\n".join(f"{i}: {l['text'] or '(no text)'} -> {l['url']}" for i, l in enumerate(links))),
                     schema, max_tokens=16000, model=MODEL, effort=EFFORT)["choices"]
@@ -714,7 +722,8 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
         page_url = doc.get("final_url") or url
         digest = [{"id": r["id"], "known": {k: v for k, v in r["values"].items() if not _blank(v)},
                    "blank": blanks(r)} for r in recs]
-        key = _hash(["research_page", MODEL, context, url, (doc.get("text") or "")[:SOURCE_CHARS], digest])
+        key = _hash(["research_page", MODEL, context, url, (doc.get("text") or "")[:SOURCE_CHARS], digest]
+                    + ([cfg["instructions"]] if cfg.get("instructions") else []))
         if key not in cache:
             schema = _obj({"results": {"type": "array", "items": _obj({
                 "id": {"type": "string"},
@@ -729,6 +738,7 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
                 "note": {"type": "string"}})}})
             cache[key] = structured_call(FILL_FROM_PAGE_PROMPT.format(
                 context=context or "(none given)", url=page_url,
+                instructions=cfg.get("instructions") or "(none given)",
                 text=(doc.get("text") or "")[:SOURCE_CHARS],
                 fields="\n".join(f"- {n}: {by_name[n]['description'] or n} ({by_name[n]['type']})" for n in names),
                 records=json.dumps(digest, indent=1, default=str)),
@@ -792,13 +802,73 @@ return null for that record. Give a one-line reason for each.
 RECORDS:
 {records}"""
 
-GEO_INSTRUCTION = """Recommend each programme's geographic reach. The planner works on city blocks in Bowie,
+GEO_VALUES = """Recommend each programme's geographic reach. The planner works on city blocks in Bowie,
 Prince George's County, Maryland (county FIPS 24033). Use one of: federal (available nationally),
 state:MD (Maryland only), county:24033 (Prince George's County only), tract:NMTC (only in tracts
-carrying a designation; name it after 'tract:'), unknown (the source does not say). Judge by who may
+carrying a designation; name it after 'tract:'), unknown (the source does not say)."""
+GEO_GUIDANCE = """Judge by who may
 apply and where the money may be spent, as the evidence states it: a programme open to every Maryland
 jurisdiction is state:MD even if a county or city administers its local share; a federal programme
 that a state agency runs is state:MD. Base it on the evidence, not on what would be convenient."""
+
+
+def geo_instruction(cfg: dict) -> str:
+    return GEO_VALUES + " " + (cfg.get("instruction") or GEO_GUIDANCE)
+
+
+# ── What a model step sends, for the planner to read and tune ────────────────
+#
+# Each model step's prompt is fixed text (the reading and evidence rules the
+# quote check depends on) around one slot the planner owns: the step's
+# instructions. prompt_view renders the real template with that slot marked,
+# so what the planner reads is what the model gets.
+
+_SLOT = "\x00SLOT\x00"
+EDITABLE = {"extract": "instructions", "research": "instructions", "llm_fill": "instruction", "geo_tie": "instruction"}
+
+
+def _split(text: str) -> dict:
+    before, after = text.split(_SLOT)
+    return {"before": before, "after": after}
+
+
+def prompt_view(step: dict, fields: list[dict], context: str) -> dict | None:
+    t, c = step["type"], step.get("config") or {}
+    if t not in EDITABLE:
+        return None
+    ph = lambda s: f"‹{s}›"
+    goal = context or "(none given)"
+    targets = [f for f in fields if f.get("extract", True)]
+    view = {"key": EDITABLE[t], "value": c.get(EDITABLE[t]) or "", "default": "(none given)", "prompts": []}
+    if t == "extract":
+        view["default"] = "(no special instructions)"
+        view["prompts"].append({"title": "Read each source (once per part of up to "
+                                         f"{SOURCE_CHARS:,} characters)", **_split(EXTRACT_PROMPT.format(
+            context=goal, instructions=_SLOT, url=ph("source URL"), part="",
+            text=ph("the source text")))})
+    elif t == "research":
+        rec = ph("each record: what is known, which fields are blank, and its leads")
+        view["prompts"].append({"title": "1. Choose which linked pages to read for each record", **_split(CHOOSE_PROMPT.format(
+            context=goal, instructions=_SLOT, url=ph("the record's source page"), n=c.get("max_pages_per_record") or 2,
+            records=rec, links=ph("the links found on that page")))})
+        names = c.get("fields") or [f["name"] for f in targets]
+        by_name = {f["name"]: f for f in fields}
+        view["prompts"].append({"title": "2. Read each chosen page and fill or improve values", **_split(FILL_FROM_PAGE_PROMPT.format(
+            context=goal, instructions=_SLOT, url=ph("page URL"), text=ph("the page text"),
+            fields="\n".join(f"- {n}: {by_name[n]['description'] or n} ({by_name[n]['type']})" for n in names if n in by_name),
+            records=rec))})
+    else:
+        f = _field(fields, c.get("field") or "geo_scope")
+        instruction = (GEO_VALUES + " " + _SLOT) if t == "geo_tie" else _SLOT
+        if t == "geo_tie":
+            view["value"] = c.get("instruction") or GEO_GUIDANCE
+            view["default"] = GEO_GUIDANCE
+        view["prompts"].append({"title": f"Judge `{f['name']}` for each record", **_split(FILL_PROMPT.format(
+            field=f["name"], type_desc=_json_type(f)["description"], instruction=instruction,
+            records=ph("each record's values, quotes, excerpt and analyst note")))})
+    if t in ("extract", "research"):
+        view["fields"] = [{"name": f["name"], "description": _json_type(f)["description"]} for f in targets]
+    return view
 
 
 def _model_fill(step: dict, records: list[dict], fields: list[dict], cache: dict,
@@ -891,11 +961,12 @@ def _apply(step: dict, records: list[dict], fields: list[dict]) -> tuple[list[di
     raise PipelineError(f"Step type {t!r} is not deterministic.")
 
 
-# ── The planner's edits to a step's output ───────────────────────────────────
+# ── The planner's overrides on the final output ──────────────────────────────
 #
-# Reviewing a step, the planner can correct values, remove records and add ones
-# the sources missed. The edits are saved on the step (step["edits"]) and
-# applied right after it on every run, so a re-run keeps them:
+# Once every step is approved and the pipeline has run, the planner can correct
+# values, remove records and add ones the sources missed. The overrides are
+# saved on the definition (definition["overrides"]) and applied to the final
+# output of every full run, so a re-run keeps them:
 #
 #     {"removed": [{"id", "key"}], "changed": [{"id", "key", "values": {field: value}}],
 #      "added": [{"id", "values": {field: value}}]}
@@ -923,12 +994,14 @@ def _find(records: list[dict], edit: dict, fields: list[dict]) -> dict | None:
     return None
 
 
-def _manual(rec: dict, field: str, value: Any, step_id: str) -> None:
+OVERRIDE_NOTE = "your override on the final output"
+
+
+def _manual(rec: dict, field: str, value: Any) -> None:
     old = rec["prov"].get(field)
     was = old["was"] if old and old.get("kind") == "manual" else {"value": rec["values"].get(field), "prov": old}
     rec["values"][field] = value
-    rec["prov"][field] = {"kind": "manual", "step": step_id, "note": f"entered by you reviewing {step_id}",
-                          "was": was}
+    rec["prov"][field] = {"kind": "manual", "step": "final", "note": OVERRIDE_NOTE, "was": was}
 
 
 def clean_edit_values(values: dict, fields: list[dict]) -> dict:
@@ -962,17 +1035,17 @@ def clean_edit_values(values: dict, fields: list[dict]) -> dict:
     return out
 
 
-def apply_edits(step: dict, records: list[dict], fields: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
-    """Apply step["edits"]. Returns (records, removed as [{index, record}], warnings)."""
-    edits = {**EMPTY_EDITS, **(step.get("edits") or {})}
-    sid, warnings, removed = step["id"], [], []
+def apply_edits(overrides: dict | None, records: list[dict], fields: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+    """Apply the planner's overrides. Returns (records, removed as [{index, record}], warnings)."""
+    edits = {**EMPTY_EDITS, **(overrides or {})}
+    warnings, removed = [], []
     for e in edits["changed"]:
         r = _find(records, e, fields)
         if not r:
             warnings.append(f"your change to “{e.get('key') or e['id']}” matches no record any more")
             continue
         for name, v in e["values"].items():
-            _manual(r, name, v, sid)
+            _manual(r, name, v)
     for e in edits["removed"]:
         r = _find(records, e, fields)
         if not r:
@@ -988,17 +1061,17 @@ def apply_edits(step: dict, records: list[dict], fields: list[dict]) -> tuple[li
         for name, v in e["values"].items():
             if not _blank(v):
                 rec["values"][name] = v
-                rec["prov"][name] = {"kind": "manual", "step": sid, "note": f"entered by you reviewing {sid}"}
+                rec["prov"][name] = {"kind": "manual", "step": "final", "note": OVERRIDE_NOTE}
         records.append(rec)
     n = len(edits["changed"]) + len(edits["removed"]) + len(edits["added"])
     if n:
-        warnings.insert(0, f"your edits: {len(edits['changed'])} changed, {len(removed)} removed, "
+        warnings.insert(0, f"your overrides: {len(edits['changed'])} changed, {len(removed)} removed, "
                            f"{len(edits['added'])} added")
     return records, removed, warnings
 
 
 def unapply_edits(out: dict) -> list[dict]:
-    """The step's own output before the planner's edits, rebuilt from a stored output."""
+    """The pipeline's output before the planner's overrides, rebuilt from a stored run."""
     def revert(r: dict) -> dict:
         r = json.loads(json.dumps(r))
         for name, p in list(r["prov"].items()):
@@ -1075,8 +1148,8 @@ def definition_hash(definition: dict) -> str:
         "fields": [{k: f.get(k) for k in ("name", "type", "required", "enum_values", "extract")}
                    for f in schema.get("fields", [])],
         "sources": [{k: s.get(k) for k in ("id", "kind", "url", "query")} for s in definition.get("sources", [])],
-        "steps": [{k: s.get(k) for k in ("id", "type", "config")} | ({"edits": s["edits"]} if s.get("edits") else {})
-                  for s in definition.get("steps", [])],
+        "steps": [{k: s.get(k) for k in ("id", "type", "config")} for s in definition.get("steps", [])],
+        **({"overrides": definition["overrides"]} if definition.get("overrides") else {}),
     })
 
 
@@ -1169,10 +1242,9 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             elif step["type"] == "llm_fill":
                 warnings = _model_fill(step, records, fields, cache, step["config"]["instruction"], "llm_fill")
             elif step["type"] == "geo_tie":
-                warnings = _model_fill(step, records, fields, cache, GEO_INSTRUCTION, "geo_tie")
+                warnings = _model_fill(step, records, fields, cache, geo_instruction(step["config"]), "geo_tie")
             else:
                 records, warnings = _apply(step, records, fields)
-            records, removed, edit_notes = apply_edits(step, records, fields)
         except Exception as e:  # noqa: BLE001 — reported on the step, run stops here
             log.warning("pipeline step %s failed: %s", step["id"], e)
             errors.append(f"{step['id']} ({step['type']}): {e}")
@@ -1180,10 +1252,16 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             break
         records = json.loads(json.dumps(records, default=str))  # snapshot, so later steps don't rewrite this one
         outputs[step["id"]] = {"count": len(records), "warnings": warnings,
-                               "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields),
-                               "removed": json.loads(json.dumps(removed, default=str)), "edit_notes": edit_notes}
+                               "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields)}
         if upto and step["id"] == upto:
             break
+
+    # The planner's overrides apply to the final output of a full run.
+    removed, override_notes = [], []
+    if upto is None and not errors:
+        records, removed, override_notes = apply_edits(definition.get("overrides"), records, fields)
+        records = json.loads(json.dumps(records, default=str))
+        removed = json.loads(json.dumps(removed, default=str))
 
     # The cache only keeps entries this run used or still could, bounded.
     state["cache"] = dict(list(cache.items())[-120:])
@@ -1194,6 +1272,8 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
         "complete": upto is None and not errors and len(outputs) == len(steps),
         "definition_hash": definition_hash(definition) if upto is None else None,
         "records": records,
+        "removed": removed,
+        "override_notes": override_notes,
         "coverage": coverage(records, fields),
         "errors": errors + [v["error"] for k, v in src_state.items() if v.get("error")],
     }

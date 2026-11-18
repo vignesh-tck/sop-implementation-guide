@@ -81,10 +81,15 @@ def set_schema(db: Client, pipeline_id: int, fields: list[dict], by_user: bool =
         old = prev.get(f["name"])
         if old and all(old.get(k) == f.get(k) for k in ("type", "required", "enum_values")) and old.get("accept_blank"):
             f["accept_blank"] = True
+    keys = ("name", "type", "required", "enum_values", "extract", "description")
+    changed = [{k: f.get(k) for k in keys} for f in clean] != [{k: f.get(k) for k in keys} for f in prev.values()]
     p["definition"]["schema"] = {"status": "proposed", "fields": clean}
-    _save(db, p)
+    reset = _invalidate_from(p, 0) if changed else []
+    _save(db, p, state=p["state"])
+    if reset and not by_user:
+        event(db, pipeline_id, "The target schema changed." + _reset_text(reset))
     if by_user:
-        event(db, pipeline_id, f"You set the target schema ({len(clean)} fields).")
+        event(db, pipeline_id, f"You set the target schema ({len(clean)} fields)." + _reset_text(reset))
     return p["definition"]["schema"]
 
 
@@ -199,71 +204,145 @@ def add_step(db: Client, pipeline_id: int, step_type: str, config: dict, note: s
             "note": (note or "").strip(), "status": "proposed"}
     idx = next((i + 1 for i, s in enumerate(steps) if s["id"] == after), len(steps))
     steps.insert(idx, step)
-    _save(db, p)
+    reset = _invalidate_from(p, idx)   # later steps now work on this step's output
+    _save(db, p, state=p["state"])
+    if reset:
+        event(db, pipeline_id, f"Step {step['id']} was added before approved steps." + _reset_text(reset))
     return step
+
+
+def _invalidate_from(p: dict, index: int) -> list[str]:
+    """
+    A step changed: it and every later step must be previewed and approved
+    again, because their output depends on it. Returns the steps that lose
+    their approval.
+    """
+    reset = []
+    for s in p["definition"]["steps"][index:]:
+        if s.get("status") == "approved":
+            reset.append(s["id"])
+        s["status"] = "proposed"
+        (p["state"].get("outputs") or {}).pop(s["id"], None)
+    return reset
+
+
+def _reset_text(reset: list[str]) -> str:
+    return f" Steps {', '.join(reset)} need approving again." if reset else ""
 
 
 def update_step(db: Client, pipeline_id: int, step_id: str, config: dict | None = None,
                 note: str | None = None, by_user: bool = False) -> dict:
     p = get(db, pipeline_id)
-    step = next((s for s in p["definition"]["steps"] if s["id"] == step_id), None)
+    steps = p["definition"]["steps"]
+    step = next((s for s in steps if s["id"] == step_id), None)
     if not step:
         raise PipelineError(f"No step {step_id}.")
+    reset, changed = [], False
     if config is not None:
-        step["config"] = engine.validate_step(p["kind"], step["type"], config, _fields(p))
-        step["status"] = "proposed"   # a changed step needs approving again
+        clean = engine.validate_step(p["kind"], step["type"], config, _fields(p))
+        if clean != step["config"]:
+            step["config"], changed = clean, True
+            reset = _invalidate_from(p, steps.index(step))
     if note is not None:
         step["note"] = note.strip()
-    _save(db, p)
-    if by_user:
-        event(db, pipeline_id, f"You edited step {step_id}; it needs approving again.")
+    _save(db, p, state=p["state"])
+    if by_user and changed:
+        what = "prompt instructions" if step["type"] in engine.EDITABLE else "settings"
+        event(db, pipeline_id, f"You changed step {step_id}'s {what}. Preview it again to check the output."
+              + _reset_text(reset))
     return step
 
 
 def remove_step(db: Client, pipeline_id: int, step_id: str, by_user: bool = False) -> None:
     p = get(db, pipeline_id)
-    before = len(p["definition"]["steps"])
-    p["definition"]["steps"] = [s for s in p["definition"]["steps"] if s["id"] != step_id]
-    if len(p["definition"]["steps"]) == before:
+    steps = p["definition"]["steps"]
+    i = next((n for n, s in enumerate(steps) if s["id"] == step_id), None)
+    if i is None:
         raise PipelineError(f"No step {step_id}.")
-    _save(db, p)
+    steps.pop(i)
+    (p["state"].get("outputs") or {}).pop(step_id, None)
+    reset = _invalidate_from(p, i)
+    _save(db, p, state=p["state"])
     if by_user:
-        event(db, pipeline_id, f"You removed step {step_id}.")
+        event(db, pipeline_id, f"You removed step {step_id}." + _reset_text(reset))
 
 
 def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
-    p = get(db, pipeline_id)
-    step = next((s for s in p["definition"]["steps"] if s["id"] == step_id), None)
-    if not step:
-        raise PipelineError(f"No step {step_id}.")
-    step["status"] = "approved"
-    _save(db, p)
-    event(db, pipeline_id, f"You approved step {step_id} ({engine.CATALOG[step['type']]['label']}).")
-    return step
-
-
-def edit_records(db: Client, pipeline_id: int, step_id: str, op: str, record_id: str | None = None,
-                 values: dict | None = None) -> dict:
     """
-    The planner's review of a step's output: set values on a record, remove it,
-    add one, or undo every edit to a record. Saved on the step, so runs re-apply
-    them, and applied to the stored output now so the review shows the result.
+    Approving a step means its prompt (or settings) and its output were checked.
+    So it needs a preview with the current settings, and the steps before it
+    approved first: its output depends on theirs.
     """
     p = get(db, pipeline_id)
-    fields = _fields(p)
     steps = p["definition"]["steps"]
     step = next((s for s in steps if s["id"] == step_id), None)
     if not step:
         raise PipelineError(f"No step {step_id}.")
+    earlier = [s["id"] for s in steps[:steps.index(step)] if s.get("status") != "approved"]
+    if earlier:
+        raise PipelineError(f"Approve {', '.join(earlier)} first: this step works on their output.")
     out = (p["state"].get("outputs") or {}).get(step_id)
-    if not out or out.get("error"):
-        raise PipelineError(f"Preview {step_id} first, then review its output.")
-    if out["count"] > len(out.get("records") or []):
-        raise PipelineError(f"{step_id} has {out['count']} records; only the first {engine.PREVIEW_RECORDS} "
-                            "can be reviewed here. Add a filter step to narrow it.")
-    edits = {k: list(v) for k, v in {**engine.EMPTY_EDITS, **(step.get("edits") or {})}.items()}
-    shown = {r["id"]: r for r in out["records"]}
-    base = {r["id"]: r for r in engine.unapply_edits(out)}
+    if not out:
+        raise PipelineError(f"Preview {step_id} first, so you approve it having seen what it produces.")
+    if out.get("error"):
+        raise PipelineError(f"{step_id} failed in its last preview: {out['error']}")
+    step["status"] = "approved"
+    _save(db, p)
+    event(db, pipeline_id, f"You approved step {step_id} ({engine.CATALOG[step['type']]['label']})."
+          + (" Every step is approved: run the pipeline to see the final output." if
+             all(s.get("status") == "approved" for s in steps) else ""))
+    return step
+
+
+def move_step(db: Client, pipeline_id: int, step_id: str, direction: int) -> list[dict]:
+    p = get(db, pipeline_id)
+    steps = p["definition"]["steps"]
+    i = next((n for n, s in enumerate(steps) if s["id"] == step_id), None)
+    if i is None:
+        raise PipelineError(f"No step {step_id}.")
+    j = i + (1 if direction > 0 else -1)
+    if 0 <= j < len(steps):
+        steps[i], steps[j] = steps[j], steps[i]
+        reset = _invalidate_from(p, min(i, j))
+        _save(db, p, state=p["state"])
+        event(db, pipeline_id, f"You moved step {step_id}." + _reset_text(reset))
+    return steps
+
+
+# ── Overrides on the final output ────────────────────────────────────────────
+
+def output_locked(p: dict) -> str | None:
+    """Why the final output cannot be overridden right now, or None if it can."""
+    steps = p["definition"]["steps"]
+    if not steps:
+        return "There are no steps yet."
+    pending = [s["id"] for s in steps if s.get("status") != "approved"]
+    if pending:
+        return f"Approve every step first (still to approve: {', '.join(pending)})."
+    last = p["state"].get("last_run") or {}
+    if not last or last.get("upto") or last.get("definition_hash") != engine.definition_hash(p["definition"]):
+        return "Run the pipeline to produce the final output."
+    if last.get("errors"):
+        return "The last run had errors."
+    return None
+
+
+def edit_output(db: Client, pipeline_id: int, op: str, record_id: str | None = None,
+                values: dict | None = None) -> dict:
+    """
+    The planner's overrides on the final output: set values on a row, remove
+    it, add one, or undo every override on a row. Saved on the definition and
+    re-applied to every full run; applied to the current output now.
+    """
+    p = get(db, pipeline_id)
+    locked = output_locked(p)
+    if locked:
+        raise PipelineError(locked)
+    fields = _fields(p)
+    last = p["state"]["last_run"]
+    edits = {k: list(v) for k, v in {**engine.EMPTY_EDITS, **(p["definition"].get("overrides") or {})}.items()}
+    shown = {r["id"]: r for r in last["records"]}
+    base = {r["id"]: r for r in engine.unapply_edits(last)}
     name = lambda rid: (shown.get(rid) or base.get(rid) or {}).get("values", {}).get(fields[0]["name"]) or rid
 
     if op == "add":
@@ -271,7 +350,7 @@ def edit_records(db: Client, pipeline_id: int, step_id: str, op: str, record_id:
         if not any(v is not None for v in clean.values()):
             raise PipelineError("Fill at least one field.")
         n = max([int(e["id"].rsplit("-u", 1)[1]) for e in edits["added"]] or [0]) + 1
-        record_id = f"{step_id}-u{n}"
+        record_id = f"you-u{n}"
         edits["added"].append({"id": record_id, "values": clean})
         text = f"added {record_id} ({clean.get(fields[0]['name']) or 'unnamed'})"
     elif op == "set":
@@ -287,13 +366,13 @@ def edit_records(db: Client, pipeline_id: int, step_id: str, op: str, record_id:
                 edits["changed"].append(change)
             for k, v in clean.items():
                 if v == orig["values"].get(k):
-                    change["values"].pop(k, None)   # set back to what the step produced
+                    change["values"].pop(k, None)   # set back to what the pipeline produced
                 else:
                     change["values"][k] = v
             if not change["values"]:
                 edits["changed"].remove(change)
         else:
-            raise PipelineError(f"No record {record_id} in {step_id}'s output.")
+            raise PipelineError(f"No row {record_id} in the final output.")
         text = f"changed {record_id} ({name(record_id)}): {', '.join(clean)}"
     elif op == "remove":
         if any(e["id"] == record_id for e in edits["added"]):
@@ -302,50 +381,28 @@ def edit_records(db: Client, pipeline_id: int, step_id: str, op: str, record_id:
             if not any(e["id"] == record_id for e in edits["removed"]):
                 edits["removed"].append({"id": record_id, "key": engine.record_key(shown[record_id], fields)})
         else:
-            raise PipelineError(f"No record {record_id} in {step_id}'s output.")
+            raise PipelineError(f"No row {record_id} in the final output.")
         text = f"removed {record_id} ({name(record_id)})"
     elif op == "undo":
         label = name(record_id)
         for k in edits:
             edits[k] = [e for e in edits[k] if e["id"] != record_id]
-        text = f"undid your edits to {record_id} ({label})"
+        text = f"undid your overrides on {record_id} ({label})"
     else:
         raise PipelineError("op must be add, set, remove or undo.")
 
-    before = engine.definition_hash(p["definition"])
-    step["edits"] = edits if any(edits.values()) else None
-    if not step["edits"]:
-        step.pop("edits")
-    records, removed, notes = engine.apply_edits(step, list(base.values()), fields)
-    out.update({"records": records, "removed": removed, "edit_notes": notes, "count": len(records),
-                "coverage": engine.coverage(records, fields)})
-    # Later steps ran on the old output. If this is the last step of a full run, the run's result is
-    # this output, so it stays loadable; otherwise later outputs are out of date until the next run.
-    last = p["state"].get("last_run") or {}
-    later = [s["id"] for s in steps[steps.index(step) + 1:]]
-    for sid in later:
-        if sid in p["state"]["outputs"]:
-            p["state"]["outputs"][sid]["stale"] = True
-    if not later and last and not last.get("upto") and last.get("definition_hash") == before:
-        last.update({"records": records, "coverage": out["coverage"],
-                     "definition_hash": engine.definition_hash(p["definition"])})
-        review(db, p)
+    if any(edits.values()):
+        p["definition"]["overrides"] = edits
+    else:
+        p["definition"].pop("overrides", None)
+    records, removed, notes = engine.apply_edits(p["definition"].get("overrides"), list(base.values()), fields)
+    last.update({"records": records, "removed": removed, "override_notes": notes,
+                 "coverage": engine.coverage(records, fields),
+                 "definition_hash": engine.definition_hash(p["definition"])})
+    review(db, p)   # the output changed, so it is ready for review again
     _save(db, p, state=p["state"])
-    event(db, pipeline_id, f"You reviewed {step_id}: {text}.")
-    return {"record_id": record_id, "edits": edits}
-
-
-def move_step(db: Client, pipeline_id: int, step_id: str, direction: int) -> list[dict]:
-    p = get(db, pipeline_id)
-    steps = p["definition"]["steps"]
-    i = next((n for n, s in enumerate(steps) if s["id"] == step_id), None)
-    if i is None:
-        raise PipelineError(f"No step {step_id}.")
-    j = i + (1 if direction > 0 else -1)
-    if 0 <= j < len(steps):
-        steps[i], steps[j] = steps[j], steps[i]
-        _save(db, p)
-    return steps
+    event(db, pipeline_id, f"Final output: you {text}.")
+    return {"record_id": record_id, "overrides": edits}
 
 
 # ── Run, diff, load ──────────────────────────────────────────────────────────
@@ -355,6 +412,9 @@ def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = Fal
     """Run (or preview up to a step). Writes state; returns the last_run summary."""
     p = get(db, pipeline_id)
     repo = PipelineRepository(db)
+    steps = p["definition"]["steps"]
+    if upto and steps and upto == steps[-1]["id"]:
+        upto = None   # previewing the last step runs the whole pipeline
 
     def progress(msg: str) -> None:
         p["state"]["progress"] = msg
@@ -411,7 +471,8 @@ def review_text(rv: dict, label: str = "Funding") -> str:
 def summarise_run(last: dict | None) -> dict | None:
     if not last:
         return None
-    return {k: last.get(k) for k in ("at", "upto", "complete", "coverage", "errors", "review")}
+    return {k: last.get(k) for k in ("at", "upto", "complete", "coverage", "errors", "review", "removed",
+                                     "override_notes")}
 
 
 def gate(p: dict) -> list[str]:
@@ -461,6 +522,18 @@ def load(db: Client, pipeline_id: int, name: str | None, created_by: str | None)
 
 # ── Read model for the UI ────────────────────────────────────────────────────
 
+def _prompts(p: dict) -> dict:
+    """Each model step's prompt, as the planner reads and tunes it."""
+    out = {}
+    for st in p["definition"]["steps"]:
+        if st["type"] in engine.EDITABLE and _fields(p):
+            try:
+                out[st["id"]] = engine.prompt_view(st, _fields(p), p["definition"].get("goal") or p["name"])
+            except PipelineError as e:
+                out[st["id"]] = {"error": str(e)}
+    return out
+
+
 def view(db: Client, pipeline_id: int) -> dict[str, Any]:
     p = get(db, pipeline_id)
     s = kinds.spec(p["kind"])
@@ -476,6 +549,9 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
         "last_run": summarise_run(state.get("last_run")),
         "last_records": (state.get("last_run") or {}).get("records", [])[:engine.PREVIEW_RECORDS],
         "gate": gate(p),
+        "prompts": _prompts(p),
+        "output_locked": output_locked(p),
+        "overrides": p["definition"].get("overrides"),
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},
         "loads": PipelineRunRepository(db).for_pipeline(pipeline_id),

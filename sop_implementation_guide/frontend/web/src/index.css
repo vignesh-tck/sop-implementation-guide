@@ -813,3 +813,20 @@ main.view.pl-view {
 .pl-changes details { font-size: .84rem; }
 .pl-changes summary { cursor: pointer; }
 .pl-changes ul, .pl-note ul { margin: .2rem 0 0; padding-left: 1.1rem; }
+
+/* Step designer: prompt with fixed rules and the planner's editable instructions */
+.pl-step-toggle { cursor: pointer; user-select: none; }
+.pl-prompt, .pl-settings { display: flex; flex-direction: column; gap: .35rem; }
+.pl-prompt-head { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+.pl-prompt details { border: 1px solid var(--border); border-radius: 6px; padding: .3rem .5rem; }
+.pl-prompt summary { cursor: pointer; font-size: .84rem; }
+.pl-prompt-text { white-space: pre-wrap; word-break: break-word; font-size: .76rem; line-height: 1.45; color: var(--muted);
+  max-height: 22rem; overflow: auto; margin: .35rem 0 0; background: var(--surface-2); padding: .5rem; border-radius: 4px; }
+.pl-slot, .pl-slot-key { background: color-mix(in srgb, var(--blue, #5b5bd6) 16%, transparent); color: var(--text, inherit);
+  border-radius: 3px; padding: 0 .2rem; }
+.pl-slot { cursor: text; outline: 1px dashed var(--blue, #5b5bd6); }
+.pl-slot.ref { cursor: default; outline: none; opacity: .8; }
+.pl-slot-edit { display: block; width: 100%; box-sizing: border-box; font: inherit; color: var(--text, inherit);
+  border: 2px solid var(--blue, #5b5bd6); border-radius: 4px; margin: .2rem 0; }
+.pl-prompt-fields { margin: .3rem 0; padding-left: 1.1rem; font-size: .8rem; }
+.pl-output-head { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: .3rem; }
