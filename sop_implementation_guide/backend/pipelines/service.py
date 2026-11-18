@@ -288,9 +288,13 @@ def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
         raise PipelineError(f"{step_id} failed in its last preview: {out['error']}")
     step["status"] = "approved"
     _save(db, p)
+    gaps = engine.design_gaps(p["definition"])
+    done = all(s.get("status") == "approved" for s in steps)
     event(db, pipeline_id, f"You approved step {step_id} ({engine.CATALOG[step['type']]['label']})."
-          + (" Every step is approved: run the pipeline to see the final output." if
-             all(s.get("status") == "approved" for s in steps) else ""))
+          + ("" if not done else
+             f" The pipeline still has no step for {', '.join(f'`{g}`' for g in gaps)}: ask the agent to add it."
+             if gaps else " Every step is approved: run the pipeline to see the final output."),
+          level="warn" if done and gaps else "info")
     return step
 
 
@@ -316,6 +320,10 @@ def output_locked(p: dict) -> str | None:
     steps = p["definition"]["steps"]
     if not steps:
         return "There are no steps yet."
+    gaps = engine.design_gaps(p["definition"])
+    if gaps:
+        return (f"The steps do not produce {', '.join(f'`{g}`' for g in gaps)} yet: ask the agent to add the "
+                "steps the pipeline still needs.")
     pending = [s["id"] for s in steps if s.get("status") != "approved"]
     if pending:
         return f"Approve every step first (still to approve: {', '.join(pending)})."
@@ -551,6 +559,7 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
         "gate": gate(p),
         "prompts": _prompts(p),
         "output_locked": output_locked(p),
+        "design_gaps": engine.design_gaps(p["definition"]),
         "overrides": p["definition"].get("overrides"),
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},

@@ -140,6 +140,12 @@ function StepsCard({ view, act, disabled }) {
         Changing a step sends it and every later step back for approval.
       </div>
       {steps.length === 0 && <div className="assess">The agent proposes steps once the schema and sources are in place.</div>}
+      {steps.length > 0 && view.design_gaps?.length > 0 && (
+        <div className="pl-gate" style={{ marginBottom: ".5rem" }}>
+          <b>The pipeline is not complete:</b> no step produces {view.design_gaps.map((g, i) => <Fragment key={g}>{i > 0 && ", "}<code>{g}</code></Fragment>)}.
+          Ask the agent in the chat to add the missing steps.
+        </div>
+      )}
       <ol className="pl-steps">
         {steps.map((s, i) => {
           const out = view.outputs[s.id];

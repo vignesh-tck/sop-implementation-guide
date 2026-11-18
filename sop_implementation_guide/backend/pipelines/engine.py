@@ -1227,6 +1227,30 @@ def definition_hash(definition: dict) -> str:
     })
 
 
+def design_gaps(definition: dict) -> list[str]:
+    """
+    Fields the steps cannot produce at all, whatever the sources say: a required
+    field with no extract step to read it, or a judgement field (extract=false)
+    with no step that sets it. A required field the planner accepts blank is not
+    a gap. The design is not finished while this is non-empty.
+    """
+    fields = (definition.get("schema") or {}).get("fields") or []
+    steps = definition.get("steps") or []
+    has_extract = any(s["type"] == "extract" for s in steps)
+    set_by_step = {(s.get("config") or {}).get("field") or ("geo_scope" if s["type"] == "geo_tie" else None)
+                   for s in steps if s["type"] in ("llm_fill", "geo_tie", "set_value")}
+    gaps = []
+    for f in fields:
+        if f.get("accept_blank"):
+            continue
+        if f.get("extract", True):
+            if f["required"] and not has_extract:
+                gaps.append(f["name"])
+        elif f["name"] not in set_by_step:
+            gaps.append(f["name"])
+    return gaps
+
+
 def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list[str]:
     """Every reason Load is refused right now. Empty list = loadable."""
     reasons = []
@@ -1245,6 +1269,9 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
     steps = definition.get("steps") or []
     if not any(s["type"] == "extract" for s in steps):
         reasons.append("No extract step.")
+    gaps = design_gaps(definition)
+    if gaps:
+        reasons.append(f"No step produces {', '.join(f'`{g}`' for g in gaps)}: the pipeline needs more steps.")
     pending = [s["id"] for s in steps if s.get("status") != "approved"]
     if pending:
         reasons.append(f"Steps not approved: {', '.join(pending)}.")

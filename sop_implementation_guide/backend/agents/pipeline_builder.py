@@ -45,9 +45,15 @@ How the work goes:
    panel; you cannot.
 2. Sources: the planner pastes URLs or uploads files (uploads appear in the state as sources). Add pasted
    URLs with add_source. Use read_source to see what a source really contains before designing steps.
-3. Steps: propose steps from the catalog with add_step, each with a one-line note saying why. Keep the
-   pipeline short: usually one extract step per kind of source, then only the transforms the data needs
-   or the planner asks for. The planner designs each step with you, one at a time and in order: they
+3. Steps: propose THE WHOLE PIPELINE at once with add_step, every step it needs to produce every field
+   in the schema, each with a one-line note saying why. A funding pipeline is typically: extract, then
+   research (programme pages hold the amounts and deadlines), then parse steps for money/date fields
+   if the values need it, then a step for each judgement field (geo_tie for geo_scope; llm_fill for
+   others). Add dedupe when sources overlap or are read in parts. Do not hold steps back for later:
+   the state's design_gaps lists required fields no step produces yet, and it must be empty when you
+   finish proposing. Keep the pipeline otherwise short: only the transforms the data needs or the
+   planner asks for.
+   The planner then reviews the steps one at a time and in order: they
    read its prompt in the panel, tune its instructions (the instructions/instruction config; the rest of
    the prompt is fixed), preview its output and approve it. Write instructions they can read and edit:
    plain sentences about what counts as an item and what to look for. Changing a step's config, or the
@@ -167,6 +173,7 @@ def state_snapshot(p: dict) -> dict:
                                for k in ("chars", "truncated", "error")}} for s in d["sources"]],
         "steps": [{k: s.get(k) for k in ("id", "type", "config", "note", "status")} for s in d["steps"]],
         "planner_overrides": d.get("overrides"),
+        "design_gaps": engine.design_gaps(d),
         "last_run": ({"at": last.get("at"), "upto": last.get("upto"), "records": cov.get("records"),
                       "required_gaps": {g: cov["fields"][g]["missing"] for g in cov.get("required_gaps", [])},
                       "errors": last.get("errors")} if last else None),
@@ -213,7 +220,10 @@ def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
             return service.read_source(db, pipeline_id, args["source_id"], args.get("offset") or 0, args.get("length") or 4000), False
         if name == "add_step":
             step = service.add_step(db, pipeline_id, args["type"], args.get("config") or {}, args.get("note"), args.get("after"))
-            return {"step": step, "status": "proposed: the planner must approve it"}, False
+            gaps = engine.design_gaps(service.get(db, pipeline_id)["definition"])
+            return {"step": step, "status": "proposed: the planner must approve it",
+                    "design_gaps": gaps or "none: every field has a step that produces it",
+                    **({"next": "add steps for the fields in design_gaps before ending your turn"} if gaps else {})}, False
         if name == "update_step":
             return {"step": service.update_step(db, pipeline_id, args["step_id"], args.get("config"), args.get("note"))}, False
         if name == "remove_step":
