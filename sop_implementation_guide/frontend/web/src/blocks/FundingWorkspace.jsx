@@ -190,7 +190,7 @@ function MatchList({ row, editable, onEdit }) {
       {row.kept.length > 0 && (
         <div className="match-total">
           <span>{editable ? "Total kept" : "Total"} for {row.rec.rec_label}</span>
-          <b>{money(row.sum)}</b>
+          <b>{row.sum > 0 ? money(row.sum) : "—"}</b>
           {row.missing > 0 && (
             <span className="warn-text">
               {editable
@@ -289,7 +289,7 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
           <div className="tile"><span className="tile-k">No match</span><span className="tile-v big-v">{total - matched}</span></div>
           <div className="tile">
             <span className="tile-k">{phase === "review" ? "Total proposed" : "Total approved"}</span>
-            <span className="tile-v big-v">{money(blockTotal)}</span>
+            <span className="tile-v big-v">{blockTotal > 0 ? money(blockTotal) : "—"}</span>
             {missing > 0 && <span className="tile-s">{missing} without an amount</span>}
           </div>
         </div>
