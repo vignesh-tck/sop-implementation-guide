@@ -34,7 +34,11 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+from decimal import Decimal
+from functools import lru_cache
 from typing import Any, Callable, Optional
+
+import duckdb
 
 from backend.tools import grants_gov, source_store, web_source
 from backend.tools.llm_extractor import structured_call
@@ -165,6 +169,19 @@ CATALOG: dict[str, dict] = {
                    "instruction": "optional str: how to judge reach; replaces the default guidance (the allowed "
                                   "values stay fixed)"},
     },
+    "sql": {
+        "label": "SQL",
+        "model": False,
+        "description": "Transform the records with one SELECT (DuckDB SQL), run in a sandbox. Table `records` has "
+                       "`id` plus every schema field, typed: money/number/percent DOUBLE, date DATE, boolean "
+                       "BOOLEAN, others VARCHAR. Text that does not fit its type reads as NULL there; "
+                       "`records_text` has the same columns all as text. Optionally join read-only reference "
+                       "tables, listed in config.tables. The result must include `id`, at most one row per "
+                       "record; every other column must be a schema field, and only values that change are "
+                       "written (marked derived). Records left out of the result are dropped. Use it for computed "
+                       "fields, multi-condition filters, CASE rules and lookups, never to guess a value.",
+        "config": {"query": "str: one SELECT ... FROM records", "tables": "optional list of reference tables to join"},
+    },
 }
 
 
@@ -178,6 +195,9 @@ def catalog_text(kind: str) -> str:
     for name, spec in catalog_for(kind).items():
         cfg = "; ".join(f"{k}: {v}" for k, v in spec["config"].items())
         lines.append(f"- {name}{' (model call)' if spec['model'] else ''}: {spec['description']}\n  config: {cfg}")
+        if name == "sql":
+            lines += [f"  reference table {t}: {r['description']} Columns: "
+                      + ", ".join(f"{c} {ty}" for c, ty in r["columns"].items()) for t, r in REF_TABLES.items()]
     return "\n".join(lines)
 
 
@@ -266,6 +286,15 @@ def validate_step(kind: str, step_type: str, config: dict, fields: list[dict]) -
     elif step_type == "geo_tie":
         c["field"] = c.get("field") or "geo_scope"
         _field(fields, c["field"])
+    elif step_type == "sql":
+        if not isinstance(c.get("query"), str) or not c["query"].strip():
+            raise PipelineError("sql needs a query: one SELECT … FROM records.")
+        c["query"] = c["query"].strip().rstrip(";").strip()
+        tables = c.get("tables") or []
+        if not isinstance(tables, list) or any(t not in REF_TABLES for t in tables):
+            raise PipelineError(f"sql.tables must list reference tables from: {', '.join(REF_TABLES)}.")
+        c["tables"] = list(dict.fromkeys(tables)) or None
+        sql_columns(c, fields)   # parses and dry-runs it on empty tables
     return c
 
 
@@ -1111,6 +1140,244 @@ def _apply(step: dict, records: list[dict], fields: list[dict]) -> tuple[list[di
     raise PipelineError(f"Step type {t!r} is not deterministic.")
 
 
+# ── SQL ──────────────────────────────────────────────────────────────────────
+#
+# One SELECT over the step's input records, run in DuckDB in memory: no file or
+# network access, settings locked, a time limit. The live database is never
+# queried with planner- or agent-written SQL; reference tables are read through
+# the normal client with a fixed column list and copied in, read only.
+#
+# The result maps back onto the input records by `id`, so every record keeps
+# its evidence: only values the SQL changes are written (marked derived, with
+# the step and the tables it joined), and rows it leaves out are dropped. It
+# cannot create records or aggregate them, since an aggregate has no evidence.
+
+SQL_TYPES = {"text": "VARCHAR", "url": "VARCHAR", "enum": "VARCHAR", "number": "DOUBLE", "money": "DOUBLE",
+             "percent": "DOUBLE", "date": "DATE", "boolean": "BOOLEAN"}
+SQL_TIMEOUT = 10             # seconds before a query is stopped
+SQL_REF_ROWS = 20_000        # rows read from one reference table
+
+# Supabase tables a SQL step may join, with the columns copied in. Add a table
+# here (and its columns) to make it available; nothing else is reachable.
+REF_TABLES: dict[str, dict] = {
+    "funding_programs": {
+        "description": "The funding catalogue: Grants.gov programmes plus curated state and local ones.",
+        "columns": {"program_key": "VARCHAR", "program_name": "VARCHAR", "program_type": "VARCHAR",
+                    "source_agency": "VARCHAR", "award_amount_min": "DOUBLE", "award_amount_max": "DOUBLE",
+                    "estimated_funding": "DOUBLE", "deadline": "DATE", "eligibility_notes": "VARCHAR",
+                    "application_url": "VARCHAR", "requires_tract_designation": "VARCHAR",
+                    "is_curated": "BOOLEAN", "source_name": "VARCHAR", "source_url": "VARCHAR"},
+    },
+    "tract_eligibility": {
+        "description": "Per census tract funding designations (e.g. NMTC). eligible NULL means undetermined, not ineligible.",
+        "columns": {"tract_geoid": "VARCHAR", "program_key": "VARCHAR", "eligible": "BOOLEAN", "basis": "VARCHAR",
+                    "source_name": "VARCHAR", "source_url": "VARCHAR", "source_vintage": "VARCHAR"},
+    },
+}
+
+
+def _sql_text(v: Any) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, default=str)
+    return str(v)
+
+
+def _sql_py(v: Any) -> Any:
+    """A DuckDB value as the records hold values: plain numbers, ISO dates."""
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (date, datetime)):
+        return v.isoformat()
+    return v
+
+
+def _sql_err(e: Exception) -> str:
+    text = re.sub(r"\s+", " ", str(e)).strip()
+    return text.split(" LINE ")[0].replace("DESCRIBE ", "")[:400]   # drop DuckDB's echo of the query
+
+
+def _sql_connect() -> "duckdb.DuckDBPyConnection":
+    return duckdb.connect(":memory:", config={
+        "enable_external_access": False, "autoinstall_known_extensions": False,
+        "autoload_known_extensions": False, "threads": 2, "memory_limit": "256MB",
+    })
+
+
+def _sql_load(con, name: str, columns: dict[str, str], rows: list[tuple]) -> list[str]:
+    """Create table `name` with typed columns. Values that don't fit the type become NULL, reported."""
+    quoted = [f'"{c}"' for c in columns]
+    con.execute(f"CREATE TEMP TABLE \"_{name}_text\" ({', '.join(q + ' VARCHAR' for q in quoted)})")
+    if rows:
+        con.executemany(f"INSERT INTO \"_{name}_text\" VALUES ({', '.join('?' * len(columns))})",
+                        [tuple(_sql_text(v) for v in r) for r in rows])
+    casts = [q if t == "VARCHAR" else f"TRY_CAST({q} AS {t}) AS {q}" for q, t in zip(quoted, columns.values())]
+    con.execute(f"CREATE TABLE \"{name}\" AS SELECT {', '.join(casts)} FROM \"_{name}_text\"")
+    notes = []
+    for q, (c, t) in zip(quoted, columns.items()):
+        if t != "VARCHAR" and rows:
+            bad = con.execute(f"SELECT count(*) FROM \"_{name}_text\" WHERE {q} IS NOT NULL AND TRY_CAST({q} AS {t}) IS NULL").fetchone()[0]
+            if bad:
+                notes.append(f"{bad} value(s) of {name}.{c} are not {t} and read as NULL"
+                             + (" (parse the field first, or use records_text)" if name == "records" else ""))
+    return notes
+
+
+def _sql_tables(con, fields: list[dict], records: list[dict], refs: dict[str, list[dict]]) -> list[str]:
+    cols = {"id": "VARCHAR", **{f["name"]: SQL_TYPES[f["type"]] for f in fields}}
+    notes = _sql_load(con, "records", cols, [(r["id"], *[r["values"].get(f["name"]) for f in fields]) for r in records])
+    con.execute('CREATE VIEW records_text AS SELECT * FROM "_records_text"')
+    for t, rows in refs.items():
+        spec = REF_TABLES[t]["columns"]
+        notes += _sql_load(con, t, spec, [tuple(row.get(c) for c in spec) for row in rows])
+    con.execute("SET lock_configuration = true")
+    return notes
+
+
+def _sql_select(con, query: str) -> str:
+    q = (query or "").strip().rstrip(";").strip()
+    if not q:
+        raise PipelineError("The SQL is empty.")
+    try:
+        statements = con.extract_statements(q)
+    except duckdb.Error as e:
+        raise PipelineError(f"The SQL does not parse: {_sql_err(e)}")
+    if len(statements) != 1 or statements[0].type != duckdb.StatementType.SELECT:
+        raise PipelineError("The SQL must be one SELECT statement (WITH … SELECT is fine). It reads the records; it cannot change tables.")
+    return q
+
+
+def _sql_check_columns(names: list[str], fields: list[dict]) -> None:
+    allowed = [f["name"] for f in fields]
+    if "id" not in names:
+        raise PipelineError("The SQL must return the record `id` (e.g. SELECT id, … FROM records), so each row maps back to its record and evidence.")
+    dup = sorted({n for n in names if names.count(n) > 1})
+    if dup:
+        raise PipelineError(f"The SQL returns {', '.join(dup)} more than once; alias each column once.")
+    extra = [n for n in names if n != "id" and n not in allowed]
+    if extra:
+        raise PipelineError(f"The SQL returns {', '.join(extra)}, which {'is' if len(extra) == 1 else 'are'} not in the target schema. "
+                            f"Return only id and schema fields ({', '.join(allowed)}); add a field to the schema first if you need a new one.")
+
+
+@lru_cache(maxsize=256)
+def _sql_describe(query: str, tables: tuple[str, ...], fields_json: str) -> tuple[tuple[str, str], ...]:
+    fields = json.loads(fields_json)
+    con = _sql_connect()
+    try:
+        _sql_tables(con, fields, [], {t: [] for t in tables})
+        q = _sql_select(con, query)
+        try:
+            cols = tuple((r[0], r[1]) for r in con.execute("DESCRIBE " + q).fetchall())
+        except duckdb.Error as e:
+            hint = "" if tables else " Reference tables must be ticked (config.tables) before the SQL can join them."
+            raise PipelineError(f"The SQL does not run: {_sql_err(e)}{hint}")
+    finally:
+        con.close()
+    _sql_check_columns([c for c, _ in cols], fields)
+    return cols
+
+
+def sql_columns(config: dict, fields: list[dict]) -> list[tuple[str, str]]:
+    """The SQL step's result columns and their types, checked against the schema. Raises PipelineError."""
+    slim = [{"name": f["name"], "type": f["type"]} for f in fields]
+    return list(_sql_describe(config.get("query") or "", tuple(config.get("tables") or ()), json.dumps(slim)))
+
+
+def _sql(step: dict, records: list[dict], fields: list[dict],
+         refs: Callable[[str], list[dict]] | None) -> tuple[list[dict], list[str]]:
+    c, sid = step["config"], step["id"]
+    tables = c.get("tables") or []
+    if tables and refs is None:
+        raise PipelineError("Reference tables cannot be read here.")
+    ref_rows = {t: refs(t) for t in tables}
+    con = _sql_connect()
+    timer = threading.Timer(SQL_TIMEOUT, con.interrupt)
+    try:
+        warnings = _sql_tables(con, fields, records, ref_rows)
+        q = _sql_select(con, c["query"])
+        before = {row[0]: row[1:] for row in con.execute("SELECT * FROM records").fetchall()}
+        timer.start()
+        cur = con.execute(q)
+        names = [d[0] for d in cur.description]
+        rows = cur.fetchmany(len(records) + 1)
+    except duckdb.InterruptException:
+        raise PipelineError(f"The SQL ran longer than {SQL_TIMEOUT}s and was stopped.")
+    except duckdb.Error as e:
+        raise PipelineError(f"The SQL failed: {_sql_err(e)}")
+    finally:
+        timer.cancel()
+        con.close()
+    _sql_check_columns(names, fields)
+
+    by_id = {r["id"]: r for r in records}
+    by_name = {f["name"]: (i, f) for i, f in enumerate(fields)}
+    where = f"SQL {sid}" + (f", joined with {', '.join(tables)}" if tables else "")
+    out, seen = [], set()
+    for row in rows:
+        rid = row[names.index("id")]
+        if rid not in by_id:
+            raise PipelineError(f"The SQL returned id {rid!r}, which is not an input record: every row must come from `records`.")
+        if rid in seen:
+            raise PipelineError(f"The SQL returned {rid} more than once. A join must match at most one row per record "
+                                "(pick one, e.g. with a subquery and LIMIT 1, or aggregate the joined table first).")
+        seen.add(rid)
+        rec = by_id[rid]
+        for name, v in zip(names, row):
+            if name == "id":
+                continue
+            i, f = by_name[name]
+            v = _sql_py(v)
+            if v == _sql_py(before[rid][i]):
+                continue   # as the SQL read it: unchanged, so the record keeps its value and evidence
+            v, warn = _normalise(f, v)
+            if warn:
+                warnings.append(f"{rid}: {name} {warn}; left as it was")
+                continue
+            was = rec["values"].get(name)
+            _set(rec, name, v, "derived", sid, f"{where}; was {'blank' if _blank(was) else repr(_short_v(was, 60))}")
+        out.append(rec)
+    if len(out) < len(records):
+        warnings.append(f"removed {len(records) - len(out)} record(s)")
+    return out, warnings
+
+
+# ── Ports: what each step reads and writes ───────────────────────────────────
+
+def step_io(step: dict, fields: list[dict]) -> dict:
+    """
+    A step's ports, for the canvas: what happens to the rows (creates, keeps,
+    filters or merges them) and which fields it may write. The input schema is
+    the target schema as the previous step left it; the output schema is the
+    same fields as this step leaves them.
+    """
+    t, c = step["type"], step.get("config") or {}
+    extractable = [f["name"] for f in fields if f.get("extract", True)]
+    if t == "extract":
+        return {"rows": "creates", "writes": extractable, "reads": c.get("source_ids") or "all sources"}
+    if t in ("parse", "map_values", "set_value", "llm_fill"):
+        return {"rows": "keeps", "writes": [c.get("field")]}
+    if t == "geo_tie":
+        return {"rows": "keeps", "writes": [c.get("field") or "geo_scope"]}
+    if t == "filter":
+        return {"rows": "filters", "writes": []}
+    if t == "dedupe":
+        return {"rows": "merges", "writes": [], "keys": c.get("keys") or []}
+    if t == "research":
+        return {"rows": "keeps", "writes": c.get("fields") or extractable}
+    if t == "sql":
+        try:
+            cols = sql_columns(c, fields)
+        except PipelineError as e:
+            return {"rows": "filters", "writes": [], "tables": c.get("tables") or [], "error": str(e)}
+        return {"rows": "filters", "writes": [n for n, _ in cols if n != "id"], "tables": c.get("tables") or [],
+                "columns": [{"name": n, "type": ty} for n, ty in cols]}
+    return {"rows": "keeps", "writes": []}
+
+
 # ── The planner's overrides on the final output ──────────────────────────────
 #
 # Once every step is approved and the pipeline has run, the planner can correct
@@ -1315,6 +1582,9 @@ def design_gaps(definition: dict) -> list[str]:
     has_extract = any(s["type"] == "extract" for s in steps)
     set_by_step = {(s.get("config") or {}).get("field") or ("geo_scope" if s["type"] == "geo_tie" else None)
                    for s in steps if s["type"] in ("llm_fill", "geo_tie", "set_value")}
+    for s in steps:
+        if s["type"] == "sql":
+            set_by_step.update(step_io(s, fields).get("writes") or [])
     gaps = []
     for f in fields:
         if f.get("accept_blank"):
@@ -1399,7 +1669,8 @@ def step_signatures(definition: dict, context: str = "") -> list[str]:
 
 
 def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh: bool = False,
-        context: str = "", progress: Callable[[str], None] | None = None) -> dict:
+        context: str = "", progress: Callable[[str], None] | None = None,
+        refs: Callable[[str], list[dict]] | None = None) -> dict:
     """
     Run the pipeline (up to and including step `upto`, or all of it).
 
@@ -1407,6 +1678,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
     capped at PREVIEW_RECORDS), warnings and errors, coverage, and the model
     call cache. A step that fails stops the run there; earlier outputs stay.
     fresh refetches sources and ignores the model cache, for a real re-run.
+    refs(table) returns a reference table's rows for SQL steps.
 
     Unless fresh, the run resumes where the last one left off: the leading
     steps whose stored output still matches their fingerprint (and holds every
@@ -1481,6 +1753,8 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
                 warnings = _model_fill(step, records, fields, cache, step["config"]["instruction"], "llm_fill")
             elif step["type"] == "geo_tie":
                 warnings = _model_fill(step, records, fields, cache, geo_instruction(step["config"]), "geo_tie")
+            elif step["type"] == "sql":
+                records, warnings = _sql(step, records, fields, refs)
             else:
                 records, warnings = _apply(step, records, fields)
         except Exception as e:  # noqa: BLE001 — reported on the step, run stops here

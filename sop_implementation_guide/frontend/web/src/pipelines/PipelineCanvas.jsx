@@ -4,6 +4,7 @@ import {
   useNodesState, useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { portText } from "./ports.js";
 
 // The pipeline as an editable node map: sources → steps → output.
 //
@@ -38,6 +39,7 @@ function stepSummary(s) {
     case "research": return c.fields?.length ? `fills ${c.fields.join(", ")}` : "fills blank fields";
     case "llm_fill": return `fills ${c.field}`;
     case "geo_tie": return `fills ${c.field || "geo_scope"}`;
+    case "sql": return c.tables?.length ? `joins ${c.tables.join(", ")}` : cut((c.query || "").replace(/\s+/g, " "), 30);
     default: return "";
   }
 }
@@ -58,7 +60,7 @@ function Box({ data, children, inputs, outputs }) {
   return (
     <div className={`pl-node ${data.status}${data.sel ? " sel" : ""}${data.running ? " running" : ""}${data.ghost ? " ghost" : ""}`}
          title={STATUS_TEXT[data.status] ? `${data.title}: ${STATUS_TEXT[data.status]}` : data.title}>
-      {inputs && <Handle type="target" position={Position.Left} className="pl-handle" isConnectable={!!data.connectable} />}
+      {inputs && <Handle type="target" position={Position.Left} className="pl-handle" isConnectable={!!data.connectable} title={data.inTip} />}
       <span className="pl-node-kind">
         <span className="pl-node-dot" />{data.kind}
         {data.n != null && <span className="pl-node-n">#{data.n}</span>}
@@ -68,7 +70,7 @@ function Box({ data, children, inputs, outputs }) {
       {data.sub && <span className="pl-node-sub">{data.sub}</span>}
       {data.meta && <span className="pl-node-meta">{data.meta}</span>}
       {children}
-      {outputs && <Handle type="source" position={Position.Right} className="pl-handle" isConnectable={!!data.connectable} />}
+      {outputs && <Handle type="source" position={Position.Right} className="pl-handle" isConnectable={!!data.connectable} title={data.outTip} />}
     </div>
   );
 }
@@ -142,6 +144,7 @@ function DetailsPane({ id, view, onClose, actions }) {
     const cat = view.catalog[s.type] || {};
     const out = view.outputs[s.id];
     const prompt = view.prompts?.[s.id];
+    const port = portText(view, s.id);
     title = `${s.id} · ${cat.label || s.type}`;
     body = (
       <>
@@ -151,7 +154,16 @@ function DetailsPane({ id, view, onClose, actions }) {
         {s.type === "extract" && <Detail label="Reads">{s.config?.source_ids?.length ? s.config.source_ids.join(", ") : `every source (${sources.length})`}</Detail>}
         <Detail label="Model call">{cat.model ? "yes, its prompt is in the editor below" : "no"}</Detail>
         <Detail label="Note">{s.note}</Detail>
-        <Detail label="Settings"><ConfigTable config={s.config} /></Detail>
+        <Detail label="Input port">{port.input}</Detail>
+        <Detail label="Output port">{port.output}</Detail>
+        <Detail label="Writes">{port.writes.length ? port.writes.map((w) => <code key={w} style={{ marginRight: ".3rem" }}>{w}</code>) : "no fields"}</Detail>
+        {port.error && <Detail label="Problem"><span className="pl-bad">{port.error}</span></Detail>}
+        {s.type === "sql" ? (
+          <>
+            <Detail label="Joins">{s.config?.tables?.join(", ") || "records only"}</Detail>
+            <Detail label="SQL"><pre className="pl-sql pl-sql-small">{s.config?.query}</pre></Detail>
+          </>
+        ) : <Detail label="Settings"><ConfigTable config={s.config} /></Detail>}
         {prompt?.value && <Detail label="Instructions"><span className="pl-pre">{prompt.value}</span></Detail>}
         <Detail label="Last preview">{out ? (out.error ? <span className="pl-bad">{out.error}</span> : `${out.count} record(s)`) : "not previewed with these settings"}</Detail>
         {out?.warnings?.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{out.warnings.map((w, k) => <li key={k}>{w}</li>)}</ul></Detail>}
@@ -311,10 +323,15 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
     steps.forEach((s, i) => {
       const cat = view.catalog[s.type] || {};
       const out = view.outputs[s.id];
+      const before = i > 0 ? view.outputs[steps[i - 1].id] : null;
+      const port = portText(view, s.id);
+      const count = out && !out.error ? `${before && !before.error && s.type !== "extract" ? `${before.count} → ` : ""}${out.count} record${out.count === 1 ? "" : "s"}` : null;
       add(`step:${s.id}`, "step", {
         kind: s.id, n: i + 1, title: cat.label || s.type, sub: stepSummary(s), model: cat.model,
         running: running === s.id, connectable: editable,
-        meta: out?.error ? "error" : out ? `${out.count} record${out.count === 1 ? "" : "s"}` : "not previewed",
+        meta: out?.error ? "error" : count || "not previewed",
+        inTip: `Input: ${port.input}`,
+        outTip: `Output: ${port.output}\n${port.writes.length ? `Writes: ${port.writes.join(", ")}` : "Writes no fields"}`,
       }, { deletable: editable, connectable: editable });
     });
     if (gaps.length) add("gaps", "marker", { kind: "Missing", title: "No step fills", sub: cut(gaps.join(", "), 40), meta: "right-click for help", ghost: true });
@@ -324,7 +341,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
       meta: run?.upto ? `preview to ${run.upto}` : run ? (run.at || "").slice(5, 16).replace("T", " ") : null,
     }, { connectable: editable });
     return ns;
-  }, [positions, status, sel, sources, steps, view.sources, view.catalog, view.outputs, editable, running, busy, d.sources_status, canAdd, gaps, run]);
+  }, [positions, status, sel, sources, steps, view, editable, running, busy, d.sources_status, canAdd, gaps, run]);
 
   const edges = useMemo(() => {
     const es = [];

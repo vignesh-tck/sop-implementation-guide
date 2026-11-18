@@ -550,7 +550,8 @@ def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = Fal
         repo.update(pipeline_id, {"state": p["state"]})
 
     state = engine.run(p["kind"], p["definition"], p["state"], upto=upto, fresh=fresh,
-                       context=p["definition"].get("goal") or p["name"], progress=progress)
+                       context=p["definition"].get("goal") or p["name"], progress=progress,
+                       refs=reference_rows(db))
     state.pop("progress", None)
     last = state["last_run"]
     if upto is None:
@@ -652,6 +653,21 @@ def load(db: Client, pipeline_id: int, name: str | None, created_by: str | None)
 
 # ── Read model for the UI ────────────────────────────────────────────────────
 
+def reference_rows(db: Client):
+    """Reads a SQL step's reference tables, once per run, with only the allowed columns."""
+    loaded: dict[str, list[dict]] = {}
+
+    def rows(table: str) -> list[dict]:
+        if table not in loaded:
+            cols = engine.REF_TABLES[table]["columns"]
+            try:
+                loaded[table] = db.table(table).select(",".join(cols)).limit(engine.SQL_REF_ROWS).execute().data or []
+            except Exception as e:  # noqa: BLE001 — reported on the step
+                raise PipelineError(f"Reference table {table} could not be read: {e}")
+        return loaded[table]
+    return rows
+
+
 def _prompts(p: dict) -> dict:
     """Each model step's prompt, as the planner reads and tunes it."""
     out = {}
@@ -683,6 +699,9 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
         "output_locked": output_locked(p),
         "design_gaps": engine.design_gaps(p["definition"]),
         "overrides": p["definition"].get("overrides"),
+        "ports": {st["id"]: engine.step_io(st, _fields(p)) for st in p["definition"]["steps"]},
+        "ref_tables": {k: {"description": v["description"], "columns": v["columns"]} for k, v in engine.REF_TABLES.items()},
+        "sql_types": engine.SQL_TYPES,
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"], "config": v["config"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},
         "loads": PipelineRunRepository(db).for_pipeline(pipeline_id),

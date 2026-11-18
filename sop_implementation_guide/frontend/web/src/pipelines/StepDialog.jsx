@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Add a step, or change one, two ways side by side: set it up yourself from the
 // catalog (the server checks it against the schema, the same as the agent's
@@ -23,6 +23,7 @@ function initial(type, fields) {
     case "research": return { max_pages_per_record: 2, web_search: false };
     case "llm_fill": return { field: first, instruction: "", only_if_blank: true };
     case "geo_tie": return { field: geo };
+    case "sql": return { query: "SELECT *\nFROM records", tables: null };
     default: return {};
   }
 }
@@ -127,8 +128,66 @@ function Row({ label, hint, children }) {
   );
 }
 
+// SQL: the query, the reference tables it may join, and every column it can use.
+// Clicking a table or column name puts it at the cursor.
+function SqlForm({ c, set, fields, refTables, sqlTypes }) {
+  const box = useRef(null);
+  const tables = c.tables || [];
+  const insert = (text) => {
+    const el = box.current;
+    const q = c.query || "";
+    const at = el ? el.selectionStart : q.length, end = el ? el.selectionEnd : q.length;
+    set({ ...c, query: q.slice(0, at) + text + q.slice(end) });
+    requestAnimationFrame(() => { if (el) { el.focus(); el.selectionStart = el.selectionEnd = at + text.length; } });
+  };
+  const cols = (list) => <div className="pl-cols">{list.map(([n, t]) => (
+    <button type="button" key={n} className="pl-col-btn" onClick={() => insert(n)} title={`Insert ${n}`}><code>{n}</code> {t}</button>
+  ))}</div>;
+  return (
+    <>
+      <Row label="Reference tables" hint="Read only copies, joined like any table. Tick a table before the SQL uses it.">
+        <div className="pl-checks">
+          {Object.entries(refTables || {}).map(([name, r]) => (
+            <label key={name} title={r.description}>
+              <input type="checkbox" checked={tables.includes(name)}
+                     onChange={(e) => {
+                       const next = Object.keys(refTables).filter((t) => (t === name ? e.target.checked : tables.includes(t)));
+                       set({ ...c, tables: next.length ? next : null });
+                     }} />
+              <code>{name}</code>
+            </label>
+          ))}
+        </div>
+      </Row>
+      <Row label="SQL" hint="One SELECT. Return id plus the fields to set; only values that change are written. Records not returned are dropped.">
+        <textarea ref={box} className="pl-sql-edit" rows={9} spellCheck={false} value={c.query || ""}
+                  onChange={(e) => set({ ...c, query: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Tab") return;
+                    e.preventDefault();
+                    insert("  ");
+                  }} />
+      </Row>
+      <div className="pl-sql-help">
+        <div><button type="button" className="pl-col-btn tbl" onClick={() => insert("records")}><code>records</code></button>
+          <span className="assess">typed; values that don't fit their type are NULL here</span></div>
+        {cols([["id", "VARCHAR"], ...fields.map((f) => [f.name, sqlTypes?.[f.type] || "VARCHAR"])])}
+        <div><button type="button" className="pl-col-btn tbl" onClick={() => insert("records_text")}><code>records_text</code></button>
+          <span className="assess">the same columns, all VARCHAR</span></div>
+        {tables.map((name) => (
+          <div key={name}>
+            <div><button type="button" className="pl-col-btn tbl" onClick={() => insert(name)}><code>{name}</code></button>
+              <span className="assess">{refTables[name]?.description}</span></div>
+            {cols(Object.entries(refTables[name]?.columns || {}))}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 // The settings for one step type. Keys this form does not know are kept as they are.
-function ConfigForm({ type, c, set, fields, sources }) {
+function ConfigForm({ type, c, set, fields, sources, refTables, sqlTypes }) {
   const put = (k, v) => set({ ...c, [k]: v });
   const field = fields.find((f) => f.name === c.field);
   switch (type) {
@@ -231,6 +290,8 @@ function ConfigForm({ type, c, set, fields, sources }) {
           </Row>
         </>
       );
+    case "sql":
+      return <SqlForm c={c} set={set} fields={fields} refTables={refTables} sqlTypes={sqlTypes} />;
     default:
       return <div className="assess">No settings.</div>;
   }
@@ -344,7 +405,8 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
             {cat && <div className="muted-note" style={{ marginTop: ".2rem" }}>{cat.description}</div>}
             {type && (
               <div className="pl-form">
-                <ConfigForm type={type} c={config} set={setConfig} fields={fields} sources={sources} />
+                <ConfigForm type={type} c={config} set={setConfig} fields={fields} sources={sources}
+                            refTables={view.ref_tables} sqlTypes={view.sql_types} />
                 {!editing && (
                   <Row label="Runs">
                     <select value={position} onChange={(e) => setPosition(Number(e.target.value))}>

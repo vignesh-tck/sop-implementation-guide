@@ -24,3 +24,5 @@ anthropic==1.9.0
 httpx==0.28.1
 pandas==3.0.6
 pypdf==6.19.0
+# Sandboxed SQL steps in pipelines (backend/pipelines/engine.py)
+duckdb==2.0.0

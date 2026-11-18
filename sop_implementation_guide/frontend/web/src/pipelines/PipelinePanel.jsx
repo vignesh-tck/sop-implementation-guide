@@ -2,6 +2,7 @@ import { Fragment, Suspense, lazy, useState } from "react";
 import { call } from "../api.js";
 import SourceReader from "./SourceReader.jsx";
 import StepDialog from "./StepDialog.jsx";
+import StepPorts from "./StepPorts.jsx";
 
 // The node editor library is large; load it only when the Pipeline page opens.
 const PipelineCanvas = lazy(() => import("./PipelineCanvas.jsx"));
@@ -280,13 +281,21 @@ function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy, onEdi
   const preview = () => act("POST", "/run", isLast ? {} : { upto: step.id });
   return (
     <div className="pl-review">
-      {prompt ? <PromptEditor step={step} prompt={prompt} act={act} disabled={disabled} /> : (
+      {prompt ? <PromptEditor step={step} prompt={prompt} act={act} disabled={disabled} /> : step.type === "sql" ? (
+        <div className="pl-settings">
+          <b>SQL</b> <span className="assess">(runs in a sandbox on this step's input; no model call)</span>{" "}
+          <button className="link" disabled={disabled} onClick={onEdit}>edit</button>
+          {step.config?.tables?.length > 0 && <div className="assess">Joins: {step.config.tables.map((t) => <code key={t} style={{ marginRight: ".3rem" }}>{t}</code>)}</div>}
+          <pre className="pl-prompt-text pl-sql">{step.config?.query}</pre>
+        </div>
+      ) : (
         <div className="pl-settings">
           <b>Settings</b> <span className="assess">(no model call)</span>{" "}
           <button className="link" disabled={disabled} onClick={onEdit}>edit</button>
           <pre className="pl-prompt-text">{JSON.stringify(step.config, null, 2)}</pre>
         </div>
       )}
+      <StepPorts view={view} stepId={step.id} />
       <div className="pl-output-head">
         <b>Output</b>
         <button disabled={disabled} className={!out ? "primary" : ""} onClick={preview}>

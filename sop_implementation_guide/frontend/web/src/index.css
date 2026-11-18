@@ -1055,3 +1055,33 @@ main.view.pl-view {
 .pl-reader-links { white-space: normal; font-family: inherit; }
 .pl-reader-links ol { margin: 0; padding-left: 1.4rem; display: flex; flex-direction: column; gap: .35rem; }
 .pl-reader-links a { word-break: break-all; }
+
+/* ---- step ports: input → output schema, and SQL ---- */
+.pl-ports { margin: .5rem 0; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.pl-ports > summary { cursor: pointer; }
+.pl-port-heads { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem .8rem; margin: .45rem 0 .35rem; font-size: .8rem; }
+@media (max-width: 640px) { .pl-port-heads { grid-template-columns: 1fr; } }
+.pl-port-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; }
+.pl-port-dot { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; border: 2px solid var(--orange); background: var(--surface); }
+.pl-port-head.out .pl-port-dot { background: var(--orange); }
+.pl-port-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.pl-port-table th { text-align: left; font-weight: 600; color: var(--muted); padding: .2rem .4rem; border-bottom: 1px solid var(--border); }
+.pl-port-table td { padding: .18rem .4rem; border-bottom: 1px dashed var(--border); }
+.pl-port-table tr.writes td { background: color-mix(in srgb, var(--orange) 6%, transparent); }
+.pl-port-table tr.pl-port-id td { color: var(--muted); }
+.pl-port-mark { width: 4.5rem; text-align: center; }
+.pl-delta { color: var(--teal); font-size: .74rem; }
+.pl-delta.neg { color: var(--red); }
+.pl-port-tables { margin-top: .5rem; font-size: .8rem; }
+.pl-port-tables ul { margin: .25rem 0 0; padding-left: 1.1rem; }
+.pl-port-tables li { margin-bottom: .3rem; }
+.pl-cols { display: flex; flex-wrap: wrap; gap: .15rem .6rem; font-size: .74rem; color: var(--muted); margin-top: .15rem; }
+.pl-sql { font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+.pl-sql-small { margin: 0; font-size: .74rem; max-height: 12rem; overflow: auto; background: var(--bg); padding: .3rem .4rem; border-radius: 4px; }
+.pl-sql-edit { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; line-height: 1.45; tab-size: 2; }
+.pl-sql-help { display: flex; flex-direction: column; gap: .25rem; padding: .45rem .55rem; border: 1px dashed var(--border); border-radius: 6px; font-size: .78rem; max-height: 13rem; overflow: auto; }
+.pl-sql-help > div > div:first-child { display: flex; align-items: baseline; gap: .4rem; }
+.pl-col-btn { padding: 0 .2rem; background: none; border: none; font-weight: 400; color: var(--muted); font-size: .74rem; }
+.pl-col-btn code { color: var(--text); }
+.pl-col-btn:hover:not(:disabled) code { color: var(--orange); text-decoration: underline; }
+.pl-col-btn.tbl code { font-weight: 700; }
