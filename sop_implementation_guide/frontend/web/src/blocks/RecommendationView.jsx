@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { call, num } from "../api.js";
+import { call, money, num } from "../api.js";
 import { OUTCOME, References, ZoningFinding } from "../zoning/ZoningParts.jsx";
 import PlanView, { FundingList } from "./PlanView.jsx";
 
@@ -37,11 +37,12 @@ function ZoningTile({ z, onClick }) {
 
 function FundingTile({ funding, onClick }) {
   const n = funding?.length || 0;
+  const total = (funding || []).reduce((t, f) => t + (f.planned_amount > 0 ? Number(f.planned_amount) : 0), 0);
   return (
     <button type="button" className={"tile " + (n ? "ok" : "cond")} onClick={onClick}>
       <span className="tile-k">Funding</span>
-      <span className="tile-v">{n ? `${n} approved` : "None approved"}</span>
-      <span className="tile-s">{n ? funding[0].program_name : "Needs a source"}</span>
+      <span className="tile-v">{n ? (total > 0 ? money(total) : `${n} approved`) : "None approved"}</span>
+      <span className="tile-s">{n ? `${n} program${n > 1 ? "s" : ""} · ${funding[0].program_name}` : "Needs a source"}</span>
     </button>
   );
 }

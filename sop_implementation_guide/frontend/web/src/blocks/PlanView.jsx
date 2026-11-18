@@ -77,12 +77,14 @@ function SourceTags({ s, plan }) {
 }
 
 export function FundingList({ funding, withNarrative = false }) {
+  const total = funding.reduce((t, f) => t + (f.planned_amount > 0 ? Number(f.planned_amount) : 0), 0);
   return (
     <ul className="plan-funding">
       {funding.map((f) => {
         const dl = deadlineLabel(f.deadline);
-        const amt = f.award_amount_min || f.award_amount_max
-          ? `${money(f.award_amount_min)} – ${money(f.award_amount_max)}` : null;
+        // The amount approved for this recommendation; blank on funding approved
+        // before amounts were required, never the program's published range.
+        const amt = f.planned_amount > 0 ? money(f.planned_amount) : null;
         return (
           <li key={f.signal_id ?? f.program_name}>
             <b style={{ color: scoreColour(f.fit_score) }}>{num(f.fit_score, 2)}</b>{" "}
@@ -97,6 +99,7 @@ export function FundingList({ funding, withNarrative = false }) {
           </li>
         );
       })}
+      {funding.length > 1 && total > 0 && <li className="plan-funding-total">Total <b>{money(total)}</b></li>}
     </ul>
   );
 }

@@ -54,6 +54,10 @@ def _fit_from_signal(signal: dict) -> dict:
         "deadline": signal.get("deadline"),
         "award_amount_min": signal.get("award_amount_min"),
         "award_amount_max": signal.get("award_amount_max"),
+        # What this recommendation would ask for. None on signals approved
+        # before amounts were required.
+        "planned_amount": raw.get("planned_amount"),
+        "amount_basis": raw.get("amount_basis"),
         "application_url": signal.get("application_url"),
         "source_name": signal.get("source_name"),
         "source_url": signal.get("source_url"),

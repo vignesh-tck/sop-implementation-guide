@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { deadlineLabel, money, num, scoreColour } from "../api.js";
 import { rankRecs } from "./AllRecommendations.jsx";
 import ProfileCard from "./ProfileCard.jsx";
-import { fitKey } from "./useBlockFunding.js";
+import { fitKey, hasAmount, publishedAmount } from "./useBlockFunding.js";
 
 // The block's funding review, shown in place of the map. Three steps: analyze
 // proposes programs for every recommendation, the reviewer checks them and
@@ -13,11 +13,21 @@ import { fitKey } from "./useBlockFunding.js";
 // opening it lists the proposed programs with a keep box each; a program's
 // fit score, reasoning and source sit behind its own "Details". Nothing the
 // reviewer may need is gone, it is only further in.
+//
+// Every kept program carries an amount: what this recommendation would ask it
+// for. It is prefilled only when the program publishes a single figure, and
+// approving is blocked until every kept program has one, so the totals here
+// are always real sums, never "varies".
 
-function amountOf(f) {
-  if (!f) return "—";
-  return f.award_amount_min || f.award_amount_max ? `${money(f.award_amount_min)} – ${money(f.award_amount_max)}` : "varies";
+// What the program publishes, as a hint beside the amount box.
+function publishedText(f) {
+  const lo = f.award_amount_min, hi = f.award_amount_max;
+  if (lo == null && hi == null) return null;
+  if (lo != null && hi != null && Math.abs(hi - lo) >= 0.005) return `${money(lo)} – ${money(hi)}`;
+  return money(hi ?? lo);
 }
+
+const sumOf = (xs) => xs.reduce((t, x) => t + (hasAmount(x.e.amount) ? Number(x.e.amount) : 0), 0);
 
 // Which of the three steps the block is on, and the rows to show for it.
 function phaseOf(s) {
@@ -36,21 +46,27 @@ function buildRows(s, phase) {
         .map((f) => ({ f, e: s.edits[fitKey(rec.rec_id, f.program_name)] || { fit_score: f.fit_score, approved: false } }))
         .sort((a, b) => (b.e.fit_score ?? -1) - (a.e.fit_score ?? -1));
       const kept = fits.filter((x) => x.e.approved);
-      return { rec, fits, kept, top: kept[0]?.f, floor };
+      return withTotals({ rec, fits, kept, top: kept[0]?.f, floor });
     });
   }
   const funded = new Map((s.signals?.recommendations || []).map((g) => [g.rec_id, g]));
   return rankRecs(s.recs || []).map((rec) => {
     const g = funded.get(rec.rec_id);
-    const fits = [...(g?.fits || [])].sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0));
-    return { rec, fits: fits.map((f) => ({ f, e: f })), kept: fits.map((f) => ({ f, e: f })), top: fits[0], floor };
+    const fits = [...(g?.fits || [])]
+      .sort((a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0))
+      .map((f) => ({ f, e: { ...f, amount: f.planned_amount } }));
+    return withTotals({ rec, fits, kept: fits, top: fits[0]?.f, floor });
   });
+}
+
+function withTotals(r) {
+  return { ...r, sum: sumOf(r.kept), missing: r.kept.filter((x) => !hasAmount(x.e.amount)).length };
 }
 
 const STATUS = {
   running: () => ["Analyzing", "run"],
   none: () => ["Not run", "idle"],
-  review: (r) => (r.kept.length ? ["Proposed", "prop"] : ["No match", "idle"]),
+  review: (r) => (!r.kept.length ? ["No match", "idle"] : r.missing ? ["Needs amount", "warn"] : ["Proposed", "prop"]),
   approved: (r) => (r.kept.length ? ["Approved", "ok"] : ["Not funded", "idle"]),
   earlier: (r) => (r.kept.length ? ["Approved", "ok"] : ["No funding", "idle"]),
 };
@@ -76,6 +92,11 @@ function Match({ f, e, editable, floor, onEdit }) {
   const [open, setOpen] = useState(false);
   const dl = deadlineLabel(f.deadline);
   const score = e.fit_score;
+  const pub = publishedText(f);
+  const single = publishedAmount(f);
+  const tentative = hasAmount(e.amount) && (e.amount_basis
+    ? e.amount_basis === "reviewer"
+    : single == null || Math.abs(single - e.amount) >= 0.005);
   return (
     <li className={"match" + (editable && !e.approved ? " dropped" : "")}>
       <div className="match-main">
@@ -86,10 +107,32 @@ function Match({ f, e, editable, floor, onEdit }) {
         <span className="match-name">
           {f.program_name}
           {f.assessment_failed && <span className="warn-text" title="Not assessed by the model; 0.50 is a placeholder"> ⚠</span>}
+          <span className="match-due">
+            {f.deadline && <span className={"deadline" + (dl.soon ? " soon" : "")}>due {dl.text}</span>}
+            {f.deadline && pub && " · "}
+            {pub && <>program publishes {pub}</>}
+          </span>
         </span>
-        <span className="assess match-facts">
-          {amountOf(f)}{f.deadline && <> · <span className={"deadline" + (dl.soon ? " soon" : "")}>due {dl.text}</span></>}
+        <span className="match-fit" style={{ color: scoreColour(score) }} title="Fit score">
+          {score == null ? "—" : `${Math.round(score * 100)}%`}<span className="assess"> fit</span>
         </span>
+        {editable ? (
+          <span className={"match-amt-edit" + (e.approved && !hasAmount(e.amount) ? " missing" : "")}>
+            $<input type="number" min="0" step="1000" inputMode="numeric" placeholder="Amount"
+              aria-label={`Amount from ${f.program_name}`}
+              value={e.amount ?? ""}
+              onChange={(ev) => {
+                const raw = ev.target.value;
+                // Naming an amount keeps the program, as rescoring does.
+                onEdit({ amount: raw === "" ? null : Number(raw), ...(raw !== "" ? { approved: true } : {}) });
+              }} />
+          </span>
+        ) : (
+          <span className="match-amt">
+            {hasAmount(e.amount) ? money(e.amount) : ""}
+            {tentative && <span className="assess" title="Entered by the reviewer, not published by the program"> est.</span>}
+          </span>
+        )}
         <button type="button" className="link small" onClick={() => setOpen((o) => !o)}>{open ? "Hide" : "Details"}</button>
       </div>
       {open && (
@@ -144,6 +187,19 @@ function MatchList({ row, editable, onEdit }) {
       ) : (
         <p className="assess">{editable ? `No program scored above ${row.floor}.` : "No funding approved for this recommendation."}</p>
       )}
+      {row.kept.length > 0 && (
+        <div className="match-total">
+          <span>{editable ? "Total kept" : "Total"} for {row.rec.rec_label}</span>
+          <b>{money(row.sum)}</b>
+          {row.missing > 0 && (
+            <span className="warn-text">
+              {editable
+                ? ` · ${row.missing} kept program${row.missing > 1 ? "s" : ""} still need${row.missing > 1 ? "" : "s"} an amount`
+                : ` · ${row.missing} approved before amounts were required, not counted`}
+            </span>
+          )}
+        </div>
+      )}
       {weak.length > 0 && (
         <button type="button" className="link small" onClick={() => setShowWeak((v) => !v)}>
           {showWeak ? "Hide weaker matches" : `Show ${weak.length} weaker match${weak.length > 1 ? "es" : ""}`}
@@ -174,8 +230,9 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
   const id = block.id;
   const total = rows.length;
   const matched = rows.filter((r) => r.kept.length).length;
-  const programs = new Set(rows.flatMap((r) => r.kept.map((x) => x.f.program_name))).size;
   const keptFits = rows.reduce((n, r) => n + r.kept.length, 0);
+  const blockTotal = rows.reduce((t, r) => t + r.sum, 0);
+  const missing = rows.reduce((n, r) => n + r.missing, 0);
   const failed = phase === "review" ? rows.flatMap((r) => r.fits).filter((x) => x.f.assessment_failed).length : 0;
   const canOpen = phase === "review" || phase === "approved" || phase === "earlier";
 
@@ -184,7 +241,8 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
   else if (phase === "running") primary = <button disabled>Analyzing…</button>;
   else if (phase === "review") {
     primary = (
-      <button className="primary" onClick={() => actions.approve(id)} disabled={s.approving}>
+      <button className="primary" onClick={() => actions.approve(id)} disabled={s.approving || missing > 0}
+        title={missing ? "Every kept program needs an amount first" : undefined}>
         {s.approving ? "Approving…" : `Approve ${keptFits} match${keptFits === 1 ? "" : "es"} for the block`}
       </button>
     );
@@ -229,12 +287,21 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
         <div className="tiles fw-stats">
           <div className="tile"><span className="tile-k">Matched</span><span className="tile-v big-v">{matched} of {total}</span></div>
           <div className="tile"><span className="tile-k">No match</span><span className="tile-v big-v">{total - matched}</span></div>
-          <div className="tile"><span className="tile-k">Distinct programs</span><span className="tile-v big-v">{programs}</span></div>
+          <div className="tile">
+            <span className="tile-k">{phase === "review" ? "Total proposed" : "Total approved"}</span>
+            <span className="tile-v big-v">{money(blockTotal)}</span>
+            {missing > 0 && <span className="tile-s">{missing} without an amount</span>}
+          </div>
         </div>
       )}
 
       {phase === "review" && (
-        failed > 0 ? (
+        missing > 0 ? (
+          <div className="banner warn">
+            <b>{missing} kept program{missing > 1 ? "s need" : " needs"} an amount before you can approve.</b> Open the
+            rows marked "Needs amount" and enter a tentative figure where the program doesn't publish one.
+          </div>
+        ) : failed > 0 ? (
           <div className="banner warn">
             <b>{failed} match{failed > 1 ? "es were" : " was"} not assessed by the model.</b> Their 0.50 scores are
             placeholders, not analysis. Check the server log before trusting this run.
@@ -263,7 +330,7 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
             <tr>
               <th>#</th><th>Recommendation</th>
               <th>{phase === "review" || phase === "running" || phase === "none" ? "Proposed source" : "Funding source"}</th>
-              <th>Amount</th><th>Status</th>
+              <th className="amt">Amount</th><th>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -281,7 +348,7 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
                       <b>{r.rec.rec_label}</b>
                     </td>
                     <td>{r.top ? r.top.program_name : <span className="assess">—</span>}</td>
-                    <td className="nowrap">{r.top ? amountOf(r.top) : <span className="assess">—</span>}</td>
+                    <td className="nowrap amt">{r.sum > 0 ? money(r.sum) : ""}</td>
                     <td className="nowrap">
                       <span className={"status-chip " + cls}>{label}</span>
                       {canOpen && <span className="chev" aria-hidden="true">{isOpen ? "⌃" : "›"}</span>}

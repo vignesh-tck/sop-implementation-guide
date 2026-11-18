@@ -9,6 +9,18 @@ import { call } from "../api.js";
 
 export const fitKey = (recId, programName) => `${recId}::${programName}`;
 
+// The program's award as one figure, when it publishes one (floor equal to
+// ceiling, or only one of them). A range is not an amount: the reviewer names
+// the figure. Mirrors published_amount in backend/agents/funding.py.
+export function publishedAmount(f) {
+  const lo = f.award_amount_min, hi = f.award_amount_max;
+  if (lo != null && hi != null) return Math.abs(hi - lo) < 0.005 ? Number(hi) : null;
+  const v = hi ?? lo;
+  return v != null ? Number(v) : null;
+}
+
+export const hasAmount = (v) => v != null && !Number.isNaN(v) && v > 0;
+
 const EMPTY = {
   recs: null, signals: null, profile: null, loading: false,
   thread: null, review: null, edits: {}, feedback: "",
@@ -75,6 +87,7 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
             fit_score: f.fit_score,
             approved: f.fit_score != null && f.fit_score >= floor,
             edited: false,
+            amount: publishedAmount(f),
           };
         }
       }
@@ -107,8 +120,15 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
           program_name: f.program_name,
           fit_score: score == null || Number.isNaN(score) ? null : Math.max(0, Math.min(1, score)),
           approved: !!e?.approved,
+          amount: hasAmount(e?.amount) ? e.amount : null,
         });
       }
+    }
+    // The button is disabled in this case; this is the backstop. The API refuses it too.
+    const missing = fits.filter((f) => f.approved && f.amount == null).length;
+    if (missing) {
+      patch(id, { approveError: `${missing} kept match(es) still need an amount.` });
+      return;
     }
     patch(id, { approving: true, approveError: null });
     try {

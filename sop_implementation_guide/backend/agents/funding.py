@@ -224,6 +224,19 @@ def _note(feedback: Any) -> Optional[str]:
     return text.strip()
 
 
+def published_amount(fit: dict) -> Optional[float]:
+    """
+    The programme's award as a single figure, when it publishes one: a floor
+    equal to the ceiling, or only one of the two. A range is not an amount, so
+    it returns None and the reviewer has to name the figure.
+    """
+    lo, hi = fit.get("award_amount_min"), fit.get("award_amount_max")
+    if lo is not None and hi is not None:
+        return float(hi) if abs(float(hi) - float(lo)) < 0.005 else None
+    v = hi if hi is not None else lo
+    return float(v) if v is not None else None
+
+
 def apply_feedback(state: FundingState) -> dict:
     """
     Keep what the reviewer approved, at the score the reviewer settled on.
@@ -278,6 +291,16 @@ def apply_feedback(state: FundingState) -> dict:
                 row["score_adjusted_by_reviewer"] = True
         if d.get("narrative"):
             row["narrative"] = d["narrative"]
+        # The amount this recommendation would ask the programme for. Required on
+        # approval (the API refuses a kept fit without one), because an approved
+        # source with no figure cannot be planned against or added up.
+        if d.get("amount") is not None:
+            row["planned_amount"] = float(d["amount"])
+            published = published_amount(row)
+            row["amount_basis"] = (
+                "published" if published is not None and abs(published - row["planned_amount"]) < 0.005
+                else "reviewer"
+            )
         final.append(row)
 
     return {"final_signals": final, "rejected_signals": rejected}
@@ -336,6 +359,11 @@ def write_signals(state: FundingState) -> dict:
                 "rec_dimension": s.get("rec_dimension"),
                 "rec_direction": s.get("rec_direction"),
                 "human_notes": s.get("human_notes"),
+                # Kept here rather than in a column so approving needs no migration.
+                # amount_basis: 'published' (the programme's own single figure) or
+                # 'reviewer' (a tentative figure the reviewer entered).
+                "planned_amount": s.get("planned_amount"),
+                "amount_basis": s.get("amount_basis"),
             },
             "thread_id": state["thread_id"],
             "reviewed": True,

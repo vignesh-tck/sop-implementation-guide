@@ -40,7 +40,28 @@ def approve(
 
     `feedback` is carried alongside `fits` rather than replaced by it — the note is
     recorded on every signal that gets written.
+
+    Every approved entry needs a positive `amount`: what that recommendation would
+    ask the programme for. Approving a source with no figure leaves nothing to
+    plan against or total, so the request is refused and nothing is written.
     """
+    if fits is not None:
+        missing = []
+        for f in fits:
+            if not f.get("approved"):
+                continue
+            try:
+                ok = float(f.get("amount")) > 0
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                missing.append(f"{f.get('program_name')} (rec {f.get('rec_id')})")
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{len(missing)} kept match(es) have no amount: " + "; ".join(missing[:5])
+                + ("…" if len(missing) > 5 else ""),
+            )
     payload: Any = {"fits": fits, "feedback": feedback} if fits is not None else feedback
     return orchestrator.approve_funding(thread_id, payload)
 
