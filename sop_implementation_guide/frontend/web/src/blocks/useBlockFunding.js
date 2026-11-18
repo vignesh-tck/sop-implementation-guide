@@ -29,6 +29,11 @@ const EMPTY = {
   computingGold: false, goldProfile: null, goldError: null,
   // Bumped whenever approved funding changes, so open plans re-read it.
   version: 0,
+  // Versions: the block's funding runs, the Funding dataset versions, what the
+  // next run is against (null = latest) and its optional name, and an earlier
+  // run being looked at read-only (null = the current, pinned one).
+  analyses: null, versions: null, nextVersion: null, runName: "",
+  viewing: null, viewSignals: null, historyError: null,
 };
 
 // Where the block's funding stands, as one word for the chip.
@@ -57,12 +62,17 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
   }, []);
 
   const refresh = useCallback(async (id) => {
-    const [plans, signals, profile] = await Promise.all([
+    const [plans, signals, profile, analyses, versions] = await Promise.all([
       call("GET", `/blocks/${id}/plans`).catch(() => null),
       call("GET", `/blocks/${id}/signals`).catch(() => null),
       call("GET", `/blocks/${id}/profile`).catch(() => null),
+      call("GET", `/blocks/${id}/analyses?kind=funding`).catch(() => null),
+      call("GET", "/datasets/funding/versions").catch(() => null),
     ]);
-    patch(id, { recs: plans?.recommendations || [], signals, profile, loading: false });
+    patch(id, {
+      recs: plans?.recommendations || [], signals, profile, loading: false,
+      analyses: analyses?.analyses || [], versions: versions?.versions || [],
+    });
   }, [patch]);
 
   // Re-read the block's lists. A run in progress or awaiting approval is kept.
@@ -71,33 +81,94 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
     return refresh(id);
   }, [patch, refresh]);
 
+  // Load a thread's proposal into the review, pre-ticking fits above the floor.
+  const openReview = useCallback(async (id, threadId, run) => {
+    const review = await call("GET", `/threads/${threadId}/review`);
+    const floor = review.default_floor != null ? review.default_floor : 0.3;
+    const edits = {};
+    for (const rec of review.recommendations || []) {
+      for (const f of rec.fits || []) {
+        edits[fitKey(rec.rec_id, f.program_name)] = {
+          fit_score: f.fit_score,
+          approved: f.fit_score != null && f.fit_score >= floor,
+          edited: false,
+          amount: publishedAmount(f),
+        };
+      }
+    }
+    patch(id, { thread: { id: threadId, approved: false, ...run }, review, edits, viewing: null, viewSignals: null });
+  }, [patch]);
+
+  // Start a run against the chosen Funding version (latest when none is chosen).
   const analyze = useCallback(async (id) => {
+    const s = ref.current[id] || EMPTY;
+    const version = s.nextVersion ?? s.versions?.[0]?.version ?? null;
+    const name = s.runName.trim() || null;
     patch(id, {
       analyzing: true, analyzeError: null, thread: null, review: null, edits: {},
       approveResult: null, approveError: null, goldProfile: null, goldError: null,
+      viewing: null, viewSignals: null,
     });
     try {
-      const r = await call("POST", `/blocks/${id}/analyze`);
-      const review = await call("GET", `/threads/${r.thread_id}/review`);
-      const floor = review.default_floor != null ? review.default_floor : 0.3;
-      const edits = {};
-      for (const rec of review.recommendations || []) {
-        for (const f of rec.fits || []) {
-          edits[fitKey(rec.rec_id, f.program_name)] = {
-            fit_score: f.fit_score,
-            approved: f.fit_score != null && f.fit_score >= floor,
-            edited: false,
-            amount: publishedAmount(f),
-          };
-        }
-      }
-      patch(id, { thread: { id: r.thread_id, approved: false }, review, edits });
+      const r = await call("POST", `/blocks/${id}/analyze`, { version: s.nextVersion, name });
+      await openReview(id, r.thread_id, { analysis_id: r.analysis_id, dataset_version: version, name });
+      patch(id, { runName: "" });
     } catch (e) {
       patch(id, { analyzeError: e.message });
     } finally {
       patch(id, { analyzing: false });
+      refresh(id);
+    }
+  }, [patch, openReview, refresh]);
+
+  // Reopen a run whose review is still held by the server (e.g. after a page reload).
+  const resume = useCallback(async (id, a) => {
+    patch(id, { analyzeError: null, approveResult: null, approveError: null, goldProfile: null, goldError: null });
+    try {
+      await openReview(id, a.thread_id, { analysis_id: a.id, dataset_version: a.dataset_version, name: a.name });
+    } catch (e) {
+      patch(id, { analyzeError: `Could not reopen run #${a.id}: ${e.message}` });
+      refresh(id);
+    }
+  }, [patch, openReview, refresh]);
+
+  const setRunOptions = useCallback((id, p) => patch(id, p), [patch]);
+
+  // Look at an earlier run read-only; null goes back to the current one.
+  const view = useCallback(async (id, analysisId) => {
+    if (analysisId == null) {
+      patch(id, { viewing: null, viewSignals: null, historyError: null });
+      return;
+    }
+    try {
+      const sig = await call("GET", `/blocks/${id}/signals?analysis_id=${analysisId}`);
+      patch(id, { viewing: analysisId, viewSignals: sig, historyError: null, thread: null, review: null });
+    } catch (e) {
+      patch(id, { historyError: e.message });
     }
   }, [patch]);
+
+  // Make an earlier run the block's current funding: plans and gold read it from now on.
+  const pin = useCallback(async (id, analysisId) => {
+    try {
+      await call("POST", `/analyses/${analysisId}/pin`);
+      patch(id, (cur) => ({ viewing: null, viewSignals: null, historyError: null, thread: null, review: null,
+                            goldProfile: null, approveResult: null, version: cur.version + 1 }));
+      await refresh(id);
+    } catch (e) {
+      patch(id, { historyError: e.message });
+    }
+  }, [patch, refresh]);
+
+  const discard = useCallback(async (id, analysisId) => {
+    try {
+      await call("POST", `/analyses/${analysisId}/discard`);
+      patch(id, (cur) => (cur.thread?.analysis_id === analysisId ? { thread: null, review: null } : {}));
+      await refresh(id);
+    } catch (e) {
+      patch(id, { historyError: e.message });
+    }
+  }, [patch, refresh]);
 
   const setEdit = useCallback((id, key, p) => {
     patch(id, (cur) => ({ edits: { ...cur.edits, [key]: { ...cur.edits[key], ...p } } }));
@@ -146,12 +217,15 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
     }
   }, [patch, refresh]);
 
+  // From the run just approved, or (no live run) from whichever run is current.
   const computeGold = useCallback(async (id) => {
     const s = ref.current[id];
-    if (!s?.thread?.approved) return;
+    if (!s) return;
     patch(id, { computingGold: true, goldError: null });
     try {
-      const p = await call("POST", `/threads/${s.thread.id}/gold`);
+      const p = s.thread?.approved
+        ? await call("POST", `/threads/${s.thread.id}/gold`)
+        : await call("POST", `/blocks/${id}/gold`);
       patch(id, { goldProfile: p, profile: p });
       onProfileComputed?.(id, p);
     } catch (e) {
@@ -163,5 +237,6 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
 
   const get = useCallback((id) => (id == null ? null : byBlock[id] || EMPTY), [byBlock]);
 
-  return { get, load, refresh, analyze, approve, computeGold, setEdit, setFeedback };
+  return { get, load, refresh, analyze, approve, computeGold, setEdit, setFeedback,
+           resume, view, pin, discard, setRunOptions };
 }

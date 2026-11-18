@@ -122,9 +122,23 @@ def create_version(kind: Kind, body: SnapshotRequest, db: Client = Depends(get_s
 # ── Analyses ─────────────────────────────────────────────────────────────────
 
 @router.get("/blocks/{block_id}/analyses")
-def list_block_analyses(block_id: int, kind: Optional[Kind] = None, db: Client = Depends(get_supabase)):
-    return {"block_id": block_id,
-            "analyses": _guard(lambda: BlockAnalysisRepository(db).list_for_block(block_id, kind))}
+def list_block_analyses(
+    block_id: int,
+    kind: Optional[Kind] = None,
+    db: Client = Depends(get_supabase),
+    orchestrator: OrchestratorAgent = Depends(get_orchestrator),
+):
+    """
+    The block's runs, newest first. A funding run awaiting review carries
+    review_live: whether its review is still held by the server (pending
+    reviews live in memory, so a restart loses them; such a run can only be
+    discarded and re-run).
+    """
+    rows = _guard(lambda: BlockAnalysisRepository(db).list_for_block(block_id, kind))
+    for a in rows:
+        if a["kind"] == "funding" and a["status"] in ("running", "in_review") and a.get("thread_id"):
+            a["review_live"] = bool(orchestrator.get_funding_review(a["thread_id"]))
+    return {"block_id": block_id, "analyses": rows}
 
 
 class AnalysisRun(BaseModel):
@@ -178,6 +192,23 @@ def run_analyses(
     threading.Thread(target=_run_funding_batch, args=(orchestrator, block_ids, body), daemon=True).start()
     return {"kind": "funding", "started": len(block_ids), "status": "running in background",
             "next_step": "GET /blocks/{id}/analyses?kind=funding, then review each thread"}
+
+
+@router.post("/analyses/{analysis_id}/discard")
+def discard_analysis(analysis_id: int, db: Client = Depends(get_supabase)):
+    """
+    Drop a run that will not be finished: one still running, awaiting a review
+    that was lost to a server restart, or failed. A complete run is kept as
+    history; pin another one instead.
+    """
+    repo = BlockAnalysisRepository(db)
+    a = _guard(lambda: repo.get(analysis_id))
+    if not a:
+        raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found")
+    if a["status"] == "complete":
+        raise HTTPException(status_code=422, detail="A complete analysis is history and is kept; pin another run instead.")
+    repo.update(analysis_id, {"status": "discarded", "pinned": False})
+    return repo.get(analysis_id)
 
 
 @router.post("/analyses/{analysis_id}/pin")

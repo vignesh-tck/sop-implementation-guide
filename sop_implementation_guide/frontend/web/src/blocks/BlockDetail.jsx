@@ -18,6 +18,11 @@ function FundingCard({ s, onOpen }) {
     <button type="button" className="funding-card" onClick={onOpen}>
       <span className="fc-label">Block funding</span>
       <span className={"status-chip " + { none: "idle", running: "run", review: "prop", done: "ok" }[st.key]}>{st.text}</span>
+      {s?.signals?.analysis?.dataset_version != null && (
+        <span className="assess" title="The Funding version this block's current funding run assessed">
+          Funding v{s.signals.analysis.dataset_version}
+        </span>
+      )}
       <span className="spacer" />
       <span className="fc-go">{st.key === "none" ? "Run analysis" : "Open review"} →</span>
     </button>

@@ -132,8 +132,20 @@ def _group_signals(recommendations: list[dict], signals: list[dict]) -> dict:
     }
 
 
+@router.post("/{block_id}/gold")
+def compute_block_gold(
+    block_id: int,
+    db: Client = Depends(get_supabase),
+    orchestrator: OrchestratorAgent = Depends(get_orchestrator),
+):
+    """Recompute the block's gold profile from its pinned funding and zoning analyses."""
+    if not BlockRepository(db).get_by_id(block_id):
+        raise HTTPException(status_code=404, detail=f"Block {block_id} not found")
+    return orchestrator.compute_gold_for_block(block_id, db=db)
+
+
 @router.get("/{block_id}/signals")
-def get_signals(block_id: int, db: Client = Depends(get_supabase)):
+def get_signals(block_id: int, analysis_id: Optional[int] = None, db: Client = Depends(get_supabase)):
     """
     Written funding signals for a block, grouped by the recommendation they fund.
 
@@ -144,14 +156,24 @@ def get_signals(block_id: int, db: Client = Depends(get_supabase)):
 
     An empty result is a 200, not a 404 — "this block has no funding signals yet"
     is a normal state, distinct from the block not existing.
+
+    By default the block's pinned (current) funding analysis; analysis_id shows
+    any other run of this block, read-only, without changing which is current.
     """
     block = BlockRepository(db).get_with_recs(block_id)
     if not block:
         raise HTTPException(status_code=404, detail=f"Block {block_id} not found")
 
-    pinned = BlockAnalysisRepository(db).pinned(block_id, "funding")
-    signals = FundingRepository(db).get_for_block(block_id, analysis_id=pinned["id"] if pinned else None)
-    return {"block_id": block_id, "analysis": analysis_label(pinned),
+    repo = BlockAnalysisRepository(db)
+    pinned = repo.pinned(block_id, "funding")
+    shown = pinned
+    if analysis_id is not None:
+        shown = repo.get(analysis_id)
+        if not shown or shown["block_id"] != block_id or shown["kind"] != "funding":
+            raise HTTPException(status_code=404, detail=f"Funding analysis {analysis_id} is not on block {block_id}")
+    signals = FundingRepository(db).get_for_block(block_id, analysis_id=shown["id"] if shown else None)
+    return {"block_id": block_id, "analysis": analysis_label(shown),
+            "pinned_analysis_id": pinned["id"] if pinned else None,
             **_group_signals(block.get("recommendations", []), signals)}
 
 

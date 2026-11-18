@@ -74,7 +74,15 @@ class OrchestratorAgent:
                 "signals. Either it was never approved, or the server restarted "
                 "before approval — re-run POST /blocks/{block_id}/analyze."
             )
+        return self.compute_gold_for_block(block_id, thread_id, db)
 
+    def compute_gold_for_block(self, block_id: int, thread_id: str | None = None, db=None) -> dict:
+        """
+        Compute the gold profile from the block's pinned funding and zoning
+        analyses. No thread needed, so it can be recomputed after pinning an
+        earlier run.
+        """
+        db = db or get_supabase()
         funding_repo = FundingRepository(db)
         gold_repo = GoldRepository(db)
 

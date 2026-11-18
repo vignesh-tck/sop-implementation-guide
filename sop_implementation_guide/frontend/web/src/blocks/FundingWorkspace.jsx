@@ -3,6 +3,7 @@ import { deadlineLabel, money, num, scoreColour } from "../api.js";
 import { rankRecs } from "./AllRecommendations.jsx";
 import ProfileCard from "./ProfileCard.jsx";
 import { fitKey, hasAmount, publishedAmount } from "./useBlockFunding.js";
+import VersionBar, { versionLabel } from "./VersionBar.jsx";
 
 // The block's funding review, shown in place of the map. Three steps: analyze
 // proposes programs for every recommendation, the reviewer checks them and
@@ -34,6 +35,7 @@ function phaseOf(s) {
   if (s.analyzing) return "running";
   if (s.thread && !s.thread.approved) return "review";
   if (s.thread?.approved) return "approved";
+  if (s.viewing) return "earlier";
   if (s.signals?.recommendations?.length) return "earlier";
   return "none";
 }
@@ -49,7 +51,8 @@ function buildRows(s, phase) {
       return withTotals({ rec, fits, kept, top: kept[0]?.f, floor });
     });
   }
-  const funded = new Map((s.signals?.recommendations || []).map((g) => [g.rec_id, g]));
+  const shown = s.viewing ? s.viewSignals : s.signals;
+  const funded = new Map((shown?.recommendations || []).map((g) => [g.rec_id, g]));
   return rankRecs(s.recs || []).map((rec) => {
     const g = funded.get(rec.rec_id);
     const fits = [...(g?.fits || [])]
@@ -269,6 +272,7 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
       </div>
 
       <StepChips phase={phase} gold={s.goldProfile} />
+      <VersionBar block={block} s={s} actions={actions} busy={s.analyzing || s.approving} />
 
       {phase === "running" && (
         <div className="fw-progress">
@@ -318,9 +322,10 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
           plan now shows its funding.{!s.goldProfile && " Next: compute gold."}
         </div>
       )}
-      {phase === "earlier" && (
+      {phase === "earlier" && !s.viewing && (
         <div className="banner ok">
-          Funding was approved in an earlier session. Re-run the analysis to review it again or to compute gold.
+          Showing the block's current funding ({versionLabel(s.versions, s.signals?.analysis?.dataset_version)}). Re-run the
+          analysis, against the latest or any earlier version, to review it again or to compute gold.
         </div>
       )}
 

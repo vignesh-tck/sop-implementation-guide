@@ -769,3 +769,14 @@ main.view.pl-view {
   main.view.pl-view { grid-template-columns: 1fr; grid-template-rows: 55vh auto; overflow-y: auto; }
   .pl-chat { border-right: none; border-bottom: 1px solid var(--border); }
 }
+
+/* ── Funding version bar (block funding review) ───────────────────────── */
+.vbar { border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); padding: .5rem .7rem; margin: .6rem 0 .8rem; font-size: .84rem; }
+.vbar-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.vbar-line + .vbar-line { margin-top: .35rem; }
+.vbar-k { font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; min-width: 7.5rem; }
+.vbar-run select { max-width: 22rem; }
+.vbar-run input { flex: 1; min-width: 10rem; }
+.vbar-runs { margin-top: .5rem; }
+.vbar-runs td, .vbar-runs th { font-size: .8rem; }
+.vbar-runs tr.sel td { background: color-mix(in srgb, var(--orange) 8%, transparent); }
