@@ -572,3 +572,64 @@ END $$;
 ALTER TABLE block_implementation_profiles
     ADD COLUMN IF NOT EXISTS funding_analysis_id BIGINT,
     ADD COLUMN IF NOT EXISTS zoning_analysis_id  BIGINT;
+
+
+-- =============================================================
+-- PIPELINES  (added Nov 2026)
+--
+-- Chat-built data pipelines (Pipeline Development tab). The user states the
+-- fields to extract and supplies sources; the agent proposes steps from a
+-- fixed catalog (backend/pipelines/engine.py); the user approves each one.
+-- A pipeline can be re-run on demand. Loading a run writes the working table
+-- (funding_programs for a funding pipeline) and snapshots it as the next
+-- dataset version, so block analyses can be tied to it.
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS pipelines (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    kind                TEXT NOT NULL CHECK (kind IN ('funding', 'zoning')),
+    name                TEXT NOT NULL,
+    -- {schema: {status, fields: [...]}, sources: [...], steps: [...]}
+    definition          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Bumped when a changed definition is loaded: "def v3".
+    definition_version  INT NOT NULL DEFAULT 0,
+    -- Last run's outputs per step, source fetch results, LLM step cache.
+    state               JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- 'turn' or 'run' while the agent or a run is working; NULL when idle.
+    busy                TEXT,
+    busy_since          TIMESTAMPTZ,
+    created_by          TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- The chat. role 'user' / 'assistant' rows hold the exact API content blocks
+-- (sent back to the model unchanged); 'event' rows are app notices shown in
+-- the chat only (e.g. "You approved step 2").
+CREATE TABLE IF NOT EXISTS pipeline_messages (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pipeline_id  BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'event')),
+    content      JSONB NOT NULL,
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_messages_pipeline ON pipeline_messages(pipeline_id, id);
+
+-- One row per Load: what was written and which dataset version it became.
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pipeline_id         BIGINT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+    definition_version  INT NOT NULL,
+    definition          JSONB NOT NULL,
+    name                TEXT,
+    records             JSONB,
+    coverage            JSONB,
+    diff                JSONB,
+    dataset_version_id  BIGINT REFERENCES dataset_versions(id),
+    dataset_version     INT,
+    created_by          TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline ON pipeline_runs(pipeline_id, id DESC);

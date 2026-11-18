@@ -7,6 +7,7 @@ import FundingWorkspace from "./blocks/FundingWorkspace.jsx";
 import useBlockFunding, { fundingStatus } from "./blocks/useBlockFunding.js";
 import DiscoveryView from "./discovery/DiscoveryView.jsx";
 import PathwaysView from "./pathways/PathwaysView.jsx";
+import PipelinesView from "./pipelines/PipelinesView.jsx";
 import ZoningView from "./zoning/ZoningView.jsx";
 
 function BlocksView() {
@@ -123,7 +124,7 @@ function BlocksView() {
   );
 }
 
-const VIEWS = ["blocks", "discovery", "pathways", "zoning"];
+const VIEWS = ["blocks", "pipelines", "discovery", "pathways", "zoning"];
 
 // The open tab lives in the URL hash (#zoning, #zoning/table) so a view can be linked to.
 function viewFromHash() {
@@ -150,6 +151,9 @@ export default function App() {
           <button className="tab" aria-selected={view === "blocks"} onClick={() => setView("blocks")}>
             Blocks
           </button>
+          <button className="tab" aria-selected={view === "pipelines"} onClick={() => setView("pipelines")}>
+            Pipeline development
+          </button>
           <button className="tab" aria-selected={view === "discovery"} onClick={() => setView("discovery")}>
             Funding discovery
           </button>
@@ -165,6 +169,7 @@ export default function App() {
       </header>
 
       {view === "blocks" && <BlocksView />}
+      {view === "pipelines" && <PipelinesView />}
       {view === "discovery" && <DiscoveryView />}
       {view === "pathways" && <PathwaysView />}
       {view === "zoning" && <ZoningView />}
