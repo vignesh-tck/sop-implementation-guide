@@ -111,6 +111,13 @@ class PipelineRunRepository(_PipelineRepository):
             self._db.table(self._table).select(self.SUMMARY).eq("pipeline_id", pipeline_id)
             .order("id", desc=True).limit(limit)).data or []
 
+    def latest_published(self, pipeline_id: int) -> dict | None:
+        """The last load's records, to show what a new run changes since it was published."""
+        rows = self._run(
+            self._db.table(self._table).select("id, dataset_version, name, records, created_at")
+            .eq("pipeline_id", pipeline_id).order("id", desc=True).limit(1)).data or []
+        return rows[0] if rows else None
+
     def latest(self, pipeline_id: int) -> dict | None:
         rows = self._run(
             self._db.table(self._table).select("id, definition, definition_version")

@@ -57,8 +57,10 @@ How the work goes:
    be. Records carry leads (links or documents the source points to), and pages carry links. Propose a
    research step to follow them before asking the planner; turn on its web_search only when the sources
    link nothing useful. Ask the planner only for what research could not find.
-5. Loading is the planner's action in the panel, once everything is approved and every required field
-   is filled or explicitly accepted as blank. Each load becomes a new numbered dataset version.
+5. Publishing (Load) is the planner's action in the panel, once everything is approved and every required
+   field is filled or explicitly accepted as blank. A full run never publishes: it ends "ready for review"
+   with what changed since the last publish, and the planner approves it. Each publish becomes a new
+   numbered dataset version.
 
 The guardrail matters more than anything else:
 - Every value read from a source carries a verbatim quote that is checked against that source. A value

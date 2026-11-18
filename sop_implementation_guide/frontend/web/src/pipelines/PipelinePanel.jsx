@@ -393,7 +393,7 @@ function RecordDetail({ r, fields }) {
 }
 
 // A table of records; clicking a row opens renderDetail(r) beneath it.
-function RecordsTable({ records, fields, renderDetail, rowNote }) {
+function RecordsTable({ records, fields, renderDetail, rowNote, rowTag }) {
   const [open, setOpen] = useState(null);
   return (
     <>
@@ -413,6 +413,7 @@ function RecordsTable({ records, fields, renderDetail, rowNote }) {
                       {open === r.id ? "▾ " : "▸ "}{r.id}
                       {r.excerpt_verified === false && <span className="pl-bad"> ⚠</span>}
                       {r.added_by_you && <span className="tag manual" style={{ marginLeft: ".3rem" }}>added</span>}
+                      {rowTag?.(r)}
                     </td>
                     {fields.map((f) => {
                       const p = r.prov?.[f.name];
@@ -446,18 +447,61 @@ function RecordsTable({ records, fields, renderDetail, rowNote }) {
 }
 
 function OutputCard({ view }) {
+  const [focus, setFocus] = useState(false);
   const fields = view.definition.schema?.fields || [];
   const records = view.last_records || [];
   if (!records.length && !view.last_run) return null;
   const total = view.last_run?.coverage?.records ?? 0;
+  const review = view.last_run?.review;
+  const marks = review?.since ? review.marks || {} : {};
+  const changedBy = Object.fromEntries((review?.changed || []).map((c) => [c.id, c.fields]));
+  const shown = focus ? records.filter((r) => marks[r.id] || attention(r, fields).length) : records;
   return (
     <div className="card">
       <h4>
         {view.last_run?.upto ? `Output of the preview to ${view.last_run.upto}` : "Output of the last run"}{" "}
         <span className="assess">({total} record(s){records.length < total ? `, first ${records.length} shown` : ""})</span>
       </h4>
-      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>What Load would write. To correct records, review the step that produced them above.</div>
-      <RecordsTable records={records} fields={fields} renderDetail={(r) => <RecordDetail r={r} fields={fields} />} />
+      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
+        What publishing would write. To correct records, review the step that produced them above.
+      </div>
+      <label className="assess"><input type="checkbox" checked={focus} onChange={(e) => setFocus(e.target.checked)} />
+        {" "}Only {review?.since ? "new or changed records, and records " : "records "}needing attention</label>
+      <RecordsTable records={shown} fields={fields}
+        rowNote={(r) => attention(r, fields).join("; ")}
+        rowTag={(r) => marks[r.id] && (
+          <span className={"tag " + (marks[r.id] === "new" ? "ok" : "edited")} style={{ marginLeft: ".3rem" }}
+                title={marks[r.id] === "changed" ? (changedBy[r.id] || []).map((d) => `${d.field}: ${short(d.old, 60) || "blank"} → ${short(d.new, 60) || "blank"}`).join("\n") : "Not in the last published version"}>
+            {marks[r.id]}
+          </span>
+        )}
+        renderDetail={(r) => (
+          <>
+            {changedBy[r.id] && (
+              <div className="pl-note"><b>Changed since v{review.since.dataset_version}:</b>
+                <ul>{changedBy[r.id].map((d) => <li key={d.field}><code>{d.field}</code>: {short(d.old, 100) || "blank"} → {short(d.new, 100) || "blank"}</li>)}</ul>
+              </div>
+            )}
+            <RecordDetail r={r} fields={fields} />
+          </>
+        )} />
+    </div>
+  );
+}
+
+// What a full run changes since this pipeline last published, for the reviewer.
+function ReviewSummary({ review, kindLabel }) {
+  if (!review) return null;
+  if (!review.since) return <div>{review.added.length} record(s), all new: this pipeline has not published before.</div>;
+  return (
+    <div className="pl-changes">
+      <div>Since <b>{kindLabel} v{review.since.dataset_version}</b>{review.since.name ? ` “${review.since.name}”` : ""}, the last version this pipeline published:{" "}
+        <b>{review.added.length}</b> new · <b>{review.removed.length}</b> gone · <b>{review.changed.length}</b> changed · <b>{review.unchanged}</b> unchanged</div>
+      {review.added.length > 0 && <details><summary>New ({review.added.length})</summary><ul>{review.added.map((a) => <li key={a.id}>{a.name}</li>)}</ul></details>}
+      {review.removed.length > 0 && <details open><summary>Gone ({review.removed.length}): publishing drops them from this pipeline's output, but the catalogue keeps them</summary>
+        <ul>{review.removed.map((a, i) => <li key={i}>{a.name}</li>)}</ul></details>}
+      {review.changed.length > 0 && <details><summary>Changed ({review.changed.length})</summary>
+        <ul>{review.changed.map((c) => <li key={c.id}>{c.name}: {c.fields.map((d) => `${d.field} ${short(d.old, 40) || "blank"} → ${short(d.new, 40) || "blank"}`).join("; ")}</li>)}</ul></details>}
     </div>
   );
 }
@@ -469,7 +513,11 @@ function LoadCard({ view, act, disabled }) {
   const [by, setBy] = useState("");
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
+  const review = view.last_run?.review;
+  const published = review?.published;
   const blocked = view.gate.length > 0;
+  const fields = view.definition.schema?.fields || [];
+  const flagged = (view.last_records || []).filter((r) => attention(r, fields).length).length;
 
   async function checkDiff() {
     setDiffError(null);
@@ -482,7 +530,11 @@ function LoadCard({ view, act, disabled }) {
 
   return (
     <div className="card">
-      <h4>Run and load</h4>
+      <h4>Run, review and publish</h4>
+      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
+        A run never publishes. It ends ready for review; nothing reaches the {view.kind_label.toLowerCase()} catalogue or
+        the blocks until you approve it here.
+      </div>
       <div className="btn-row" style={{ marginTop: 0 }}>
         <button className="primary" disabled={disabled} onClick={() => act("POST", "/run", {})}>Run pipeline</button>
         <button disabled={disabled} onClick={() => act("POST", "/run", { fresh: true })}
@@ -491,21 +543,30 @@ function LoadCard({ view, act, disabled }) {
           Last run {(view.last_run.at || "").slice(0, 16).replace("T", " ")}{view.last_run.upto ? ` (preview to ${view.last_run.upto})` : ""}
         </span>}
       </div>
-      {blocked ? (
+      {published ? (
+        <div className="banner ok" style={{ marginTop: ".75rem" }}>
+          Approved and published as <b>{view.kind_label} v{published.dataset_version}</b>{published.name ? ` “${published.name}”` : ""}
+          {published.by ? ` by ${published.by}` : ""}{published.at ? ` on ${published.at.slice(0, 10)}` : ""}.
+          Run again to pick up changes; the next run will wait here for review.
+        </div>
+      ) : blocked ? (
         <div className="pl-gate">
-          <b>Not ready to load:</b>
+          <b>Not ready to publish:</b>
           <ul>{view.gate.map((g, i) => <li key={i}>{g}</li>)}</ul>
         </div>
       ) : (
-        <>
-          <div className="banner ok" style={{ marginTop: ".75rem" }}>Ready to load. Loading saves a new {view.kind_label} version.</div>
+        <div className="pl-ready">
+          <div className="pl-ready-head"><span className="tag edited">ready for review</span>
+            <span className="assess">run {(view.last_run?.at || "").slice(0, 16).replace("T", " ")}</span></div>
+          <ReviewSummary review={review} kindLabel={view.kind_label} />
+          {flagged > 0 && <div className="pl-warn">{flagged} record(s) need attention (unconfirmed quotes, conflicts or required blanks): check them in the output below.</div>}
           <div className="pl-add">
             <input placeholder="Version name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
             <input placeholder="Your name (optional)" value={by} onChange={(e) => setBy(e.target.value)} />
           </div>
           <div className="btn-row">
-            <button onClick={checkDiff} disabled={disabled}>Check what changes</button>
-            <button className="primary" onClick={load} disabled={disabled}>Load as new version</button>
+            <button onClick={checkDiff} disabled={disabled} title="Compare with the whole catalogue, including programmes from other sources">Compare with the catalogue</button>
+            <button className="primary" onClick={load} disabled={disabled}>Approve and publish as a new {view.kind_label} version</button>
           </div>
           {diffError && <div className="banner err">{diffError}</div>}
           {diff && (
@@ -517,13 +578,13 @@ function LoadCard({ view, act, disabled }) {
               <div className="assess">{diff.note}</div>
             </div>
           )}
-        </>
+        </div>
       )}
       {view.loads.length > 0 && (
         <>
-          <h4 style={{ marginTop: "1rem" }}>Loads</h4>
+          <h4 style={{ marginTop: "1rem" }}>Published versions</h4>
           <table>
-            <thead><tr><th>Version</th><th>Name</th><th>Pipeline def</th><th>Records</th><th>When</th></tr></thead>
+            <thead><tr><th>Version</th><th>Name</th><th>Pipeline def</th><th>Records</th><th>Approved</th></tr></thead>
             <tbody>
               {view.loads.map((l) => (
                 <tr key={l.id}>

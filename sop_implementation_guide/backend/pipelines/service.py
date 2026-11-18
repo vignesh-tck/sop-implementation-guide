@@ -329,6 +329,7 @@ def edit_records(db: Client, pipeline_id: int, step_id: str, op: str, record_id:
     if not later and last and not last.get("upto") and last.get("definition_hash") == before:
         last.update({"records": records, "coverage": out["coverage"],
                      "definition_hash": engine.definition_hash(p["definition"])})
+        review(db, p)
     _save(db, p, state=p["state"])
     event(db, pipeline_id, f"You reviewed {step_id}: {text}.")
     return {"record_id": record_id, "edits": edits}
@@ -362,8 +363,10 @@ def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = Fal
     state = engine.run(p["kind"], p["definition"], p["state"], upto=upto, fresh=fresh,
                        context=p["definition"].get("goal") or p["name"], progress=progress)
     state.pop("progress", None)
-    repo.update(pipeline_id, {"state": state})
     last = state["last_run"]
+    if upto is None:
+        review(db, p)
+    repo.update(pipeline_id, {"state": state})
     if announce:
         cov = last["coverage"]
         gaps = ", ".join(f"`{g}`" for g in cov["blocking_gaps"])
@@ -371,14 +374,44 @@ def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = Fal
                 f"{cov['records']} record(s)."
                 + (f" Required fields with blanks: {gaps}." if gaps else "")
                 + (f" Errors: {'; '.join(last['errors'])}" if last["errors"] else ""))
+        if upto is None:
+            reasons = gate(p)
+            text += (" Ready for review: " + review_text(last["review"], kinds.spec(p["kind"])["label"]) + " Nothing is published until you approve it."
+                     if not reasons else " Not ready to publish yet: " + " ".join(reasons))
         event(db, pipeline_id, text, level="warn" if last["errors"] or gaps else "info")
     return summarise_run(last)
+
+
+def review(db: Client, p: dict) -> dict | None:
+    """
+    After a full run the output waits for review: what it changes since this
+    pipeline last published. Stored on last_run; publishing stamps it.
+    """
+    last = p["state"].get("last_run") or {}
+    if not last or last.get("upto"):
+        return None
+    prev = PipelineRunRepository(db).latest_published(p["id"])
+    last["review"] = {
+        "status": "ready",
+        "since": ({"dataset_version": prev["dataset_version"], "name": prev.get("name"), "at": prev["created_at"]}
+                  if prev else None),
+        **engine.changes_since((prev or {}).get("records"), last.get("records") or [], _fields(p)),
+    }
+    return last["review"]
+
+
+def review_text(rv: dict, label: str = "Funding") -> str:
+    since = f"{label} v{rv['since']['dataset_version']}" if rv.get("since") else None
+    if not since:
+        return f"{len(rv['added'])} record(s), all new (nothing published from this pipeline yet)."
+    return (f"{len(rv['added'])} new, {len(rv['removed'])} gone, {len(rv['changed'])} changed, "
+            f"{rv['unchanged']} unchanged since {since}, the last version this pipeline published.")
 
 
 def summarise_run(last: dict | None) -> dict | None:
     if not last:
         return None
-    return {k: last.get(k) for k in ("at", "upto", "complete", "coverage", "errors")}
+    return {k: last.get(k) for k in ("at", "upto", "complete", "coverage", "errors", "review")}
 
 
 def gate(p: dict) -> list[str]:
@@ -392,7 +425,11 @@ def preview_diff(db: Client, pipeline_id: int) -> dict:
 
 
 def load(db: Client, pipeline_id: int, name: str | None, created_by: str | None) -> dict:
-    """Write the last full run and snapshot it as the next dataset version. Refused while the gate has reasons."""
+    """
+    Publish: write the last full run and snapshot it as the next dataset version.
+    This is the planner's approval of the reviewed output; runs never publish.
+    Refused while the gate has reasons, including when this output is already published.
+    """
     p = get(db, pipeline_id)
     reasons = gate(p)
     if reasons:
@@ -412,10 +449,12 @@ def load(db: Client, pipeline_id: int, name: str | None, created_by: str | None)
         "diff": diff, "dataset_version_id": v["id"], "dataset_version": v["version"],
         "created_by": (created_by or "").strip() or None,
     })
-    if changed:
-        PipelineRepository(db).update(pipeline_id, {"definition_version": def_version})
+    last.setdefault("review", {})["published"] = {"dataset_version": v["version"], "name": v.get("name"),
+                                                  "at": v.get("created_at"), "by": (created_by or "").strip() or None}
+    PipelineRepository(db).update(pipeline_id, {"state": p["state"],
+                                                **({"definition_version": def_version} if changed else {})})
     label = f"{kinds.spec(p['kind'])['label']} v{v['version']}" + (f" “{v['name']}”" if v.get("name") else "")
-    event(db, pipeline_id, f"Loaded {result['written']} record(s) as {label} (pipeline def v{def_version}). "
+    event(db, pipeline_id, f"You approved the output: published {result['written']} record(s) as {label} (pipeline def v{def_version}). "
                            "Blocks stay on their analysed version until re-run.", level="ok")
     return {"written": result["written"], "dataset_version": v, "definition_version": def_version, "diff": diff}
 

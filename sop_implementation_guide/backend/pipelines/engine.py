@@ -1038,6 +1038,35 @@ def coverage(records: list[dict], fields: list[dict]) -> dict:
     return {"records": len(records), "fields": per_field, "required_gaps": gaps, "blocking_gaps": blocking}
 
 
+def changes_since(prev: list[dict] | None, records: list[dict], fields: list[dict]) -> dict:
+    """
+    What a run changes against the last published output, matched by the first
+    field (e.g. programme name): records new, gone and changed (field, old, new).
+    marks maps a record id to "new" or "changed" for the review table.
+    """
+    names = [f["name"] for f in fields]
+    old = {record_key(r, fields): r for r in prev or []}
+    seen, added, changed, marks, unchanged = set(), [], [], {}, 0
+    label = lambda r: r["values"].get(names[0]) if names else r["id"]
+    for r in records:
+        k = record_key(r, fields)
+        seen.add(k)
+        o = old.get(k)
+        if o is None:
+            added.append({"id": r["id"], "name": label(r)})
+            marks[r["id"]] = "new"
+            continue
+        diffs = [{"field": n, "old": o["values"].get(n), "new": r["values"].get(n)} for n in names
+                 if str(o["values"].get(n) or "").strip() != str(r["values"].get(n) or "").strip()]
+        if diffs:
+            changed.append({"id": r["id"], "name": label(r), "fields": diffs})
+            marks[r["id"]] = "changed"
+        else:
+            unchanged += 1
+    removed = [{"name": label(o)} for k, o in old.items() if k not in seen]
+    return {"added": added, "removed": removed, "changed": changed, "unchanged": unchanged, "marks": marks}
+
+
 def definition_hash(definition: dict) -> str:
     """What a run's results depend on. Approval status and notes are excluded."""
     schema = definition.get("schema") or {}
@@ -1079,6 +1108,10 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
         reasons.append(f"The last run was a preview up to {last['upto']}: run the whole pipeline.")
     elif last.get("definition_hash") != definition_hash(definition):
         reasons.append("The pipeline changed since the last run: run it again.")
+    elif (last.get("review") or {}).get("published"):
+        pub = last["review"]["published"]
+        reasons.append(f"This output is already published as version {pub['dataset_version']}. "
+                       "Run the pipeline again to pick up changes.")
     else:
         if last.get("errors"):
             reasons.append("The last run had errors.")
