@@ -187,6 +187,16 @@ def remove_source(db: Client, pipeline_id: int, source_id: str, by_user: bool = 
               level="warn" if reopened else "info")
 
 
+def source_text(db: Client, pipeline_id: int, source_id: str) -> dict:
+    """The full fetched text of one source, for the planner to read before marking sources final."""
+    p = get(db, pipeline_id)
+    src = next((s for s in p["definition"]["sources"] if s["id"] == source_id), None)
+    if not src:
+        raise LookupError(f"No source {source_id}.")
+    fetched = engine.fetch_source(src)   # cached; refetched only after a server restart
+    return {**src, **engine.source_meta(fetched), "preview": None, "text": fetched.get("text") or ""}
+
+
 def finalize_sources(db: Client, pipeline_id: int) -> dict:
     """
     The planner's word that the sources are complete. Steps are outlined only

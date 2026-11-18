@@ -197,6 +197,12 @@ OUTLINE_REQUEST = ("The sources are final. Take a quick look at each one, then o
                    "the pipeline needs.")
 
 
+@router.get("/{pipeline_id}/sources/{source_id}/text")
+def source_text(pipeline_id: int, source_id: str, db: Client = Depends(get_supabase)):
+    """The whole fetched text of a source, for the source reader."""
+    return _call(lambda: service.source_text(db, pipeline_id, source_id))
+
+
 @router.delete("/{pipeline_id}/sources/{source_id}")
 def remove_source(pipeline_id: int, source_id: str, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)

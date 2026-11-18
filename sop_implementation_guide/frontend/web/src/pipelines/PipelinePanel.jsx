@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { call } from "../api.js";
 import PipelineCanvas from "./PipelineCanvas.jsx";
+import SourceReader from "./SourceReader.jsx";
 
 const KIND_TEXT = {
   extracted: "read from the source",
@@ -81,7 +82,7 @@ function SchemaCard({ view, act, disabled }) {
 
 // ── Sources ──────────────────────────────────────────────────────────────────
 
-function SourcesCard({ view, act, disabled }) {
+function SourcesCard({ view, act, disabled, picked, onPick }) {
   const [url, setUrl] = useState("");
   const [query, setQuery] = useState("");
   const sources = view.definition.sources || [];
@@ -109,13 +110,14 @@ function SourcesCard({ view, act, disabled }) {
         {sources.map((s) => {
           const meta = view.sources[s.id] || {};
           return (
-            <li key={s.id}>
+            <li key={s.id} className={"pl-src" + (picked === s.id ? " sel" : "")} onClick={() => onPick(s.id)} title="Read this source">
               <b className="pl-id">{s.id}</b>
               <span className="url" title={s.url || s.query}>{s.label}</span>
               <span className={"assess" + (meta.error ? " pl-bad" : "")} title={meta.error || meta.preview}>
                 {meta.error ? "unreadable" : meta.chars != null ? `${meta.chars.toLocaleString()} chars${meta.truncated ? " (truncated)" : ""}` : ""}
               </span>
-              <button className="rm" title="Remove" disabled={disabled} onClick={() => act("DELETE", `/sources/${s.id}`)}>×</button>
+              <button className="rm" title="Remove" disabled={disabled}
+                      onClick={(e) => { e.stopPropagation(); act("DELETE", `/sources/${s.id}`); }}>×</button>
             </li>
           );
         })}
@@ -612,7 +614,7 @@ function ReviewSummary({ review, kindLabel }) {
 
 // ── Run and load ─────────────────────────────────────────────────────────────
 
-function LoadCard({ view, act, disabled }) {
+function PublishCard({ view, act, disabled }) {
   const [name, setName] = useState("");
   const [by, setBy] = useState("");
   const [diff, setDiff] = useState(null);
@@ -684,9 +686,16 @@ function LoadCard({ view, act, disabled }) {
           )}
         </div>
       )}
-      {view.loads.length > 0 && (
-        <>
-          <h4 style={{ marginTop: "1rem" }}>Published versions</h4>
+    </div>
+  );
+}
+
+function VersionsCard({ view }) {
+  if (!view.loads.length) return null;
+  return (
+    <div className="card">
+      <h4>Published versions</h4>
+      <div className="table-wrap">
           <table>
             <thead><tr><th>Version</th><th>Name</th><th>Pipeline def</th><th>Records</th><th>Approved</th></tr></thead>
             <tbody>
@@ -701,8 +710,7 @@ function LoadCard({ view, act, disabled }) {
               ))}
             </tbody>
           </table>
-        </>
-      )}
+      </div>
     </div>
   );
 }
@@ -724,33 +732,114 @@ function NoOutputCard() {
   return (
     <div className="card">
       <h4>Output</h4>
-      <div className="assess">No run yet. Preview a step, or run the whole pipeline from Publish.</div>
+      <div className="assess">No run yet. Preview a step to see what it produces.</div>
     </div>
   );
 }
 
-export default function PipelinePanel({ view, act, pending }) {
-  const disabled = pending || !!view.busy;
-  // The canvas selection follows the design: when the stage moves on (schema
-  // approved, sources final, a step approved), the next thing to do is selected.
-  const stage = stageOf(view);
+// ── The wizard: one page per design stage, in the order the user set ────────
+
+const PAGES = [
+  { key: "schema", label: "Target schema" },
+  { key: "sources", label: "Sources" },
+  { key: "steps", label: "Steps" },
+  { key: "review", label: "Review & publish" },
+];
+
+function pageOf(stage) {
+  if (stage === "schema") return 0;
+  if (stage === "sources") return 1;
+  if (stage === "publish") return 3;
+  return 2;
+}
+
+function Stepper({ view, page, reached, onGo }) {
+  return (
+    <nav className="pl-stepper" aria-label="Pipeline design stages">
+      {PAGES.map((p, i) => (
+        <button key={p.key} type="button" disabled={i > reached} onClick={() => onGo(i)}
+                className={"pl-stage" + (i === page ? " cur" : "") + (i < reached ? " done" : "") + (i === reached ? " now" : "")}
+                aria-current={i === page ? "step" : undefined}
+                title={i > reached ? `Finish ${PAGES[reached].label.toLowerCase()} first` : p.label}>
+          <span className="pl-stage-n">{i < reached ? "✓" : i + 1}</span>
+          <span className="pl-stage-label">{p.label}</span>
+        </button>
+      ))}
+      <span className="spacer" />
+      {view.busy && <span className="pl-progress"><span className="pl-spin" />
+        {view.progress || (view.busy === "turn" ? "The agent is working…" : "Running…")}</span>}
+    </nav>
+  );
+}
+
+function SourcesPage({ view, act, disabled }) {
+  const sources = view.definition.sources || [];
+  const [picked, setPicked] = useState(sources[0]?.id ?? null);
+  const src = sources.find((s) => s.id === picked) || sources[sources.length - 1] || null;
+  return (
+    <div className="pl-sources-page">
+      <SourcesCard view={view} act={act} disabled={disabled} picked={src?.id} onPick={setPicked} />
+      <SourceReader pipelineId={view.id} source={src} meta={src ? view.sources[src.id] : null} />
+    </div>
+  );
+}
+
+function StepsPage({ view, act, disabled, stage, onSources }) {
+  // The selection follows the design: when a step is approved the next one opens.
   const [sel, setSel] = useState(stage);
   const [seenStage, setSeenStage] = useState(stage);
   if (stage !== seenStage) { setSeenStage(stage); setSel(stage); }
 
   const steps = view.definition.steps || [];
   let shown = sel;
-  if (shown?.startsWith("step:") && !steps.some((s) => `step:${s.id}` === shown)) shown = stage;
-  if (shown === "steps" && steps.length) shown = `step:${steps[0].id}`;
+  if (shown?.startsWith("step:") && !steps.some((s) => `step:${s.id}` === shown)) shown = null;
+  if (!shown || shown === "steps" || shown === "publish") {
+    const open = steps.find((s) => s.status !== "approved") || steps[0];
+    shown = open ? `step:${open.id}` : "steps";
+  }
   if (shown === "gaps") shown = steps.length ? `step:${steps[steps.length - 1].id}` : "steps";
+  const pick = (k) => (k === "sources" ? onSources() : setSel(k));
 
   let body;
-  if (shown === "schema") body = <SchemaCard view={view} act={act} disabled={disabled} />;
-  else if (shown === "sources") body = <SourcesCard view={view} act={act} disabled={disabled} />;
-  else if (shown === "steps") body = <NoStepsCard view={view} />;
-  else if (shown?.startsWith("step:")) body = <StepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onSelect={setSel} />;
+  if (shown === "steps") body = <NoStepsCard view={view} />;
   else if (shown === "output") body = view.last_run ? <OutputCard view={view} act={act} disabled={disabled} /> : <NoOutputCard />;
-  else body = <LoadCard view={view} act={act} disabled={disabled} />;
+  else body = <StepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onSelect={setSel} />;
+  return (
+    <>
+      <PipelineCanvas view={view} sel={sel === "gaps" ? "gaps" : shown} onSelect={pick} />
+      {shown.startsWith("step:") && <GapsNote view={view} />}
+      {body}
+    </>
+  );
+}
+
+export default function PipelinePanel({ view, act, pending }) {
+  const disabled = pending || !!view.busy;
+  const stage = stageOf(view);
+  const reached = pageOf(stage);
+
+  // The page follows the design: finishing a stage slides the next one in, and
+  // a change that reopens an earlier stage (from the chat, say) slides back to it.
+  const [nav, setNav] = useState({ page: reached, dir: "fwd" });
+  const [seenReached, setSeenReached] = useState(reached);
+  if (reached !== seenReached) {
+    setSeenReached(reached);
+    setNav({ page: reached, dir: reached >= nav.page ? "fwd" : "back" });
+  }
+  const page = Math.min(nav.page, reached);
+  const go = (i) => i !== page && setNav({ page: i, dir: i > page ? "fwd" : "back" });
+
+  let body;
+  if (page === 0) body = <SchemaCard view={view} act={act} disabled={disabled} />;
+  else if (page === 1) body = <SourcesPage view={view} act={act} disabled={disabled} />;
+  else if (page === 2) body = <StepsPage view={view} act={act} disabled={disabled} stage={stage} onSources={() => go(1)} />;
+  else body = (
+    <>
+      <PublishCard view={view} act={act} disabled={disabled} />
+      <OutputCard view={view} act={act} disabled={disabled} />
+      <VersionsCard view={view} />
+    </>
+  );
 
   return (
     <div className="pl-panel-inner">
@@ -758,9 +847,18 @@ export default function PipelinePanel({ view, act, pending }) {
         <h3>{view.name}</h3>
         <span className="assess">{view.kind_label} · def v{view.definition_version}</span>
       </div>
-      <PipelineCanvas view={view} sel={sel === "gaps" ? "gaps" : shown} onSelect={setSel} />
-      {(shown?.startsWith("step:") || sel === "gaps") && <GapsNote view={view} />}
-      {body}
+      <Stepper view={view} page={page} reached={reached} onGo={go} />
+      <div className="pl-pages">
+        <div key={PAGES[page].key} className={"pl-page " + nav.dir}>
+          {body}
+          {page < reached && (
+            <div className="pl-page-foot">
+              <span className="assess">This stage is done. Changing it may send later stages back for approval.</span>
+              <button className="primary" onClick={() => go(reached)}>Back to {PAGES[reached].label.toLowerCase()} →</button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

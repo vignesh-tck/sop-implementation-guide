@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-// A small node map of the pipeline: schema → sources → steps → output → publish.
-// Clicking a node selects it; the panel below shows that part for editing.
+// A small node map of the pipeline: sources → steps → output. Clicking a node
+// selects it; the panel below shows that part for editing.
 // Nodes are laid out with CSS; the connecting lines are measured from the DOM
 // after each render and drawn in one SVG behind them.
 
@@ -57,13 +57,11 @@ function Node({ id, reg, sel, onSelect, status, kind, title, sub, meta, model, r
 
 export default function PipelineCanvas({ view, sel, onSelect }) {
   const d = view.definition;
-  const fields = d.schema?.fields || [];
   const sources = d.sources || [];
   const steps = d.steps || [];
   const gaps = steps.length ? view.design_gaps || [] : [];
   const busy = !!view.busy;
   const run = view.last_run;
-  const published = run?.review?.published;
 
   // Which step the server is on, from progress lines like "Running s2 (parse)".
   // Sub-step lines ("Reading 4 page(s)…") keep the last step seen.
@@ -84,9 +82,7 @@ export default function PipelineCanvas({ view, sel, onSelect }) {
   const edges = [];
   const edge = (from, to) => edges.push({ from, to });
 
-  status.schema = d.schema?.status === "approved" ? "ok" : fields.length ? "pending" : "idle";
   status.sources = d.sources_status === "final" ? "ok" : sources.length ? "pending" : "idle";
-  edge("schema", "sources");
   steps.forEach((s, i) => {
     status[s.id] = stepStatus(s, view.outputs[s.id]);
     if (i > 0) edge(steps[i - 1].id, s.id);
@@ -99,13 +95,11 @@ export default function PipelineCanvas({ view, sel, onSelect }) {
   const last = steps.length ? steps[steps.length - 1].id : "steps";
   if (!steps.length) edge("sources", "steps");
   if (gaps.length) { edge(last, "gaps"); edge("gaps", "output"); } else edge(last, "output");
-  edge("output", "publish");
   for (const s of shownSources) status[`src:${s.id}`] = view.sources[s.id]?.error ? "bad" : status.sources;
   if (hidden.length) status["src:+more"] = status.sources;
   status.steps = "idle";
   status.gaps = "bad";
   status.output = run ? (run.upto ? "pending" : "ok") : "idle";
-  status.publish = published ? "ok" : run && !run.upto && view.gate.length === 0 ? "pending" : "idle";
 
   // ── measuring the lines ────────────────────────────────────────────────────
   const viewport = useRef(null);
@@ -183,8 +177,6 @@ export default function PipelineCanvas({ view, sel, onSelect }) {
       <div className="pl-canvas-bar">
         <b>Pipeline</b>
         <span className="assess">{steps.length ? `${approved}/${steps.length} steps approved` : "no steps yet"}</span>
-        {busy && <span className="pl-canvas-progress"><span className="pl-spin" />
-          {view.progress || (view.busy === "turn" ? "The agent is working…" : "Running…")}</span>}
         <span className="spacer" />
         <span className="pl-canvas-legend">
           <span className="ok">approved</span><span className="pending">needs approval</span><span className="bad">failed</span>
@@ -201,11 +193,6 @@ export default function PipelineCanvas({ view, sel, onSelect }) {
               </g>
             ))}
           </svg>
-
-          <div className="pl-col">
-            <Node id="schema" {...common} status={status.schema} kind="Schema" title="Target schema"
-                  sub={fields.length ? `${fields.length} fields, ${fields.filter((f) => f.required).length} required` : "no fields yet"} />
-          </div>
 
           <div className="pl-col">
             <div ref={(el) => reg("sources", el)} role="button" tabIndex={0}
@@ -255,11 +242,6 @@ export default function PipelineCanvas({ view, sel, onSelect }) {
             <Node id="output" {...common} status={status.output} kind="Output" title={run && !run.upto ? "Final output" : "Output"}
                   sub={run ? `${run.coverage?.records ?? 0} records` : "no run yet"}
                   meta={run?.upto ? `preview to ${run.upto}` : run ? (run.at || "").slice(5, 16).replace("T", " ") : null} />
-          </div>
-          <div className="pl-col">
-            <Node id="publish" {...common} status={status.publish} kind="Publish"
-                  title={published ? `${view.kind_label} v${published.dataset_version}` : status.publish === "pending" ? "Ready for review" : "Not ready"}
-                  sub={published ? "published" : view.loads.length ? `${view.loads.length} version(s) so far` : "run, review, approve"} />
           </div>
         </div>
       </div>
