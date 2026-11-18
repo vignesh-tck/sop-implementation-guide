@@ -1,7 +1,10 @@
-import { Fragment, useState } from "react";
+import { Fragment, Suspense, lazy, useState } from "react";
 import { call } from "../api.js";
-import PipelineCanvas from "./PipelineCanvas.jsx";
 import SourceReader from "./SourceReader.jsx";
+import StepDialog from "./StepDialog.jsx";
+
+// The node editor library is large; load it only when the Pipeline page opens.
+const PipelineCanvas = lazy(() => import("./PipelineCanvas.jsx"));
 
 const KIND_TEXT = {
   extracted: "read from the source",
@@ -155,7 +158,7 @@ function GapsNote({ view }) {
   return (
     <div className="pl-gate" style={{ marginTop: 0, marginBottom: ".5rem" }}>
       <b>The pipeline is not complete:</b> no step produces {view.design_gaps.map((g, i) => <Fragment key={g}>{i > 0 && ", "}<code>{g}</code></Fragment>)}.
-      Ask the agent in the chat to add the missing steps.
+      Add the missing steps on the canvas, or ask the agent.
     </div>
   );
 }
@@ -168,7 +171,7 @@ function NoStepsCard({ view }) {
         {view.definition.schema?.status !== "approved" ? "First approve the target schema, then add sources and mark them final."
           : view.definition.sources_status !== "final" ? "Add the sources and mark them final: the agent then outlines every step."
           : view.busy ? "The agent is looking at the sources and outlining the steps…"
-          : "The agent outlines the steps from the final sources. If none appear, ask it in the chat."}
+          : "The agent outlines the steps from the final sources. If none appear, ask it in the chat, or add one yourself with + Add step on the canvas."}
       </div>
     </div>
   );
@@ -176,7 +179,7 @@ function NoStepsCard({ view }) {
 
 // The step selected on the canvas: read its prompt, tune the instructions,
 // preview what it produces, then approve it.
-function StepCard({ view, act, disabled, stepId, onSelect }) {
+function StepCard({ view, act, disabled, stepId, onSelect, onEdit }) {
   const steps = view.definition.steps || [];
   const i = steps.findIndex((x) => x.id === stepId);
   const s = steps[i];
@@ -200,13 +203,14 @@ function StepCard({ view, act, disabled, stepId, onSelect }) {
       {cat.description && <div className="muted-note" style={{ marginTop: ".2rem" }}>{cat.description}</div>}
       {s.note && <div className="pl-step-note">{s.note}</div>}
       <StepDesigner key={s.id} step={s} out={out} view={view} act={act} disabled={disabled}
-                    isLast={i === steps.length - 1} blockedBy={blockedBy} />
+                    isLast={i === steps.length - 1} blockedBy={blockedBy} onEdit={() => onEdit(s.id)} />
       <div className="pl-step-actions">
+        <button disabled={disabled} onClick={() => onEdit(s.id)}>Edit settings…</button>
         <button disabled={disabled || i === 0} title="Move earlier" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: -1 })}>← Move earlier</button>
         <button disabled={disabled || i === steps.length - 1} title="Move later" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: 1 })}>Move later →</button>
         <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove step</button>
       </div>
-      <div className="muted-note">Changing a step sends it and every later step back for approval.</div>
+      <div className="muted-note">Changing a step sends it and every later step back for approval. On the canvas, right-click a step for the same actions.</div>
     </div>
   );
 }
@@ -266,7 +270,7 @@ function PromptEditor({ step, prompt, act, disabled }) {
   );
 }
 
-function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy }) {
+function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy, onEdit }) {
   const fields = view.definition.schema?.fields || [];
   const [onlyAttention, setOnlyAttention] = useState(false);
   const prompt = view.prompts?.[step.id];
@@ -278,7 +282,8 @@ function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy }) {
     <div className="pl-review">
       {prompt ? <PromptEditor step={step} prompt={prompt} act={act} disabled={disabled} /> : (
         <div className="pl-settings">
-          <b>Settings</b> <span className="assess">(no model call; ask in the chat to change them)</span>
+          <b>Settings</b> <span className="assess">(no model call)</span>{" "}
+          <button className="link" disabled={disabled} onClick={onEdit}>edit</button>
           <pre className="pl-prompt-text">{JSON.stringify(step.config, null, 2)}</pre>
         </div>
       )}
@@ -747,7 +752,7 @@ function NoOutputCard() {
 const PAGES = [
   { key: "schema", label: "Target schema" },
   { key: "sources", label: "Sources" },
-  { key: "steps", label: "Steps" },
+  { key: "steps", label: "Pipeline" },
   { key: "review", label: "Review & publish" },
 ];
 
@@ -777,9 +782,9 @@ function Stepper({ view, page, reached, onGo }) {
   );
 }
 
-function SourcesPage({ view, act, disabled }) {
+function SourcesPage({ view, act, disabled, initialPick }) {
   const sources = view.definition.sources || [];
-  const [picked, setPicked] = useState(sources[0]?.id ?? null);
+  const [picked, setPicked] = useState(initialPick ?? sources[0]?.id ?? null);
   const src = sources.find((s) => s.id === picked) || sources[sources.length - 1] || null;
   return (
     <div className="pl-sources-page">
@@ -789,31 +794,64 @@ function SourcesPage({ view, act, disabled }) {
   );
 }
 
+// A source picked on the canvas.
+function SourceNodeCard({ view, sourceId, onOpen }) {
+  const s = (view.definition.sources || []).find((x) => x.id === sourceId);
+  if (!s) return null;
+  const meta = view.sources[s.id] || {};
+  const readers = (view.definition.steps || []).filter((x) => x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)));
+  return (
+    <div className="card">
+      <h4><b className="pl-id">{s.id}</b> {s.label}</h4>
+      <div className="assess">{s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> : s.query}</div>
+      <div className={meta.error ? "pl-bad" : "assess"} style={{ marginTop: ".3rem" }}>
+        {meta.error || (meta.chars != null ? `${meta.chars.toLocaleString()} characters${meta.truncated ? " (truncated)" : ""}` : "")}
+      </div>
+      <div className="assess" style={{ marginTop: ".3rem" }}>
+        Read by {readers.length ? readers.map((x) => x.id).join(", ") : "no Extract step yet"}. Drag from its dot to an Extract
+        step to wire it; select a wire and press Delete to unwire it.
+      </div>
+      <div className="btn-row"><button onClick={onOpen}>Open in the source reader</button></div>
+    </div>
+  );
+}
+
 function StepsPage({ view, act, disabled, stage, onSources }) {
   // The selection follows the design: when a step is approved the next one opens.
   const [sel, setSel] = useState(stage);
   const [seenStage, setSeenStage] = useState(stage);
   if (stage !== seenStage) { setSeenStage(stage); setSel(stage); }
+  const [dialog, setDialog] = useState(null);     // StepDialog's mode, plus onAdded
 
   const steps = view.definition.steps || [];
+  const sources = view.definition.sources || [];
   let shown = sel;
   if (shown?.startsWith("step:") && !steps.some((s) => `step:${s.id}` === shown)) shown = null;
-  if (!shown || shown === "steps" || shown === "publish") {
+  if (shown?.startsWith("src:") && !sources.some((s) => `src:${s.id}` === shown)) shown = null;
+  if (!shown || shown === "steps" || shown === "publish" || shown === "sources") {
     const open = steps.find((s) => s.status !== "approved") || steps[0];
     shown = open ? `step:${open.id}` : "steps";
   }
   if (shown === "gaps") shown = steps.length ? `step:${steps[steps.length - 1].id}` : "steps";
   const pick = (k) => (k === "sources" ? onSources() : setSel(k));
+  const onEdit = (id) => setDialog({ kind: "edit", stepId: id });
 
   let body;
   if (shown === "steps") body = <NoStepsCard view={view} />;
   else if (shown === "output") body = view.last_run ? <OutputCard view={view} act={act} disabled={disabled} /> : <NoOutputCard />;
-  else body = <StepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onSelect={setSel} />;
+  else if (shown.startsWith("src:")) body = <SourceNodeCard view={view} sourceId={shown.slice(4)} onOpen={() => onSources(shown.slice(4))} />;
+  else body = <StepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onSelect={setSel} onEdit={onEdit} />;
   return (
     <>
-      <PipelineCanvas view={view} sel={sel === "gaps" ? "gaps" : shown} onSelect={pick} />
+      <Suspense fallback={<div className="pl-canvas"><div className="pl-canvas-bar"><b>Pipeline</b><span className="assess">loading the canvas…</span></div><div className="pl-flow" /></div>}>
+        <PipelineCanvas view={view} sel={sel === "gaps" ? "gaps" : shown} onSelect={pick} act={act} disabled={disabled}
+                        onAddStep={(m) => setDialog({ kind: "add", ...m })} onEditStep={onEdit}
+                        onAskAgent={(text) => setDialog({ kind: "ask", text })} onOpenSource={onSources} />
+      </Suspense>
       {shown.startsWith("step:") && <GapsNote view={view} />}
       {body}
+      {dialog && <StepDialog view={view} mode={dialog} act={act} onAdded={dialog.onAdded}
+                             onClose={() => setDialog(null)} />}
     </>
   );
 }
@@ -833,11 +871,13 @@ export default function PipelinePanel({ view, act, pending }) {
   }
   const page = Math.min(nav.page, reached);
   const go = (i) => i !== page && setNav({ page: i, dir: i > page ? "fwd" : "back" });
+  const [sourcePick, setSourcePick] = useState(null);    // a source opened from the canvas
 
   let body;
   if (page === 0) body = <SchemaCard view={view} act={act} disabled={disabled} />;
-  else if (page === 1) body = <SourcesPage view={view} act={act} disabled={disabled} />;
-  else if (page === 2) body = <StepsPage view={view} act={act} disabled={disabled} stage={stage} onSources={() => go(1)} />;
+  else if (page === 1) body = <SourcesPage view={view} act={act} disabled={disabled} initialPick={sourcePick} />;
+  else if (page === 2) body = <StepsPage view={view} act={act} disabled={disabled} stage={stage}
+                                         onSources={(id) => { setSourcePick(id || null); go(1); }} />;
   else body = (
     <>
       <PublishCard view={view} act={act} disabled={disabled} />

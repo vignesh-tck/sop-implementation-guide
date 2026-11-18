@@ -217,6 +217,23 @@ def approve_step(pipeline_id: int, step_id: str, db: Client = Depends(get_supaba
     return _view(db, pipeline_id)
 
 
+class NewStep(BaseModel):
+    type: str
+    config: dict = {}
+    note: Optional[str] = None
+    after: Optional[str] = None         # insert after this step id
+    position: Optional[int] = None      # or at this index (0 = first); default the end
+
+
+@router.post("/{pipeline_id}/steps")
+def add_step(pipeline_id: int, body: NewStep, db: Client = Depends(get_supabase)):
+    """The planner adds a step from the canvas; it goes through the same checks as the agent's."""
+    _idle(db, pipeline_id)
+    _call(lambda: service.add_step(db, pipeline_id, body.type, body.config, body.note, body.after,
+                                   body.position, by_user=True))
+    return _view(db, pipeline_id)
+
+
 class StepEdit(BaseModel):
     config: Optional[dict] = None
     note: Optional[str] = None
@@ -251,13 +268,34 @@ def edit_output(pipeline_id: int, body: RecordEdit, db: Client = Depends(get_sup
 
 
 class Move(BaseModel):
-    direction: Literal[-1, 1]
+    direction: Optional[Literal[-1, 1]] = None
+    position: Optional[int] = None      # move to this index in the run order instead (canvas rewiring)
 
 
 @router.post("/{pipeline_id}/steps/{step_id}/move")
 def move_step(pipeline_id: int, step_id: str, body: Move, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
-    _call(lambda: service.move_step(db, pipeline_id, step_id, body.direction))
+    if body.position is not None:
+        _call(lambda: service.place_step(db, pipeline_id, step_id, body.position))
+    elif body.direction is not None:
+        _call(lambda: service.move_step(db, pipeline_id, step_id, body.direction))
+    else:
+        raise HTTPException(status_code=422, detail="Give a direction or a position.")
+    return _view(db, pipeline_id)
+
+
+class Layout(BaseModel):
+    positions: dict
+
+
+@router.put("/{pipeline_id}/layout")
+def set_layout(pipeline_id: int, body: Layout, db: Client = Depends(get_supabase)):
+    """
+    Node positions on the canvas. Refused while busy, since the agent or a run
+    saves the whole definition; the panel sends it in turn with its other actions.
+    """
+    _idle(db, pipeline_id)
+    _call(lambda: service.set_layout(db, pipeline_id, body.positions))
     return _view(db, pipeline_id)
 
 

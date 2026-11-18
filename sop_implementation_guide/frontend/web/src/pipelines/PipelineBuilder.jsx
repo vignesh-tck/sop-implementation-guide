@@ -35,7 +35,8 @@ export default function PipelineBuilder({ id, onBack }) {
   }, [view, load]);
 
   // Every panel action returns the fresh pipeline (or {pipeline}); a 202 means "poll".
-  const act = useCallback(async (method, path, body) => {
+  // With throwErrors the caller shows the error itself (a dialog, say) instead of the banner.
+  const act = useCallback(async (method, path, body, { throwErrors = false } = {}) => {
     setPending(true);
     setActionError(null);
     try {
@@ -45,8 +46,9 @@ export default function PipelineBuilder({ id, onBack }) {
       else await load();
       return r;
     } catch (e) {
-      setActionError(e.message);
       await load();
+      if (throwErrors) throw e;
+      setActionError(e.message);
       return null;
     } finally {
       setPending(false);

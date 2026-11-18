@@ -180,11 +180,21 @@ def remove_source(db: Client, pipeline_id: int, source_id: str, by_user: bool = 
     if len(p["definition"]["sources"]) == before:
         raise PipelineError(f"No source {source_id}.")
     p["state"].get("sources", {}).pop(source_id, None)
+    # Extract steps wired to it stop naming it; one wired to nothing else falls back to all sources.
+    rewired = []
+    for s in p["definition"]["steps"]:
+        ids = (s.get("config") or {}).get("source_ids")
+        if s["type"] == "extract" and ids and source_id in ids:
+            s["config"]["source_ids"] = [i for i in ids if i != source_id] or None
+            if s["config"]["source_ids"] is None:
+                rewired.append(s["id"])
     reopened = _reopen_sources(p)
     _save(db, p, state=p["state"])
-    if by_user or reopened:
-        event(db, pipeline_id, f"{'You removed' if by_user else 'Removed'} source {source_id}." + reopened,
-              level="warn" if reopened else "info")
+    note = (f" {', '.join(rewired)} read only {source_id}, so {'it now reads' if len(rewired) == 1 else 'they now read'}"
+            " every source: rewire on the canvas if that is wrong.") if rewired else ""
+    if by_user or reopened or rewired:
+        event(db, pipeline_id, f"{'You removed' if by_user else 'Removed'} source {source_id}." + reopened + note,
+              level="warn" if reopened or rewired else "info")
 
 
 def source_text(db: Client, pipeline_id: int, source_id: str) -> dict:
@@ -242,23 +252,44 @@ def read_source(db: Client, pipeline_id: int, source_id: str, offset: int = 0, l
 
 # ── Steps ────────────────────────────────────────────────────────────────────
 
+def _check_sources(p: dict, step_type: str, cfg: dict) -> dict:
+    """An Extract step's wiring must name sources that exist. An empty list means all sources."""
+    if step_type == "extract" and cfg.get("source_ids") is not None:
+        known = [s["id"] for s in p["definition"]["sources"]]
+        unknown = [i for i in cfg["source_ids"] if i not in known]
+        if unknown:
+            raise PipelineError(f"No source {', '.join(map(str, unknown))}; the sources are {', '.join(known) or 'none'}.")
+        cfg["source_ids"] = [i for i in known if i in cfg["source_ids"]] or None
+    return cfg
+
+
 def add_step(db: Client, pipeline_id: int, step_type: str, config: dict, note: str | None = None,
-             after: str | None = None) -> dict:
+             after: str | None = None, position: int | None = None, by_user: bool = False) -> dict:
+    """Insert after the step `after`, or at index `position` (0 = first), or at the end."""
     p = get(db, pipeline_id)
+    who = "you approve" if by_user else "the planner approves"
     if p["definition"]["schema"].get("status") != "approved":
-        raise PipelineError("Steps are outlined after the planner approves the target schema. Ask them to approve it.")
+        raise PipelineError(f"Steps are outlined after {who} the target schema."
+                            + ("" if by_user else " Ask them to approve it."))
     if p["definition"].get("sources_status") != "final":
-        raise PipelineError("Steps are outlined after the planner marks the sources final (the 'Sources are final' "
-                            "button in the panel). Ask them to finish adding sources and press it.")
-    cfg = engine.validate_step(p["kind"], step_type, config, _fields(p))
+        raise PipelineError("Steps are added after the sources are marked final (the 'Sources are final' button)."
+                            + ("" if by_user else " Ask the planner to finish adding sources and press it."))
+    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config, _fields(p)))
     steps = p["definition"]["steps"]
     step = {"id": _next_id(steps, "t"), "type": step_type, "config": cfg,
             "note": (note or "").strip(), "status": "proposed"}
-    idx = next((i + 1 for i, s in enumerate(steps) if s["id"] == after), len(steps))
+    if position is not None:
+        idx = max(0, min(int(position), len(steps)))
+    else:
+        idx = next((i + 1 for i, s in enumerate(steps) if s["id"] == after), len(steps))
     steps.insert(idx, step)
     reset = _invalidate_from(p, idx)   # later steps now work on this step's output
     _save(db, p, state=p["state"])
-    if reset:
+    if by_user:
+        where = f"after {steps[idx - 1]['id']}" if idx > 0 else "as the first step"
+        event(db, pipeline_id, f"You added step {step['id']} ({engine.CATALOG[step_type]['label']}) {where}. "
+              "Preview it, then approve it." + _reset_text(reset))
+    elif reset:
         event(db, pipeline_id, f"Step {step['id']} was added before approved steps." + _reset_text(reset))
     return step
 
@@ -291,7 +322,7 @@ def update_step(db: Client, pipeline_id: int, step_id: str, config: dict | None 
         raise PipelineError(f"No step {step_id}.")
     reset, changed = [], False
     if config is not None:
-        clean = engine.validate_step(p["kind"], step["type"], config, _fields(p))
+        clean = _check_sources(p, step["type"], engine.validate_step(p["kind"], step["type"], config, _fields(p)))
         if clean != step["config"]:
             step["config"], changed = clean, True
             reset = _invalidate_from(p, steps.index(step))
@@ -363,6 +394,44 @@ def move_step(db: Client, pipeline_id: int, step_id: str, direction: int) -> lis
         _save(db, p, state=p["state"])
         event(db, pipeline_id, f"You moved step {step_id}." + _reset_text(reset))
     return steps
+
+
+def place_step(db: Client, pipeline_id: int, step_id: str, position: int) -> list[dict]:
+    """Move a step to index `position` in the run order (rewiring it on the canvas)."""
+    p = get(db, pipeline_id)
+    steps = p["definition"]["steps"]
+    i = next((n for n, s in enumerate(steps) if s["id"] == step_id), None)
+    if i is None:
+        raise PipelineError(f"No step {step_id}.")
+    j = max(0, min(int(position), len(steps) - 1))
+    if i == j:
+        return steps
+    steps.insert(j, steps.pop(i))
+    reset = _invalidate_from(p, min(i, j))
+    _save(db, p, state=p["state"])
+    where = f"after {steps[j - 1]['id']}" if j > 0 else "to the start"
+    event(db, pipeline_id, f"You moved step {step_id} {where}." + _reset_text(reset))
+    return steps
+
+
+# Where the planner put each node on the canvas. Display only: not part of the
+# definition hash or the agent's snapshot, and saving it resets nothing.
+MAX_LAYOUT_NODES = 300
+
+
+def set_layout(db: Client, pipeline_id: int, positions: dict) -> dict:
+    if not isinstance(positions, dict) or len(positions) > MAX_LAYOUT_NODES:
+        raise PipelineError("Layout must be an object of at most 300 node positions.")
+    clean = {}
+    for k, v in positions.items():
+        try:
+            clean[str(k)[:64]] = {"x": round(float(v["x"]), 1), "y": round(float(v["y"]), 1)}
+        except (TypeError, KeyError, ValueError):
+            raise PipelineError(f"Position for {k!r} needs numeric x and y.")
+    p = get(db, pipeline_id)
+    p["definition"]["layout"] = clean
+    _save(db, p)
+    return clean
 
 
 # ── Overrides on the final output ────────────────────────────────────────────
@@ -614,7 +683,7 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
         "output_locked": output_locked(p),
         "design_gaps": engine.design_gaps(p["definition"]),
         "overrides": p["definition"].get("overrides"),
-        "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"]}
+        "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"], "config": v["config"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},
         "loads": PipelineRunRepository(db).for_pipeline(pipeline_id),
         "created_by": p.get("created_by"), "created_at": p.get("created_at"),
