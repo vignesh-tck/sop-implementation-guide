@@ -242,6 +242,98 @@ def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
     return step
 
 
+def edit_records(db: Client, pipeline_id: int, step_id: str, op: str, record_id: str | None = None,
+                 values: dict | None = None) -> dict:
+    """
+    The planner's review of a step's output: set values on a record, remove it,
+    add one, or undo every edit to a record. Saved on the step, so runs re-apply
+    them, and applied to the stored output now so the review shows the result.
+    """
+    p = get(db, pipeline_id)
+    fields = _fields(p)
+    steps = p["definition"]["steps"]
+    step = next((s for s in steps if s["id"] == step_id), None)
+    if not step:
+        raise PipelineError(f"No step {step_id}.")
+    out = (p["state"].get("outputs") or {}).get(step_id)
+    if not out or out.get("error"):
+        raise PipelineError(f"Preview {step_id} first, then review its output.")
+    if out["count"] > len(out.get("records") or []):
+        raise PipelineError(f"{step_id} has {out['count']} records; only the first {engine.PREVIEW_RECORDS} "
+                            "can be reviewed here. Add a filter step to narrow it.")
+    edits = {k: list(v) for k, v in {**engine.EMPTY_EDITS, **(step.get("edits") or {})}.items()}
+    shown = {r["id"]: r for r in out["records"]}
+    base = {r["id"]: r for r in engine.unapply_edits(out)}
+    name = lambda rid: (shown.get(rid) or base.get(rid) or {}).get("values", {}).get(fields[0]["name"]) or rid
+
+    if op == "add":
+        clean = engine.clean_edit_values(values or {}, fields)
+        if not any(v is not None for v in clean.values()):
+            raise PipelineError("Fill at least one field.")
+        n = max([int(e["id"].rsplit("-u", 1)[1]) for e in edits["added"]] or [0]) + 1
+        record_id = f"{step_id}-u{n}"
+        edits["added"].append({"id": record_id, "values": clean})
+        text = f"added {record_id} ({clean.get(fields[0]['name']) or 'unnamed'})"
+    elif op == "set":
+        clean = engine.clean_edit_values(values or {}, fields)
+        added = next((e for e in edits["added"] if e["id"] == record_id), None)
+        if added:
+            added["values"].update(clean)
+        elif record_id in base:
+            orig = base[record_id]
+            change = next((e for e in edits["changed"] if e["id"] == record_id), None)
+            if not change:
+                change = {"id": record_id, "key": engine.record_key(orig, fields), "values": {}}
+                edits["changed"].append(change)
+            for k, v in clean.items():
+                if v == orig["values"].get(k):
+                    change["values"].pop(k, None)   # set back to what the step produced
+                else:
+                    change["values"][k] = v
+            if not change["values"]:
+                edits["changed"].remove(change)
+        else:
+            raise PipelineError(f"No record {record_id} in {step_id}'s output.")
+        text = f"changed {record_id} ({name(record_id)}): {', '.join(clean)}"
+    elif op == "remove":
+        if any(e["id"] == record_id for e in edits["added"]):
+            edits["added"] = [e for e in edits["added"] if e["id"] != record_id]
+        elif record_id in shown:
+            if not any(e["id"] == record_id for e in edits["removed"]):
+                edits["removed"].append({"id": record_id, "key": engine.record_key(shown[record_id], fields)})
+        else:
+            raise PipelineError(f"No record {record_id} in {step_id}'s output.")
+        text = f"removed {record_id} ({name(record_id)})"
+    elif op == "undo":
+        label = name(record_id)
+        for k in edits:
+            edits[k] = [e for e in edits[k] if e["id"] != record_id]
+        text = f"undid your edits to {record_id} ({label})"
+    else:
+        raise PipelineError("op must be add, set, remove or undo.")
+
+    before = engine.definition_hash(p["definition"])
+    step["edits"] = edits if any(edits.values()) else None
+    if not step["edits"]:
+        step.pop("edits")
+    records, removed, notes = engine.apply_edits(step, list(base.values()), fields)
+    out.update({"records": records, "removed": removed, "edit_notes": notes, "count": len(records),
+                "coverage": engine.coverage(records, fields)})
+    # Later steps ran on the old output. If this is the last step of a full run, the run's result is
+    # this output, so it stays loadable; otherwise later outputs are out of date until the next run.
+    last = p["state"].get("last_run") or {}
+    later = [s["id"] for s in steps[steps.index(step) + 1:]]
+    for sid in later:
+        if sid in p["state"]["outputs"]:
+            p["state"]["outputs"][sid]["stale"] = True
+    if not later and last and not last.get("upto") and last.get("definition_hash") == before:
+        last.update({"records": records, "coverage": out["coverage"],
+                     "definition_hash": engine.definition_hash(p["definition"])})
+    _save(db, p, state=p["state"])
+    event(db, pipeline_id, f"You reviewed {step_id}: {text}.")
+    return {"record_id": record_id, "edits": edits}
+
+
 def move_step(db: Client, pipeline_id: int, step_id: str, direction: int) -> list[dict]:
     p = get(db, pipeline_id)
     steps = p["definition"]["steps"]

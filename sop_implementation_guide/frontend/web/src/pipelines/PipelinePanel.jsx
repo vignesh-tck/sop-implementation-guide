@@ -6,6 +6,7 @@ const KIND_TEXT = {
   derived: "computed by a step",
   inferred: "model judgement (approved step)",
   assumed: "value you stated",
+  manual: "you entered it in review",
 };
 
 function StatusTag({ status }) {
@@ -127,45 +128,200 @@ function SourcesCard({ view, act, disabled }) {
 
 // ── Steps ────────────────────────────────────────────────────────────────────
 
-function StepsCard({ view, act, disabled, selected, onSelect }) {
+function editCount(edits) {
+  return edits ? (edits.changed?.length || 0) + (edits.removed?.length || 0) + (edits.added?.length || 0) : 0;
+}
+
+function StepsCard({ view, act, disabled }) {
   const steps = view.definition.steps || [];
+  const [open, setOpen] = useState(null);
   return (
     <div className="card">
       <h4>Steps</h4>
+      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
+        Preview a step, open <b>Review</b> to check its records (correct values, remove or add records), then approve it.
+        Your edits are kept on the step and re-applied every run.
+      </div>
       {steps.length === 0 && <div className="assess">The agent proposes steps once the schema and sources are in place.</div>}
       <ol className="pl-steps">
         {steps.map((s, i) => {
           const out = view.outputs[s.id];
           const cat = view.catalog[s.type] || {};
+          const n = editCount(s.edits);
+          const isOpen = open === s.id && out && !out.error;
           return (
-            <li key={s.id} className={(selected === s.id ? "sel " : "") + (out?.error ? "failed" : "")}>
+            <li key={s.id} className={(isOpen ? "sel " : "") + (out?.error ? "failed" : "")}>
               <div className="pl-step-head">
                 <b className="pl-id">{s.id}</b>
                 <b>{cat.label || s.type}</b>
                 {cat.model && <span className="tag derived" title="Calls the model; output is cached on its inputs">model</span>}
                 <StatusTag status={s.status} />
+                {n > 0 && <span className="tag manual" title="Your corrections to this step's output">{n} edit{n > 1 ? "s" : ""} by you</span>}
                 <span className="spacer" />
-                {out && !out.error && (
-                  <button className="link" onClick={() => onSelect(s.id)}>{out.count} record(s)</button>
-                )}
+                {out && !out.error && <span className="assess">{out.count} record(s){out.stale ? " · out of date" : ""}</span>}
               </div>
               {s.note && <div className="pl-step-note">{s.note}</div>}
               <code className="pl-config" title={JSON.stringify(s.config, null, 2)}>{short(s.config, 160)}</code>
               {out?.error && <div className="banner err" style={{ margin: ".4rem 0 0" }}>{out.error}</div>}
-              {out?.warnings?.length > 0 && <div className="pl-warn">{out.warnings.join(" · ")}</div>}
+              {out?.stale && <div className="pl-warn">An earlier step's output was edited: preview again to update this one.</div>}
+              {out?.warnings?.length > 0 && !isOpen && <div className="pl-warn">{short(out.warnings.join(" · "), 220)}</div>}
               <div className="pl-step-actions">
-                {s.status !== "approved" && (
-                  <button className="primary" disabled={disabled} onClick={() => act("POST", `/steps/${s.id}/approve`)}>Approve</button>
+                {out && !out.error ? (
+                  <button className={s.status !== "approved" ? "primary" : ""} onClick={() => setOpen(isOpen ? null : s.id)}>
+                    {isOpen ? "Close review ▴" : `Review ${out.count} record(s) ▾`}
+                  </button>
+                ) : (
+                  <button className={s.status !== "approved" ? "primary" : ""} disabled={disabled}
+                          onClick={() => act("POST", "/run", { upto: s.id }).then((r) => r && setOpen(s.id))}>
+                    Preview to review
+                  </button>
                 )}
-                <button disabled={disabled} onClick={() => act("POST", "/run", { upto: s.id })}>Preview to here</button>
+                {out && !out.error && <button disabled={disabled} onClick={() => act("POST", "/run", { upto: s.id })}>Preview again</button>}
+                {s.status !== "approved" && !isOpen && (
+                  <button disabled={disabled} title="Approve without reviewing the output"
+                          onClick={() => act("POST", `/steps/${s.id}/approve`)}>Approve</button>
+                )}
                 <button disabled={disabled || i === 0} title="Move up" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: -1 })}>↑</button>
                 <button disabled={disabled || i === steps.length - 1} title="Move down" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: 1 })}>↓</button>
-                <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove</button>
+                <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove step</button>
               </div>
+              {isOpen && <StepReview step={s} out={out} view={view} act={act} disabled={disabled} onDone={() => setOpen(null)} />}
             </li>
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+// ── Reviewing a step's output ────────────────────────────────────────────────
+
+function isEdited(r) {
+  return r.added_by_you || Object.values(r.prov || {}).some((p) => p.kind === "manual");
+}
+
+function attention(r, fields) {
+  const why = [];
+  if (r.excerpt_verified === false) why.push("excerpt not found in source");
+  const unq = fields.filter((f) => r.prov?.[f.name]?.verified === false).map((f) => f.name);
+  if (unq.length) why.push(`no confirmed quote: ${unq.join(", ")}`);
+  if (r.conflicts?.length) why.push(`conflict: ${r.conflicts.map((c) => c.field).join(", ")}`);
+  const blank = fields.filter((f) => f.required && !f.accept_blank && (r.values?.[f.name] == null || r.values[f.name] === "")).map((f) => f.name);
+  if (blank.length) why.push(`required blank: ${blank.join(", ")}`);
+  return why;
+}
+
+function asInput(v) {
+  if (v == null) return "";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  return String(v);
+}
+
+function RecordEditor({ fields, values, onSave, onCancel, disabled, saveLabel = "Save" }) {
+  const [draft, setDraft] = useState(() => Object.fromEntries(fields.map((f) => [f.name, asInput(values?.[f.name])])));
+  const changed = fields.filter((f) => draft[f.name] !== asInput(values?.[f.name]));
+  return (
+    <div className="pl-editor">
+      {fields.map((f) => (
+        <label key={f.name} className={changed.includes(f) ? "changed" : ""}>
+          <span><code>{f.name}</code>{f.required ? "*" : ""} <span className="assess">{f.type}</span></span>
+          {f.type === "enum" || f.type === "boolean" ? (
+            <select value={draft[f.name]} onChange={(e) => setDraft({ ...draft, [f.name]: e.target.value })}>
+              <option value="">—</option>
+              {(f.type === "enum" ? f.enum_values : ["yes", "no"]).map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : f.name.includes("notes") || (draft[f.name] || "").length > 70 ? (
+            <textarea rows={3} value={draft[f.name]} onChange={(e) => setDraft({ ...draft, [f.name]: e.target.value })} />
+          ) : (
+            <input value={draft[f.name]} placeholder={f.type === "money" ? "e.g. 50000 or $50K" : f.type === "date" ? "YYYY-MM-DD" : f.type === "percent" ? "e.g. 25%" : ""}
+                   onChange={(e) => setDraft({ ...draft, [f.name]: e.target.value })} />
+          )}
+        </label>
+      ))}
+      <div className="btn-row">
+        <button className="primary" disabled={disabled || changed.length === 0}
+                onClick={() => onSave(Object.fromEntries(changed.map((f) => [f.name, draft[f.name]])))}>{saveLabel}</button>
+        <button onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function StepReview({ step, out, view, act, disabled, onDone }) {
+  const fields = view.definition.schema?.fields || [];
+  const [onlyAttention, setOnlyAttention] = useState(false);
+  const [q, setQ] = useState("");
+  const [editing, setEditing] = useState(null);     // record id, or "new"
+  const records = out.records || [];
+  const partial = records.length < out.count;
+  const edit = (body) => act("POST", `/steps/${step.id}/records`, body);
+  const shown = records.filter((r) =>
+    (!onlyAttention || attention(r, fields).length || isEdited(r)) &&
+    (!q.trim() || Object.values(r.values || {}).some((v) => String(v ?? "").toLowerCase().includes(q.trim().toLowerCase()))));
+  const flagged = records.filter((r) => attention(r, fields).length).length;
+  const n = editCount(step.edits);
+
+  return (
+    <div className="pl-review">
+      {out.warnings?.length > 0 && <div className="pl-warn">{out.warnings.join(" · ")}</div>}
+      {out.edit_notes?.length > 0 && <div className="pl-warn">{out.edit_notes.join(" · ")}</div>}
+      {partial && <div className="banner err">Only the first {records.length} of {out.count} records are kept for review; add a filter step to narrow the output.</div>}
+      <div className="pl-review-bar">
+        <input placeholder="Search records" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="assess"><input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} />
+          {" "}Only records needing attention ({flagged}) or edited</label>
+        <span className="spacer" />
+        <button disabled={disabled || partial || editing === "new"} onClick={() => setEditing("new")}>+ Add record</button>
+      </div>
+      {editing === "new" && (
+        <div className="pl-detail pl-new">
+          <b>New record</b> <span className="assess">for a programme the sources missed; its values are marked as entered by you.</span>
+          <RecordEditor fields={fields} values={{}} disabled={disabled} saveLabel="Add record"
+                        onSave={(values) => edit({ op: "add", values }).then((r) => r && setEditing(null))}
+                        onCancel={() => setEditing(null)} />
+        </div>
+      )}
+      <RecordsTable records={shown} fields={fields}
+        rowNote={(r) => attention(r, fields).join("; ")}
+        renderDetail={(r) => (
+          <>
+            {editing === r.id ? (
+              <RecordEditor fields={fields} values={r.values} disabled={disabled}
+                            onSave={(values) => edit({ op: "set", record_id: r.id, values }).then((x) => x && setEditing(null))}
+                            onCancel={() => setEditing(null)} />
+            ) : (
+              <div className="btn-row" style={{ marginTop: 0 }}>
+                <button disabled={disabled || partial} onClick={() => setEditing(r.id)}>Edit values</button>
+                <button disabled={disabled || partial} onClick={() => edit({ op: "remove", record_id: r.id })}>Remove record</button>
+                {isEdited(r) && !r.added_by_you && (
+                  <button disabled={disabled} onClick={() => edit({ op: "undo", record_id: r.id })}>Undo my edits</button>
+                )}
+              </div>
+            )}
+            {attention(r, fields).length > 0 && <div className="pl-bad">Check: {attention(r, fields).join("; ")}</div>}
+            {!r.added_by_you && <RecordDetail r={r} fields={fields} />}
+          </>
+        )} />
+      {out.removed?.length > 0 && (
+        <div className="pl-removed">
+          <b>Removed by you ({out.removed.length})</b>
+          <ul>{out.removed.map(({ record: r }) => (
+            <li key={r.id}><span className="assess">{r.id}</span> {r.values?.[fields[0]?.name] || "(unnamed)"}
+              <button className="link" disabled={disabled} onClick={() => edit({ op: "undo", record_id: r.id })}>restore</button></li>
+          ))}</ul>
+        </div>
+      )}
+      <div className="pl-review-foot">
+        {step.status !== "approved" ? (
+          <button className="primary" disabled={disabled}
+                  onClick={() => act("POST", `/steps/${step.id}/approve`).then((r) => r && onDone())}>
+            Approve {step.id}{n ? ` with your ${n} edit${n > 1 ? "s" : ""}` : ""}
+          </button>
+        ) : <span className="tag ok">approved</span>}
+        <span className="assess">
+          {out.count} record(s) · {flagged} need attention{n ? ` · ${n} edit(s) by you, kept on re-runs` : ""}
+        </span>
+      </div>
     </div>
   );
 }
@@ -211,6 +367,7 @@ function RecordDetail({ r, fields }) {
                   {p?.quote && (p.verified ? <span className="tag ok">quote found</span> : <span className="tag gone">quote not found</span>)}
                   {p?.source_url && <> · <a href={p.source_url} target="_blank" rel="noreferrer">{host(p.source_url)}</a></>}
                   {p?.note && <div className="assess">{p.note}</div>}
+                  {p?.was && <div className="assess">The step had: {p.was.value == null || p.was.value === "" ? "blank" : `“${short(p.was.value, 120)}”`}</div>}
                   {p?.quote && <blockquote>{p.quote}</blockquote>}
                   {p?.unmatched?.length > 0 && <div className="pl-bad">Not found: {p.unmatched.map((m, i) => <q key={i}>{m}</q>)}</div>}
                 </td>
@@ -235,19 +392,11 @@ function RecordDetail({ r, fields }) {
   );
 }
 
-function OutputCard({ view, selected, onSelect }) {
+// A table of records; clicking a row opens renderDetail(r) beneath it.
+function RecordsTable({ records, fields, renderDetail, rowNote }) {
   const [open, setOpen] = useState(null);
-  const fields = view.definition.schema?.fields || [];
-  const out = selected ? view.outputs[selected] : null;
-  const records = out ? out.records || [] : view.last_records || [];
-  const title = out ? `Output of ${selected}` : "Output of the last run";
-  if (!records.length && !view.last_run) return null;
   return (
-    <div className="card">
-      <h4>
-        {title} <span className="assess">({out ? out.count : view.last_run?.coverage?.records ?? 0} record(s){records.length < (out?.count ?? 0) ? `, first ${records.length} shown` : ""})</span>
-        {selected && <button className="link" style={{ marginLeft: ".5rem" }} onClick={() => onSelect(null)}>show final</button>}
-      </h4>
+    <>
       <div className="pl-legend">
         {Object.entries(KIND_TEXT).map(([k, t]) => <span key={k} className={"pl-cell " + k}>{t}</span>)}
         <span className="pl-cell missing">blank</span>
@@ -259,9 +408,11 @@ function OutputCard({ view, selected, onSelect }) {
             <tbody>
               {records.map((r) => (
                 <Fragment key={r.id}>
-                  <tr onClick={() => setOpen(open === r.id ? null : r.id)} className="pl-rec">
-                    <td className="assess" title={r.excerpt_verified === false ? "Excerpt not found in the source" : ""}>
-                      {r.id}{r.excerpt_verified === false && <span className="pl-bad"> ⚠</span>}
+                  <tr onClick={() => setOpen(open === r.id ? null : r.id)} className={"pl-rec" + (open === r.id ? " open" : "")}>
+                    <td className="assess" title={rowNote?.(r) || (r.excerpt_verified === false ? "Excerpt not found in the source" : "")}>
+                      {open === r.id ? "▾ " : "▸ "}{r.id}
+                      {r.excerpt_verified === false && <span className="pl-bad"> ⚠</span>}
+                      {r.added_by_you && <span className="tag manual" style={{ marginLeft: ".3rem" }}>added</span>}
                     </td>
                     {fields.map((f) => {
                       const p = r.prov?.[f.name];
@@ -280,7 +431,7 @@ function OutputCard({ view, selected, onSelect }) {
                   {open === r.id && (
                     <tr className="pl-rec-detail">
                       <td colSpan={fields.length + 1}>
-                        <RecordDetail r={r} fields={fields} />
+                        <div className="pl-detail-sticky">{renderDetail(r)}</div>
                       </td>
                     </tr>
                   )}
@@ -290,6 +441,23 @@ function OutputCard({ view, selected, onSelect }) {
           </table>
         </div>
       )}
+    </>
+  );
+}
+
+function OutputCard({ view }) {
+  const fields = view.definition.schema?.fields || [];
+  const records = view.last_records || [];
+  if (!records.length && !view.last_run) return null;
+  const total = view.last_run?.coverage?.records ?? 0;
+  return (
+    <div className="card">
+      <h4>
+        {view.last_run?.upto ? `Output of the preview to ${view.last_run.upto}` : "Output of the last run"}{" "}
+        <span className="assess">({total} record(s){records.length < total ? `, first ${records.length} shown` : ""})</span>
+      </h4>
+      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>What Load would write. To correct records, review the step that produced them above.</div>
+      <RecordsTable records={records} fields={fields} renderDetail={(r) => <RecordDetail r={r} fields={fields} />} />
     </div>
   );
 }
@@ -375,9 +543,7 @@ function LoadCard({ view, act, disabled }) {
 }
 
 export default function PipelinePanel({ view, act, pending }) {
-  const [selected, setSelected] = useState(null);
   const disabled = pending || !!view.busy;
-  const sel = selected && view.outputs[selected] ? selected : null;
   return (
     <div className="pl-panel-inner">
       <div className="pl-panel-head">
@@ -386,8 +552,8 @@ export default function PipelinePanel({ view, act, pending }) {
       </div>
       <SchemaCard view={view} act={act} disabled={disabled} />
       <SourcesCard view={view} act={act} disabled={disabled} />
-      <StepsCard view={view} act={act} disabled={disabled} selected={sel} onSelect={setSelected} />
-      <OutputCard view={view} selected={sel} onSelect={setSelected} />
+      <StepsCard view={view} act={act} disabled={disabled} />
+      <OutputCard view={view} />
       <LoadCard view={view} act={act} disabled={disabled} />
     </div>
   );

@@ -14,6 +14,7 @@ produce, and every record carries, per field, how its value got there:
     derived    computed by a deterministic step (parse, map, dedupe)
     inferred   proposed by a model step (llm_fill, geo_tie); the user approved the step
     assumed    a value the user stated, applied by set_value
+    manual     a value the user entered while reviewing a step's output
     missing    nothing filled it
 
 Load is refused while any required field is missing on any record, unless the
@@ -46,7 +47,7 @@ SOURCE_CHARS = 12_000        # per extraction call: a long source is read in chu
 MODEL = "claude-opus-5-5"
 EFFORT = "medium"
 FETCH_CHARS = 60_000         # how much of one source is fetched (5 chunks at most)
-PREVIEW_RECORDS = 50         # records kept per step output in state
+PREVIEW_RECORDS = 300        # records kept per step output in state; a step can be reviewed only if all fit
 
 
 class PipelineError(ValueError):
@@ -890,6 +891,131 @@ def _apply(step: dict, records: list[dict], fields: list[dict]) -> tuple[list[di
     raise PipelineError(f"Step type {t!r} is not deterministic.")
 
 
+# ── The planner's edits to a step's output ───────────────────────────────────
+#
+# Reviewing a step, the planner can correct values, remove records and add ones
+# the sources missed. The edits are saved on the step (step["edits"]) and
+# applied right after it on every run, so a re-run keeps them:
+#
+#     {"removed": [{"id", "key"}], "changed": [{"id", "key", "values": {field: value}}],
+#      "added": [{"id", "values": {field: value}}]}
+#
+# key is the record's first field (e.g. programme name) when the edit was made.
+# Record ids follow the order the model listed items in, so if a re-run lists
+# them differently an edit follows its key; one that matches nothing is reported
+# rather than applied to the wrong record. Applied values are marked "manual",
+# keeping what they replaced, so an edit can be undone without re-running.
+
+EMPTY_EDITS = {"removed": [], "changed": [], "added": []}
+
+
+def record_key(rec: dict, fields: list[dict]) -> str:
+    v = rec["values"].get(fields[0]["name"]) if fields else None
+    return str(v or "").strip().lower()
+
+
+def _find(records: list[dict], edit: dict, fields: list[dict]) -> dict | None:
+    by_id = next((r for r in records if r["id"] == edit["id"]), None)
+    if by_id and (not edit.get("key") or record_key(by_id, fields) == edit["key"]):
+        return by_id
+    if edit.get("key"):
+        return next((r for r in records if record_key(r, fields) == edit["key"]), None)
+    return None
+
+
+def _manual(rec: dict, field: str, value: Any, step_id: str) -> None:
+    old = rec["prov"].get(field)
+    was = old["was"] if old and old.get("kind") == "manual" else {"value": rec["values"].get(field), "prov": old}
+    rec["values"][field] = value
+    rec["prov"][field] = {"kind": "manual", "step": step_id, "note": f"entered by you reviewing {step_id}",
+                          "was": was}
+
+
+def clean_edit_values(values: dict, fields: list[dict]) -> dict:
+    """Type a planner's values like extracted ones ('$50,000' -> 50000). Raises PipelineError."""
+    out = {}
+    by_name = {f["name"]: f for f in fields}
+    for name, v in (values or {}).items():
+        f = by_name.get(name)
+        if not f:
+            raise PipelineError(f"No field named {name!r}.")
+        if isinstance(v, str):
+            v = v.strip()
+        if _blank(v):
+            out[name] = None
+            continue
+        t = f["type"]
+        if t in PARSERS:
+            value = PARSERS[t](v)
+        elif t == "enum":
+            value = next((e for e in f["enum_values"] if e.lower() == str(v).lower()), None)
+        elif t == "boolean":
+            value = v if isinstance(v, bool) else {"yes": True, "true": True, "no": False, "false": False}.get(str(v).lower())
+        elif t == "url":
+            value = v if str(v).lower().startswith(("http://", "https://")) else None
+        else:
+            value = str(v)
+        if value is None:
+            hint = f" (one of {', '.join(f['enum_values'])})" if t == "enum" else ""
+            raise PipelineError(f"{name}: {v!r} is not a valid {t}{hint}.")
+        out[name] = value
+    return out
+
+
+def apply_edits(step: dict, records: list[dict], fields: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+    """Apply step["edits"]. Returns (records, removed as [{index, record}], warnings)."""
+    edits = {**EMPTY_EDITS, **(step.get("edits") or {})}
+    sid, warnings, removed = step["id"], [], []
+    for e in edits["changed"]:
+        r = _find(records, e, fields)
+        if not r:
+            warnings.append(f"your change to “{e.get('key') or e['id']}” matches no record any more")
+            continue
+        for name, v in e["values"].items():
+            _manual(r, name, v, sid)
+    for e in edits["removed"]:
+        r = _find(records, e, fields)
+        if not r:
+            warnings.append(f"“{e.get('key') or e['id']}”, which you removed, is no longer in the output")
+            continue
+        removed.append({"index": records.index(r), "record": r})
+    gone = {id(x["record"]) for x in removed}
+    records = [r for r in records if id(r) not in gone]
+    for e in edits["added"]:
+        rec = {"id": e["id"], "values": {f["name"]: None for f in fields}, "prov": {},
+               "source_id": None, "source_url": e.get("source_url"), "excerpt": None,
+               "excerpt_verified": None, "added_by_you": True}
+        for name, v in e["values"].items():
+            if not _blank(v):
+                rec["values"][name] = v
+                rec["prov"][name] = {"kind": "manual", "step": sid, "note": f"entered by you reviewing {sid}"}
+        records.append(rec)
+    n = len(edits["changed"]) + len(edits["removed"]) + len(edits["added"])
+    if n:
+        warnings.insert(0, f"your edits: {len(edits['changed'])} changed, {len(removed)} removed, "
+                           f"{len(edits['added'])} added")
+    return records, removed, warnings
+
+
+def unapply_edits(out: dict) -> list[dict]:
+    """The step's own output before the planner's edits, rebuilt from a stored output."""
+    def revert(r: dict) -> dict:
+        r = json.loads(json.dumps(r))
+        for name, p in list(r["prov"].items()):
+            if p.get("kind") == "manual" and "was" in p:
+                r["values"][name] = p["was"]["value"]
+                if p["was"]["prov"]:
+                    r["prov"][name] = p["was"]["prov"]
+                else:
+                    r["prov"].pop(name)
+        return r
+
+    records = [revert(r) for r in out.get("records") or [] if not r.get("added_by_you")]
+    for x in sorted(out.get("removed") or [], key=lambda x: x["index"]):
+        records.insert(min(x["index"], len(records)), revert(x["record"]))
+    return records
+
+
 # ── Coverage and the load gate ───────────────────────────────────────────────
 
 def coverage(records: list[dict], fields: list[dict]) -> dict:
@@ -920,7 +1046,8 @@ def definition_hash(definition: dict) -> str:
         "fields": [{k: f.get(k) for k in ("name", "type", "required", "enum_values", "extract")}
                    for f in schema.get("fields", [])],
         "sources": [{k: s.get(k) for k in ("id", "kind", "url", "query")} for s in definition.get("sources", [])],
-        "steps": [{k: s.get(k) for k in ("id", "type", "config")} for s in definition.get("steps", [])],
+        "steps": [{k: s.get(k) for k in ("id", "type", "config")} | ({"edits": s["edits"]} if s.get("edits") else {})
+                  for s in definition.get("steps", [])],
     })
 
 
@@ -1012,6 +1139,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
                 warnings = _model_fill(step, records, fields, cache, GEO_INSTRUCTION, "geo_tie")
             else:
                 records, warnings = _apply(step, records, fields)
+            records, removed, edit_notes = apply_edits(step, records, fields)
         except Exception as e:  # noqa: BLE001 — reported on the step, run stops here
             log.warning("pipeline step %s failed: %s", step["id"], e)
             errors.append(f"{step['id']} ({step['type']}): {e}")
@@ -1019,7 +1147,8 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             break
         records = json.loads(json.dumps(records, default=str))  # snapshot, so later steps don't rewrite this one
         outputs[step["id"]] = {"count": len(records), "warnings": warnings,
-                               "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields)}
+                               "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields),
+                               "removed": json.loads(json.dumps(removed, default=str)), "edit_notes": edit_notes}
         if upto and step["id"] == upto:
             break
 

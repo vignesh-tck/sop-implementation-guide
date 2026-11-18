@@ -216,6 +216,20 @@ def remove_step(pipeline_id: int, step_id: str, db: Client = Depends(get_supabas
     return _view(db, pipeline_id)
 
 
+class RecordEdit(BaseModel):
+    op: Literal["add", "set", "remove", "undo"]
+    record_id: Optional[str] = None
+    values: Optional[dict] = None
+
+
+@router.post("/{pipeline_id}/steps/{step_id}/records")
+def edit_records(pipeline_id: int, step_id: str, body: RecordEdit, db: Client = Depends(get_supabase)):
+    """The planner's review of a step's output: correct a record, remove it, add one, or undo."""
+    _idle(db, pipeline_id)
+    _call(lambda: service.edit_records(db, pipeline_id, step_id, body.op, body.record_id, body.values))
+    return _view(db, pipeline_id)
+
+
 class Move(BaseModel):
     direction: Literal[-1, 1]
 

@@ -787,3 +787,22 @@ main.view.pl-view {
 .pl-conflicts ul { margin: .2rem 0 0; padding-left: 1.1rem; }
 .pl-evidence td, .pl-evidence th { white-space: normal; font-size: .78rem; vertical-align: top; }
 .pl-evidence blockquote { margin: .2rem 0 0; }
+
+/* Step review: correct, remove and add records before approving a step */
+.tag.manual { border-color: var(--blue, #5b5bd6); color: var(--blue, #5b5bd6); }
+.pl-cell.manual { background: color-mix(in srgb, var(--blue, #5b5bd6) 14%, transparent); }
+.pl-review { margin-top: .6rem; padding-top: .6rem; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: .45rem; }
+.pl-review-bar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.pl-review-bar input[type="text"], .pl-review-bar > input { flex: 0 1 14rem; min-width: 0; }
+.pl-review-bar .spacer { flex: 1; }
+.pl-review-foot { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; padding-top: .3rem; }
+.pl-rec.open td { background: var(--surface-2); }
+.pl-detail-sticky { position: sticky; left: 0; max-width: 44rem; display: flex; flex-direction: column; gap: .4rem; }
+.pl-editor { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .45rem .75rem; }
+.pl-editor label { display: flex; flex-direction: column; gap: .15rem; font-size: .8rem; }
+.pl-editor label.changed input, .pl-editor label.changed select, .pl-editor label.changed textarea { border-color: var(--blue, #5b5bd6); }
+.pl-editor input, .pl-editor select, .pl-editor textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.pl-editor .btn-row { grid-column: 1 / -1; margin-top: .2rem; }
+.pl-new { padding: .5rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); }
+.pl-removed ul { margin: .25rem 0 0; padding-left: 1.1rem; font-size: .82rem; }
+.pl-removed li button { margin-left: .4rem; }
