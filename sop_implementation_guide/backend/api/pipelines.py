@@ -183,6 +183,20 @@ def add_source(pipeline_id: int, body: Source, db: Client = Depends(get_supabase
     return _view(db, pipeline_id)
 
 
+@router.post("/{pipeline_id}/sources/final")
+def finalize_sources(pipeline_id: int, db: Client = Depends(get_supabase)):
+    """The sources are complete. The agent then takes a quick look at each and outlines every step."""
+    _idle(db, pipeline_id)
+    p = _call(lambda: service.finalize_sources(db, pipeline_id))
+    if not p.get("steps") and _call(lambda: PipelineRepository(db).claim(pipeline_id, "turn")):
+        threading.Thread(target=pipeline_builder.run_turn, args=(pipeline_id, OUTLINE_REQUEST), daemon=True).start()
+    return _view(db, pipeline_id)
+
+
+OUTLINE_REQUEST = ("The sources are final. Take a quick look at each one, then outline all the steps "
+                   "the pipeline needs.")
+
+
 @router.delete("/{pipeline_id}/sources/{source_id}")
 def remove_source(pipeline_id: int, source_id: str, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)

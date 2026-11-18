@@ -153,6 +153,7 @@ def add_source(db: Client, pipeline_id: int, kind: str, url: str | None = None, 
             raise PipelineError("A Grants.gov source needs a keyword query.")
     else:
         raise PipelineError("Source kind must be url or grants_gov.")
+    reopened = _reopen_sources(p)
     src = {"id": _next_id(p["definition"]["sources"], "s"), "kind": kind,
            **({"url": url} if kind == "url" else {"query": query}),
            "label": (label or "").strip() or (url if kind == "url" else f"Grants.gov: {query}")}
@@ -165,8 +166,10 @@ def add_source(db: Client, pipeline_id: int, kind: str, url: str | None = None, 
     _save(db, p, state=p["state"])
     if by_user:
         event(db, pipeline_id, f"You added source {src['id']}: {src['label']}"
-              + (f" (could not be read: {meta['error']})" if meta.get("error") else f" ({meta['chars']:,} characters)."),
-              level="warn" if meta.get("error") else "info")
+              + (f" (could not be read: {meta['error']})" if meta.get("error") else f" ({meta['chars']:,} characters).")
+              + reopened, level="warn" if meta.get("error") or reopened else "info")
+    elif reopened:
+        event(db, pipeline_id, f"Source {src['id']} was added." + reopened, level="warn")
     return {**src, "fetch": meta}
 
 
@@ -177,18 +180,51 @@ def remove_source(db: Client, pipeline_id: int, source_id: str, by_user: bool = 
     if len(p["definition"]["sources"]) == before:
         raise PipelineError(f"No source {source_id}.")
     p["state"].get("sources", {}).pop(source_id, None)
+    reopened = _reopen_sources(p)
     _save(db, p, state=p["state"])
-    if by_user:
-        event(db, pipeline_id, f"You removed source {source_id}.")
+    if by_user or reopened:
+        event(db, pipeline_id, f"{'You removed' if by_user else 'Removed'} source {source_id}." + reopened,
+              level="warn" if reopened else "info")
 
 
-def read_source(db: Client, pipeline_id: int, source_id: str, offset: int = 0, length: int = 4000) -> dict:
+def finalize_sources(db: Client, pipeline_id: int) -> dict:
+    """
+    The planner's word that the sources are complete. Steps are outlined only
+    after this, because what the steps should do depends on what the sources are.
+    """
+    p = get(db, pipeline_id)
+    if p["definition"]["schema"].get("status") != "approved":
+        raise PipelineError("Approve the target schema first: the fields decide what to look for in the sources.")
+    sources = p["definition"]["sources"]
+    if not sources:
+        raise PipelineError("Add at least one source first.")
+    meta = p["state"].get("sources") or {}
+    bad = [s["id"] for s in sources if (meta.get(s["id"]) or {}).get("error")]
+    if bad:
+        raise PipelineError(f"{', '.join(bad)} could not be read: remove or replace {'it' if len(bad) == 1 else 'them'} first.")
+    p["definition"]["sources_status"] = "final"
+    _save(db, p)
+    event(db, pipeline_id, f"You marked the {len(sources)} source(s) as final.")
+    return p["definition"]
+
+
+def _reopen_sources(p: dict) -> str:
+    """Sources changed after they were final: steps already approved worked on the old sources."""
+    if p["definition"].get("sources_status") != "final":
+        return ""
+    p["definition"]["sources_status"] = "open"
+    reset = _invalidate_from(p, 0)
+    return (" The sources are no longer final: mark them final again when they are complete."
+            + _reset_text(reset))
+
+
+def read_source(db: Client, pipeline_id: int, source_id: str, offset: int = 0, length: int = 3000) -> dict:
     p = get(db, pipeline_id)
     src = next((s for s in p["definition"]["sources"] if s["id"] == source_id), None)
     if not src:
         raise PipelineError(f"No source {source_id}.")
     text = engine.fetch_source(src).get("text") or ""
-    offset, length = max(0, int(offset)), max(200, min(int(length), 8000))
+    offset, length = max(0, int(offset)), max(200, min(int(length), 4000))
     return {"source_id": source_id, "total_chars": len(text), "offset": offset,
             "text": text[offset:offset + length], "more": offset + length < len(text)}
 
@@ -198,6 +234,11 @@ def read_source(db: Client, pipeline_id: int, source_id: str, offset: int = 0, l
 def add_step(db: Client, pipeline_id: int, step_type: str, config: dict, note: str | None = None,
              after: str | None = None) -> dict:
     p = get(db, pipeline_id)
+    if p["definition"]["schema"].get("status") != "approved":
+        raise PipelineError("Steps are outlined after the planner approves the target schema. Ask them to approve it.")
+    if p["definition"].get("sources_status") != "final":
+        raise PipelineError("Steps are outlined after the planner marks the sources final (the 'Sources are final' "
+                            "button in the panel). Ask them to finish adding sources and press it.")
     cfg = engine.validate_step(p["kind"], step_type, config, _fields(p))
     steps = p["definition"]["steps"]
     step = {"id": _next_id(steps, "t"), "type": step_type, "config": cfg,

@@ -1266,6 +1266,8 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
             reasons.append(f"The schema must include `{req}`.")
     if not definition.get("sources"):
         reasons.append("No sources.")
+    elif definition.get("sources_status") != "final":
+        reasons.append("The sources are not marked final.")
     steps = definition.get("steps") or []
     if not any(s["type"] == "extract" for s in steps):
         reasons.append("No extract step.")

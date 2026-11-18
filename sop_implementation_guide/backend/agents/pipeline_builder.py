@@ -40,12 +40,18 @@ conversation. The pipeline is shown to them in a panel beside this chat, and you
 How the work goes:
 0. Record the planner's goal with set_goal as soon as they state it (and again if it changes). Every
    model step reads it to decide what counts as a record and what matters.
+The order is fixed, and the app enforces it: schema, then sources, then steps.
 1. Agree the target schema first: the fields every record must have, their types, and which are required.
    Propose it with set_schema, or adapt the one already in the state. The planner approves it in the
    panel; you cannot.
 2. Sources: the planner pastes URLs or uploads files (uploads appear in the state as sources). Add pasted
-   URLs with add_source. Use read_source to see what a source really contains before designing steps.
-3. Steps: propose THE WHOLE PIPELINE at once with add_step, every step it needs to produce every field
+   URLs with add_source; you may suggest sources too. Do not propose steps yet. When the sources are
+   complete, the planner marks them final in the panel (sources_status "final" in the state); add_step
+   is refused before that. If they seem done but have not, remind them of the "Sources are final" button.
+3. Once the sources are final: take a QUICK look at each source with one read_source call (the first few
+   thousand characters), enough to see what kind of page or document it is, how items are laid out and
+   whether it links to detail pages. Do not read sources end to end; the extract step does that.
+   Then propose THE WHOLE PIPELINE at once with add_step, every step it needs to produce every field
    in the schema, each with a one-line note saying why. A funding pipeline is typically: extract, then
    research (programme pages hold the amounts and deadlines), then parse steps for money/date fields
    if the values need it, then a step for each judgement field (geo_tie for geo_scope; llm_fill for
@@ -122,7 +128,8 @@ def _tools(kind: str) -> list[dict]:
              "required": ["kind"]}},
         {"name": "remove_source", "description": "Remove a source.",
          "input_schema": {"type": "object", "properties": {"source_id": {"type": "string"}}, "required": ["source_id"]}},
-        {"name": "read_source", "description": "Read part of a source's fetched text.",
+        {"name": "read_source", "description": "Take a quick look at part of a source's fetched text (up to 4,000 "
+                                                "characters; default the first 3,000). One look per source is usually enough.",
          "input_schema": {"type": "object", "properties": {
              "source_id": {"type": "string"}, "offset": {"type": "integer"}, "length": {"type": "integer"}},
              "required": ["source_id"]}},
@@ -168,6 +175,7 @@ def state_snapshot(p: dict) -> dict:
         "schema": {"status": d["schema"].get("status"),
                    "fields": [{k: f.get(k) for k in ("name", "type", "required", "extract", "accept_blank", "enum_values")
                                if f.get(k) is not None} for f in d["schema"].get("fields", [])]},
+        "sources_status": d.get("sources_status") or "open",
         "sources": [{**{k: s.get(k) for k in ("id", "kind", "url", "query", "label")},
                      "fetch": {k: (st.get("sources") or {}).get(s["id"], {}).get(k)
                                for k in ("chars", "truncated", "error")}} for s in d["sources"]],
@@ -217,7 +225,7 @@ def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
             service.remove_source(db, pipeline_id, args["source_id"])
             return {"removed": args["source_id"]}, False
         if name == "read_source":
-            return service.read_source(db, pipeline_id, args["source_id"], args.get("offset") or 0, args.get("length") or 4000), False
+            return service.read_source(db, pipeline_id, args["source_id"], args.get("offset") or 0, args.get("length") or 3000), False
         if name == "add_step":
             step = service.add_step(db, pipeline_id, args["type"], args.get("config") or {}, args.get("note"), args.get("after"))
             gaps = engine.design_gaps(service.get(db, pipeline_id)["definition"])

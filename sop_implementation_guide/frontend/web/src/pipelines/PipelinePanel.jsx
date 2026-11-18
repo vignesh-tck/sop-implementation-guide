@@ -92,9 +92,17 @@ function SourcesCard({ view, act, disabled }) {
     if (!query.trim()) return;
     if (await act("POST", "/sources", { kind: "grants_gov", query: query.trim() })) setQuery("");
   }
+  const final = view.definition.sources_status === "final";
+  const schemaOk = view.definition.schema?.status === "approved";
+  const unreadable = sources.filter((s) => view.sources[s.id]?.error).map((s) => s.id);
   return (
     <div className="card">
-      <h4>Sources</h4>
+      <h4>Sources {final ? <span className="tag ok">final</span> : sources.length > 0 && <span className="tag edited">open</span>}</h4>
+      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
+        {final
+          ? "The agent outlines the steps from these sources. Adding or removing one reopens them and sends every step back for approval."
+          : "Add every source the pipeline should read, then mark them final: the agent takes a quick look at each and outlines all the steps."}
+      </div>
       {sources.length === 0 && <div className="assess">None yet. Paste URLs in the chat or below, or attach files in the chat.</div>}
       <ul className="sources-list">
         {sources.map((s) => {
@@ -122,6 +130,17 @@ function SourcesCard({ view, act, disabled }) {
           <button onClick={addQuery} disabled={disabled || !query.trim()}>Add search</button>
         </div>
       )}
+      {!final && sources.length > 0 && (
+        <div className="btn-row">
+          <button className="primary" disabled={disabled || !schemaOk || unreadable.length > 0}
+                  onClick={() => act("POST", "/sources/final")}>Sources are final</button>
+          <span className="assess" style={{ alignSelf: "center" }}>
+            {!schemaOk ? "Approve the target schema first."
+              : unreadable.length ? `${unreadable.join(", ")} could not be read: remove or replace first.`
+              : "The agent then takes a quick look at each source and outlines the steps."}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -139,7 +158,12 @@ function StepsCard({ view, act, disabled }) {
         Design each step in order: read its prompt, tune the instructions, preview what it produces, then approve it.
         Changing a step sends it and every later step back for approval.
       </div>
-      {steps.length === 0 && <div className="assess">The agent proposes steps once the schema and sources are in place.</div>}
+      {steps.length === 0 && <div className="assess">
+        {view.definition.schema?.status !== "approved" ? "First approve the target schema, then add sources and mark them final."
+          : view.definition.sources_status !== "final" ? "Add the sources and mark them final: the agent then outlines every step here."
+          : view.busy ? "The agent is looking at the sources and outlining the steps…"
+          : "The agent outlines the steps from the final sources. If none appear, ask it in the chat."}
+      </div>}
       {steps.length > 0 && view.design_gaps?.length > 0 && (
         <div className="pl-gate" style={{ marginBottom: ".5rem" }}>
           <b>The pipeline is not complete:</b> no step produces {view.design_gaps.map((g, i) => <Fragment key={g}>{i > 0 && ", "}<code>{g}</code></Fragment>)}.
