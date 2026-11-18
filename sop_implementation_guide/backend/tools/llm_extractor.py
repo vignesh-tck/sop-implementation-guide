@@ -8,6 +8,7 @@ from anthropic import (
     APIConnectionError,
     AuthenticationError,
     APIStatusError,
+    BadRequestError,
     DefaultHttpxClient,
 )
 from backend.config import settings
@@ -83,7 +84,28 @@ FIT_SCHEMA = {
 }
 
 
-def structured_call(prompt: str, schema: dict, max_tokens: int = 4096) -> dict:
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+def _current_model_call(client: Anthropic, params: dict, stream: bool):
+    """One request with refusal fallbacks; without them if this account rejects the parameter."""
+    def go(extra: dict):
+        if stream:
+            with client.beta.messages.stream(**params, **extra) as s:
+                return s.get_final_message()
+        return client.beta.messages.create(**params, **extra)
+
+    try:
+        return go({"betas": [FALLBACK_BETA], "fallbacks": "default"})
+    except BadRequestError as e:
+        if "fallback" not in str(e).lower():
+            raise
+        log.warning("refusal fallbacks unavailable, continuing without: %s", e)
+        return go({})
+
+
+def structured_call(prompt: str, schema: dict, max_tokens: int = 4096, model: str | None = None,
+                    effort: str | None = None) -> dict:
     """
     Ask the model for JSON matching `schema`, and return it parsed.
 
@@ -94,15 +116,29 @@ def structured_call(prompt: str, schema: dict, max_tokens: int = 4096) -> dict:
     Raises ValueError when the model declines, truncates, or returns something
     unparseable. Callers decide what to do; there is no silent default, because a
     silent default once made a broken integration look like working output.
+
+    model defaults to MODEL (temperature 0, as the discovery and block agents
+    rely on). Any other model is called the current way: no sampling
+    parameters, an effort level, server-side refusal fallbacks, and streaming
+    when max_tokens is large enough that a plain request could time out.
     """
     client = _get_client()
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=max_tokens,
-        extra_body={"temperature": 0},
-        output_config={"format": {"type": "json_schema", "schema": schema}},
-        messages=[{"role": "user", "content": prompt}],
-    )
+    if not model or model == MODEL:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=max_tokens,
+            extra_body={"temperature": 0},
+            output_config={"format": {"type": "json_schema", "schema": schema}},
+            messages=[{"role": "user", "content": prompt}],
+        )
+    else:
+        params = dict(
+            model=model, max_tokens=max_tokens,
+            output_config={"format": {"type": "json_schema", "schema": schema},
+                           **({"effort": effort} if effort else {})},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        response = _current_model_call(client, params, stream=max_tokens > 16000)
 
     if response.stop_reason == "refusal":
         raise ValueError("The model declined this request.")

@@ -11,11 +11,15 @@ is told to fetch.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
+import re
+import unicodedata
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Optional
+from urllib.parse import urljoin, urldefrag
 
 import httpx
 import pypdf
@@ -39,7 +43,10 @@ def fetch(url: str, timeout: float = 30.0, max_text: int = MAX_TEXT) -> dict:
     """
     Retrieve one source.
 
-    Returns {url, final_url, status, content_type, text, truncated, fetched_at}.
+    Returns {url, final_url, status, content_type, text, truncated, fetched_at,
+    links}. links are the page's outgoing links as [{text, url}] (anchors for
+    HTML, URLs printed in the text for PDFs and plain text), so a research step
+    can follow a programme to its own page.
     Raises FetchError on transport failure or a non-200 status — a source the user
     pasted that cannot be read is something they need told about, not a silent skip.
     """
@@ -55,7 +62,8 @@ def fetch(url: str, timeout: float = 30.0, max_text: int = MAX_TEXT) -> dict:
         raise FetchError(f"{url} returned HTTP {resp.status_code}")
 
     ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-    text = _to_text(resp, ctype, url)
+    limit = max(max_text, MAX_TEXT) * 2
+    text, links = _to_text(resp, ctype, url, limit)
     truncated = len(text) > max_text
 
     return {
@@ -66,36 +74,36 @@ def fetch(url: str, timeout: float = 30.0, max_text: int = MAX_TEXT) -> dict:
         "text": text[:max_text],
         "truncated": truncated,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "links": links,
     }
 
 
-def _to_text(resp: httpx.Response, ctype: str, url: str) -> str:
+def _to_text(resp: httpx.Response, ctype: str, url: str, limit: int) -> tuple[str, list[dict]]:
     if "json" in ctype:
         try:
-            return json.dumps(resp.json(), indent=2)[:MAX_TEXT * 2]
+            return json.dumps(resp.json(), indent=2)[:limit], []
         except ValueError:
-            return resp.text
+            return resp.text, []
 
     # Suffix checked alongside content-type: our own uploads set the right type, but
     # a third-party URL serving a plain-text/CSV file with a generic or missing
     # content-type header shouldn't fall through to the HTML-stripping branch below.
     if "pdf" in ctype or url.lower().endswith(".pdf"):
-        return _pdf_to_text(resp.content, url)
+        text = _pdf_to_text(resp.content, url, limit)
+        return text, text_links(text)
 
-    if "csv" in ctype or url.lower().endswith(".csv"):
-        return resp.text[:MAX_TEXT * 2]
-
-    if ctype == "text/plain" or url.lower().endswith(".txt"):
-        return resp.text[:MAX_TEXT * 2]
+    if "csv" in ctype or url.lower().endswith(".csv") or ctype == "text/plain" or url.lower().endswith(".txt"):
+        text = resp.text[:limit]
+        return text, text_links(text)
 
     # HTML and anything else textual: drop script/style, then tags and entities.
     body = resp.text
     for tag in ("script", "style", "noscript", "svg"):
         body = _strip_block(body, tag)
-    return clean_text(body, limit=MAX_TEXT * 2) or ""
+    return clean_text(body, limit=limit) or "", html_links(body, str(resp.url))
 
 
-def _pdf_to_text(data: bytes, url: str) -> str:
+def _pdf_to_text(data: bytes, url: str, limit: int) -> str:
     try:
         reader = pypdf.PdfReader(BytesIO(data))
         text = "\n".join(page.extract_text() or "" for page in reader.pages)
@@ -103,7 +111,54 @@ def _pdf_to_text(data: bytes, url: str) -> str:
         raise FetchError(f"Could not read PDF at {url}: {e}") from e
     if not text.strip():
         raise FetchError(f"{url} is a PDF with no extractable text (likely scanned/image-only).")
-    return text[:MAX_TEXT * 2]
+    return text[:limit]
+
+
+# ── Links ────────────────────────────────────────────────────────────────────
+
+_ANCHOR = re.compile(r"<a\b[^>]*?href\s*=\s*([\"'])(.*?)\1[^>]*>(.*?)</a>", re.I | re.S)
+_SKIP_HREF = ("mailto:", "tel:", "javascript:", "#")
+MAX_LINKS = 300
+
+
+def html_links(body: str, base_url: str) -> list[dict]:
+    """A page's outgoing links as [{text, url}], absolute, de-duplicated, in page order."""
+    out, seen = [], set()
+    for _q, href, inner in _ANCHOR.findall(body):
+        href = html.unescape(href.strip())
+        if not href or href.lower().startswith(_SKIP_HREF):
+            continue
+        absolute = urldefrag(urljoin(base_url, href))[0]
+        if not absolute.lower().startswith(("http://", "https://")) or absolute in seen:
+            continue
+        seen.add(absolute)
+        text = clean_text(inner, limit=160) or ""
+        out.append({"text": text, "url": absolute})
+        if len(out) >= MAX_LINKS:
+            break
+    return out
+
+
+# Full URLs, www. hosts, and bare government/organisation hosts with a path, as
+# reports print them ("dnr.maryland.gov/land/Pages/...").
+_TEXT_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"')\]]+|\b[a-z0-9.-]+\.(?:gov|org|us|edu)/[^\s<>\"')\]]*", re.I)
+
+
+def text_links(text: str) -> list[dict]:
+    """URLs printed in plain or PDF text, as [{text, url}]."""
+    out, seen = [], set()
+    for m in _TEXT_URL.finditer(text or ""):
+        raw = m.group(0).rstrip(".,;:")
+        url = raw if raw.lower().startswith("http") else "https://" + raw
+        if url in seen:
+            continue
+        seen.add(url)
+        # The words just before the URL usually name what it is.
+        context = " ".join(text[max(0, m.start() - 100):m.start()].split())[-100:]
+        out.append({"text": context, "url": url})
+        if len(out) >= MAX_LINKS:
+            break
+    return out
 
 
 def _strip_block(html_text: str, tag: str) -> str:
@@ -123,21 +178,53 @@ def _strip_block(html_text: str, tag: str) -> str:
         cursor = end + len(close_t)
 
 
-def excerpt_is_genuine(excerpt: Optional[str], sources: list[dict], min_len: int = 24) -> bool:
-    """
-    Check that a model-supplied excerpt really appears in the fetched text.
+_QUOTES = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"',
+                         "–": "-", "—": "-", "‐": "-", "‑": "-", " ": " ", "…": "...", "­": ""})
 
-    This is the guard that separates extraction from invention. Compared on
-    collapsed whitespace, since the model tends to tidy spacing.
+
+def _norm(s: str) -> str:
+    """Compare text as a reader would: case, spacing, curly quotes, dashes and PDF hyphen breaks ignored."""
+    s = unicodedata.normalize("NFKC", s or "").translate(_QUOTES).lower()
+    s = re.sub(r"(\w)-\s+(\w)", r"\1\2", s)     # "pro- gramme" -> "programme"
+    return " ".join(s.split())
+
+
+# Sentence ends, ellipses the model uses to mark a skipped span, and line breaks.
+_SPLIT = re.compile(r"(?<=[.!?;:])\s+|\s*\.\.\.\s*|\s*\[\.\.\.\]\s*|\n+")
+MIN_PART = 12
+
+
+def check_excerpt(excerpt: Optional[str], sources: list[dict], min_len: int = 24) -> dict:
+    """
+    Check that a model-supplied quote is really in the fetched text.
+
+    This is the guard that separates extraction from invention. A quote passes
+    when every sentence of it appears in one source, in any order: the model
+    often joins sentences that sit either side of a link list or a table, and
+    that is quoting, not inventing. A sentence that appears nowhere fails the
+    quote, and is returned so the reviewer can see exactly what was not found.
+
+    Returns {verified, missing: [sentences not found], source_index}.
     """
     if not excerpt or len(excerpt.strip()) < min_len:
-        return False
-    needle = " ".join(excerpt.split()).lower()
-    for s in sources:
-        haystack = " ".join((s.get("text") or "").split()).lower()
-        if needle in haystack:
-            return True
-    return False
+        return {"verified": False, "missing": [excerpt or ""], "source_index": None, "reason": "too short"}
+    parts = [p.strip() for p in _SPLIT.split(excerpt) if p and len(_norm(p)) >= MIN_PART]
+    if not parts:
+        return {"verified": False, "missing": [excerpt], "source_index": None, "reason": "too short"}
+    best = None
+    for i, s in enumerate(sources):
+        haystack = _norm(s.get("text") or "")
+        missing = [p for p in parts if _norm(p).rstrip(".;:!?") not in haystack]
+        if not missing:
+            return {"verified": True, "missing": [], "source_index": i}
+        if best is None or len(missing) < len(best[1]):
+            best = (i, missing)
+    return {"verified": False, "missing": best[1] if best else parts, "source_index": best[0] if best else None}
+
+
+def excerpt_is_genuine(excerpt: Optional[str], sources: list[dict], min_len: int = 24) -> bool:
+    """True when every sentence of the quote is in one of the sources (see check_excerpt)."""
+    return check_excerpt(excerpt, sources, min_len)["verified"]
 
 
 def search(query: str, max_results: int = 5) -> dict:

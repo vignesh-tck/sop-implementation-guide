@@ -54,7 +54,11 @@ field the user wants is kept with the programme as an extra attribute.
 
 Fields with extract=false are judgement fields: extraction leaves them blank and a model step fills them,
 marked inferred. geo_scope is one (a judgement about reach, filled by a geo_tie step the user approves).
-Mark any other field whose value is a judgement rather than a stated fact the same way. Grants.gov can be added as a source with a short keyword query (2-5 words in a funding
+Mark any other field whose value is a judgement rather than a stated fact the same way.
+
+Funding detail (award amounts, match share, deadlines, eligibility) usually sits on each programme's own
+page or in its guidelines or notice of funding, not on the overview page that lists programmes. After the
+first preview, a research step that follows each programme's links is normally worth proposing. Grants.gov can be added as a source with a short keyword query (2-5 words in a funding
 agency's vocabulary, e.g. "pedestrian safety", "community garden"); prose queries return junk."""
 
 FUNDING_INTRO = (
@@ -117,6 +121,8 @@ def _funding_row(pipeline: dict, rec: dict, fields: list[dict]) -> dict:
         "raw_data": {
             "pipeline_id": pipeline["id"], "record_id": rec["id"],
             "excerpt_verified": rec.get("excerpt_verified"), "provenance": rec.get("prov"),
+            "analyst_note": rec.get("analyst_note"), "conflicts": rec.get("conflicts") or None,
+            "research": rec.get("research") or None,
             "fields": {k: val for k, val in v.items() if k not in FUNDING_COLUMNS},
         },
     })

@@ -108,6 +108,17 @@ def approve_schema(db: Client, pipeline_id: int) -> dict:
     return p["definition"]["schema"]
 
 
+def set_goal(db: Client, pipeline_id: int, goal: str) -> str:
+    """The planner's goal in their words. Every model step reads it, so extraction knows what counts."""
+    goal = (goal or "").strip()
+    if not goal:
+        raise PipelineError("The goal is empty.")
+    p = get(db, pipeline_id)
+    p["definition"]["goal"] = goal[:2000]
+    _save(db, p)
+    return p["definition"]["goal"]
+
+
 def accept_blank(db: Client, pipeline_id: int, field: str, accept: bool) -> dict:
     p = get(db, pipeline_id)
     f = next((x for x in _fields(p) if x["name"] == field), None)
@@ -257,7 +268,7 @@ def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = Fal
         repo.update(pipeline_id, {"state": p["state"]})
 
     state = engine.run(p["kind"], p["definition"], p["state"], upto=upto, fresh=fresh,
-                       context=p["name"], progress=progress)
+                       context=p["definition"].get("goal") or p["name"], progress=progress)
     state.pop("progress", None)
     repo.update(pipeline_id, {"state": state})
     last = state["last_run"]

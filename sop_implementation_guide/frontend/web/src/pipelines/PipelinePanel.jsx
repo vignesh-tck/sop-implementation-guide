@@ -172,6 +172,69 @@ function StepsCard({ view, act, disabled, selected, onSelect }) {
 
 // ── Output preview ───────────────────────────────────────────────────────────
 
+// Everything behind one record: where it came from, the quote behind each value
+// (and whether it was found), what research read, contradictions and caveats.
+function RecordDetail({ r, fields }) {
+  const host = (u) => { try { return new URL(u).pathname.replace(/\/$/, "") || u; } catch { return u; } };
+  return (
+    <div className="pl-detail">
+      <div><b>Source:</b> <a href={r.source_url} target="_blank" rel="noreferrer">{r.source_url}</a>
+        {r.confidence != null && <span className="assess"> · confidence {Number(r.confidence).toFixed(2)}</span>}</div>
+      {r.analyst_note && <div className="pl-note"><b>Analyst note:</b> {r.analyst_note}</div>}
+      {r.conflicts?.length > 0 && (
+        <div className="pl-conflicts">
+          <b>Conflicts (values not changed):</b>
+          <ul>{r.conflicts.map((c, i) => (
+            <li key={i}><code>{c.field}</code> is “{short(c.current, 80)}”, but <a href={c.url} target="_blank" rel="noreferrer">{host(c.url)}</a> says {c.page_says}
+              <blockquote>{c.quote}</blockquote></li>
+          ))}</ul>
+        </div>
+      )}
+      <div><b>Excerpt</b> {r.excerpt_verified ? <span className="tag ok">found in source</span> : <span className="tag gone">not found in source</span>}</div>
+      <blockquote>{r.excerpt || "(none)"}</blockquote>
+      {r.excerpt_unmatched?.length > 0 && (
+        <div className="pl-bad">Not found in the source: {r.excerpt_unmatched.map((m, i) => <q key={i}>{m}</q>)}</div>
+      )}
+      <table className="pl-evidence">
+        <thead><tr><th>Field</th><th>Value</th><th>Evidence</th></tr></thead>
+        <tbody>
+          {fields.map((f) => {
+            const p = r.prov?.[f.name];
+            const v = r.values?.[f.name];
+            if (v == null || v === "") return null;
+            return (
+              <tr key={f.name}>
+                <td><code>{f.name}</code></td>
+                <td>{short(v, 120)}</td>
+                <td>
+                  <span className={"pl-cell " + (p?.kind || "")}>{KIND_TEXT[p?.kind] || p?.kind}</span>{" "}
+                  {p?.quote && (p.verified ? <span className="tag ok">quote found</span> : <span className="tag gone">quote not found</span>)}
+                  {p?.source_url && <> · <a href={p.source_url} target="_blank" rel="noreferrer">{host(p.source_url)}</a></>}
+                  {p?.note && <div className="assess">{p.note}</div>}
+                  {p?.quote && <blockquote>{p.quote}</blockquote>}
+                  {p?.unmatched?.length > 0 && <div className="pl-bad">Not found: {p.unmatched.map((m, i) => <q key={i}>{m}</q>)}</div>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {r.research?.length > 0 && (
+        <div className="assess"><b>Research read:</b>{" "}
+          {r.research.map((x, i) => (
+            <span key={i}>{i > 0 && " · "}<a href={x.url} target="_blank" rel="noreferrer">{host(x.url)}</a>
+              {x.error ? " (unreadable)" : ` (${[x.filled?.length && `filled ${x.filled.join(", ")}`,
+                x.replaced?.length && `improved ${x.replaced.join(", ")}`].filter(Boolean).join("; ") || "nothing new"})`}</span>
+          ))}
+        </div>
+      )}
+      {r.leads?.length > 0 && (
+        <div className="assess"><b>Leads noted:</b> {r.leads.map((l) => `${(l.fields || []).join(", ")} → ${l.where}`).join(" · ")}</div>
+      )}
+    </div>
+  );
+}
+
 function OutputCard({ view, selected, onSelect }) {
   const [open, setOpen] = useState(null);
   const fields = view.definition.schema?.fields || [];
@@ -206,8 +269,10 @@ function OutputCard({ view, selected, onSelect }) {
                       const blank = v == null || v === "";
                       return (
                         <td key={f.name} className={"pl-cell " + (blank ? (f.required ? "missing" : "") : p?.kind || "")}
-                            title={p ? `${KIND_TEXT[p.kind] || p.kind} (${p.step})${p.note ? ": " + p.note : ""}` : ""}>
+                            title={p ? `${KIND_TEXT[p.kind] || p.kind} (${p.step})${p.note ? ": " + p.note : ""}${p.quote ? `\n“${p.quote}”` : ""}` : ""}>
                           {blank ? "—" : short(v, 60)}
+                          {!blank && p?.verified === false && <span className="pl-bad" title="Quote not found in the source"> ⚠</span>}
+                          {(r.conflicts || []).some((c) => c.field === f.name) && <span className="pl-bad" title="A source page contradicts this value"> ≠</span>}
                         </td>
                       );
                     })}
@@ -215,10 +280,7 @@ function OutputCard({ view, selected, onSelect }) {
                   {open === r.id && (
                     <tr className="pl-rec-detail">
                       <td colSpan={fields.length + 1}>
-                        <div><b>Source:</b> <a href={r.source_url} target="_blank" rel="noreferrer">{r.source_url}</a>
-                          {r.confidence != null && <span className="assess"> · confidence {Number(r.confidence).toFixed(2)}</span>}</div>
-                        <div><b>Excerpt</b> {r.excerpt_verified ? <span className="tag ok">found in source</span> : <span className="tag gone">not found in source</span>}</div>
-                        <blockquote>{r.excerpt || "(none)"}</blockquote>
+                        <RecordDetail r={r} fields={fields} />
                       </td>
                     </tr>
                   )}

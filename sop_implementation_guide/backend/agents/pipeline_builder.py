@@ -38,6 +38,8 @@ implement State of Place block recommendations. You help a city planner build a 
 conversation. The pipeline is shown to them in a panel beside this chat, and your tools edit it.
 
 How the work goes:
+0. Record the planner's goal with set_goal as soon as they state it (and again if it changes). Every
+   model step reads it to decide what counts as a record and what matters.
 1. Agree the target schema first: the fields every record must have, their types, and which are required.
    Propose it with set_schema, or adapt the one already in the state. The planner approves it in the
    panel; you cannot.
@@ -48,10 +50,16 @@ How the work goes:
    or the planner asks for. The planner approves each step.
 4. Preview with run_preview and report what came out honestly: record count, which required fields are
    blank and on how many records, excerpts that could not be verified, warnings.
+   Work like an analyst, not an extractor: when fields are blank, first look at where the answers would
+   be. Records carry leads (links or documents the source points to), and pages carry links. Propose a
+   research step to follow them before asking the planner; turn on its web_search only when the sources
+   link nothing useful. Ask the planner only for what research could not find.
 5. Loading is the planner's action in the panel, once everything is approved and every required field
    is filled or explicitly accepted as blank. Each load becomes a new numbered dataset version.
 
 The guardrail matters more than anything else:
+- Every value read from a source carries a verbatim quote that is checked against that source. A value
+  whose quote is not found is shown as unconfirmed; research discards such values outright.
 - The schema decides what the pipeline must produce. When the sources cannot fill a required field, say
   which field and on how many records, and ask for what would fill it: another source (say what kind of
   document would have it), or a fact the planner can state. Then stop and wait for the answer.
@@ -121,6 +129,8 @@ def _tools(kind: str) -> list[dict]:
         {"name": "run_preview",
          "description": "Run the pipeline (or up to a step) on the sources and report records, coverage and warnings.",
          "input_schema": {"type": "object", "properties": {"upto_step_id": {"type": "string"}}}},
+        {"name": "set_goal", "description": "Record the planner's goal for this pipeline, in their words.",
+         "input_schema": {"type": "object", "properties": {"goal": {"type": "string"}}, "required": ["goal"]}},
         {"name": "rename_pipeline", "description": "Give the pipeline a short descriptive name.",
          "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
     ]
@@ -138,7 +148,8 @@ def state_snapshot(p: dict) -> dict:
     last = st.get("last_run") or {}
     cov = last.get("coverage") or {}
     return {
-        "pipeline": {"name": p["name"], "kind": p["kind"], "definition_version": p.get("definition_version") or 0},
+        "pipeline": {"name": p["name"], "kind": p["kind"], "goal": d.get("goal"),
+                     "definition_version": p.get("definition_version") or 0},
         "schema": {"status": d["schema"].get("status"),
                    "fields": [{k: f.get(k) for k in ("name", "type", "required", "extract", "accept_blank", "enum_values")
                                if f.get(k) is not None} for f in d["schema"].get("fields", [])]},
@@ -201,6 +212,8 @@ def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
         if name == "run_preview":
             summary = service.run(db, pipeline_id, upto=args.get("upto_step_id"), announce=False)
             return _preview_result(service.get(db, pipeline_id), summary), False
+        if name == "set_goal":
+            return {"goal": service.set_goal(db, pipeline_id, args.get("goal") or "")}, False
         if name == "rename_pipeline":
             new = (args.get("name") or "").strip()[:80]
             if not new:
@@ -308,7 +321,8 @@ def run_turn(pipeline_id: int, text: str) -> None:
 
 TOOL_LABELS = {"set_schema": "proposed the schema", "add_source": "added a source", "remove_source": "removed a source",
                "read_source": "read a source", "add_step": "proposed a step", "update_step": "changed a step",
-               "remove_step": "removed a step", "run_preview": "ran a preview", "rename_pipeline": "renamed the pipeline"}
+               "remove_step": "removed a step", "run_preview": "ran a preview", "rename_pipeline": "renamed the pipeline",
+               "set_goal": "recorded the goal"}
 
 
 def _chip(block: dict) -> dict:
@@ -323,6 +337,7 @@ def _chip(block: dict) -> dict:
         "run_preview": lambda: f"up to {a['upto_step_id']}" if a.get("upto_step_id") else "whole pipeline",
         "set_schema": lambda: ", ".join(f.get("name", "") for f in a.get("fields") or []),
         "rename_pipeline": lambda: a.get("name"),
+        "set_goal": lambda: a.get("goal"),
     }.get(block.get("name"), lambda: "")()
     return {"id": block.get("id"), "tool": block.get("name"), "label": TOOL_LABELS.get(block.get("name"), block.get("name")),
             "detail": _short(detail or "", 160)}

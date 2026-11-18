@@ -780,3 +780,10 @@ main.view.pl-view {
 .vbar-runs { margin-top: .5rem; }
 .vbar-runs td, .vbar-runs th { font-size: .8rem; }
 .vbar-runs tr.sel td { background: color-mix(in srgb, var(--orange) 8%, transparent); }
+.pl-detail { display: flex; flex-direction: column; gap: .35rem; }
+.pl-detail q { display: block; margin-top: .15rem; }
+.pl-note { background: color-mix(in srgb, var(--silver) 12%, transparent); border-radius: 4px; padding: .3rem .5rem; }
+.pl-conflicts { border: 1px solid var(--red); border-radius: 4px; padding: .3rem .5rem; }
+.pl-conflicts ul { margin: .2rem 0 0; padding-left: 1.1rem; }
+.pl-evidence td, .pl-evidence th { white-space: normal; font-size: .78rem; vertical-align: top; }
+.pl-evidence blockquote { margin: .2rem 0 0; }

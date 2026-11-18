@@ -41,6 +41,10 @@ log = logging.getLogger(__name__)
 FIELD_TYPES = ("text", "number", "money", "percent", "date", "url", "enum", "boolean")
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 SOURCE_CHARS = 12_000        # per extraction call: a long source is read in chunks of this size
+# The pipeline's model steps (extract, research, llm_fill, geo_tie) work like an analyst, so they use the
+# current Opus model. Discovery and the block funding agent keep their own model (llm_extractor.MODEL).
+MODEL = "claude-opus-5-5"
+EFFORT = "medium"
 FETCH_CHARS = 60_000         # how much of one source is fetched (5 chunks at most)
 PREVIEW_RECORDS = 50         # records kept per step output in state
 
@@ -102,6 +106,19 @@ CATALOG: dict[str, dict] = {
         "description": "Merge records that share the same key fields, keeping the first and filling its "
                        "blanks from the duplicates.",
         "config": {"keys": "list of field names"},
+    },
+    "research": {
+        "label": "Research",
+        "model": True,
+        "description": "Work like an analyst on records with blank fields: follow the links on each record's "
+                       "source page (and URLs printed in a PDF) to the item's own pages, guidelines or "
+                       "notices, read them, and fill the blanks. Every value found must quote the page it came "
+                       "from, checked word for word; unquoted values are discarded. Optionally search the web "
+                       "for an official page when the source links nothing useful.",
+        "config": {"fields": "optional list of field names; default every extractable field that is blank somewhere",
+                   "max_pages_per_record": "optional int 1-4, default 2",
+                   "web_search": "optional bool, default false",
+                   "instructions": "optional str: what to look for"},
     },
     "llm_fill": {
         "label": "Model fill",
@@ -207,6 +224,14 @@ def validate_step(kind: str, step_type: str, config: dict, fields: list[dict]) -
             raise PipelineError("dedupe.keys must be a non-empty list.")
         for k in keys:
             _field(fields, k)
+    elif step_type == "research":
+        if c.get("fields") is not None:
+            if not isinstance(c["fields"], list):
+                raise PipelineError("research.fields must be a list.")
+            for name in c["fields"]:
+                _field(fields, name)
+        if c.get("max_pages_per_record") is not None and not str(c["max_pages_per_record"]).isdigit():
+            raise PipelineError("research.max_pages_per_record must be a whole number.")
     elif step_type == "llm_fill":
         _field(fields, c.get("field"))
         if not (c.get("instruction") or "").strip():
@@ -326,12 +351,14 @@ def _blank(v: Any) -> bool:
     return v is None or (isinstance(v, str) and not v.strip())
 
 
-def _set(rec: dict, field: str, value: Any, kind: str, step_id: str, note: str | None = None) -> None:
+def _set(rec: dict, field: str, value: Any, kind: str, step_id: str, note: str | None = None, **extra) -> None:
+    """Set a value with its provenance. extra carries evidence: quote, verified, unmatched, source_url."""
     rec["values"][field] = value
     if _blank(value):
         rec["prov"].pop(field, None)
     else:
-        rec["prov"][field] = {"kind": kind, "step": step_id, **({"note": note} if note else {})}
+        rec["prov"][field] = {"kind": kind, "step": step_id, **({"note": note} if note else {}),
+                              **{k: v for k, v in extra.items() if v is not None}}
 
 
 def _match(rec: dict, c: dict) -> bool:
@@ -397,26 +424,43 @@ def _normalise(f: dict, v: Any) -> tuple[Any, str | None]:
     return v, None
 
 
-EXTRACT_PROMPT = """Extract records from the source below for a city planner's data pipeline.
+EXTRACT_PROMPT = """You are a careful research analyst building a dataset for a city planner in Bowie, Maryland.
+Read the source below the way an analyst would, and turn it into records.
 
-PIPELINE GOAL / CONTEXT:
+THE PIPELINE'S GOAL:
 {context}
 
-HOW TO READ THIS SOURCE:
+HOW TO READ THIS SOURCE (from the planner):
 {instructions}
 
-SOURCE: {url}
+SOURCE: {url}{part}
 ---
 {text}
 ---
 
-Rules that matter more than completeness:
-- One record per distinct item the goal is about. If the source contains none, return an empty list.
-- Fill a field only when the text supports it. Leave it null rather than guess; a blank the planner
-  fills in is fine, an invented value is not.
-- `source_excerpt` must be a verbatim span (at least one full sentence) copied from the source text
-  that supports the record. It is checked against the text.
-- `confidence` is 0-1: how well the text supports the values."""
+How to read it:
+- Read all of it: tables, sidebars, footnotes, lists of links, "how to apply" and eligibility sections.
+- One record per distinct item the goal is about (e.g. one funding programme). A page that lists several
+  programmes gives several records; a programme mentioned twice is still one record. If the source holds
+  no such item, return an empty list.
+- Resolve what the text states, even indirectly: "up to $50,000 per project" is a maximum award of 50000;
+  "a 25% local match" is 0.25; "applications close the third Friday of March 2027" is a date if the text
+  makes it one. A statement made for a group ("these grants are administered by...", "the application
+  period for these grants is...") applies to each item in the group.
+- Do not go beyond the text. No outside knowledge, no likely values, no defaults. Leave a field null when
+  this source does not state it; a blank the planner can fill is fine, an invented value is not.
+
+Evidence, which is checked word for word against the source:
+- For every field you fill, add an `evidence` entry: the field name and a quote copied verbatim from the
+  source (one or more whole sentences, or a full table row) that states the value. You may quote
+  sentences from different places for one field; quote each exactly.
+- `source_excerpt`: the verbatim passage that introduces the item.
+- `leads`: for fields this source does not state but points to elsewhere (a linked programme page,
+  "see the guidelines", a NOFO), say which fields and where, using the link text or URL as written.
+- `analyst_note`: caveats a planner should know, in one or two sentences: a closed round, an amount from a
+  past cycle, a rolling deadline, an item that is really a loan or a category rather than a programme.
+  Empty if none.
+- `confidence`: 0-1, how well the source supports the record as a whole."""
 
 
 def _chunks(text: str, size: int = SOURCE_CHARS) -> list[str]:
@@ -432,28 +476,58 @@ def _chunks(text: str, size: int = SOURCE_CHARS) -> list[str]:
     return out
 
 
+def _evidence_schema(field_names: list[str]) -> dict:
+    return {"type": "array", "items": _obj({
+        "field": {"type": "string", "enum": field_names},
+        "quote": {"type": "string", "description": "Verbatim from the source."}})}
+
+
+def _apply_evidence(rec: dict, f: dict, value: Any, quotes: list[str], doc: dict, step_id: str,
+                    note: str | None, source_url: str | None = None) -> str | None:
+    """Set a field with its quotes checked against `doc`. Returns a warning when it is unconfirmed."""
+    quote = " ".join(q for q in quotes if q) or None
+    check = web_source.check_excerpt(quote, [doc]) if quote else {"verified": False, "missing": []}
+    _set(rec, f["name"], value, "extracted", step_id, note,
+         quote=quote, verified=check["verified"], unmatched=check.get("missing") or None,
+         **({"source_url": source_url} if source_url else {}))
+    if _blank(value):
+        return None
+    if not quote:
+        return f"{rec['id']}.{f['name']}: no quote given"
+    return None if check["verified"] else f"{rec['id']}.{f['name']}: quote not found in the source"
+
+
 def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: list[dict],
              context: str, cache: dict) -> tuple[list[dict], list[str]]:
     ids = step["config"].get("source_ids") or [s["id"] for s in sources]
     readable = [f for f in fields if f.get("extract", True)]
-    record_schema = _obj({**{f["name"]: _json_type(f) for f in readable},
-                          "source_excerpt": {"type": "string", "description": "Verbatim span from the source."},
-                          "confidence": {"type": "number", "description": "0-1."}})
+    names = [f["name"] for f in readable]
+    record_schema = _obj({
+        **{f["name"]: _json_type(f) for f in readable},
+        "evidence": _evidence_schema(names),
+        "source_excerpt": {"type": "string", "description": "Verbatim passage introducing the item."},
+        "leads": {"type": "array", "items": _obj({
+            "fields": {"type": "array", "items": {"type": "string"}},
+            "where": {"type": "string", "description": "Link text or URL as written in the source."}})},
+        "analyst_note": {"type": "string"},
+        "confidence": {"type": "number", "description": "0-1."}})
     schema = _obj({"records": {"type": "array", "items": record_schema}})
-    records, warnings = [], []
+    records, warnings, field_warnings = [], [], []
     for src in sources:
         if src["id"] not in ids or src["id"] not in fetched:
             continue
         doc = fetched[src["id"]]
         raws = []
         parts = _chunks(doc.get("text") or "")
-        for text in parts:
-            key = _hash(["extract", step["config"].get("instructions"), readable, text, context])
+        for i, text in enumerate(parts):
+            key = _hash(["extract2", MODEL, step["config"].get("instructions"), readable, text, context])
             if key not in cache:
                 result = structured_call(EXTRACT_PROMPT.format(
                     context=context or "(none given)",
                     instructions=step["config"].get("instructions") or "(no special instructions)",
-                    url=doc.get("final_url") or src.get("url"), text=text), schema, max_tokens=8192)
+                    url=doc.get("final_url") or src.get("url"),
+                    part=f" (part {i + 1} of {len(parts)})" if len(parts) > 1 else "",
+                    text=text), schema, max_tokens=32000, model=MODEL, effort=EFFORT)
                 cache[key] = result["records"]
             raws += cache[key]
         label = src.get("label") or src["id"]
@@ -463,25 +537,255 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
         if doc.get("truncated"):
             warnings.append(f"{label}: longer than {FETCH_CHARS:,} characters; the rest was not read.")
         for n, raw in enumerate(raws, 1):
+            check = web_source.check_excerpt(raw.get("source_excerpt"), [doc])
             rec = {"id": f"{src['id']}-{n}", "values": {}, "prov": {},
                    "source_id": src["id"], "source_url": doc.get("final_url") or src.get("url"),
                    "excerpt": raw.get("source_excerpt"), "confidence": raw.get("confidence"),
-                   "excerpt_verified": web_source.excerpt_is_genuine(raw.get("source_excerpt"), [doc])}
+                   "excerpt_verified": check["verified"], "excerpt_unmatched": check["missing"] or None,
+                   "analyst_note": (raw.get("analyst_note") or "").strip() or None,
+                   "leads": raw.get("leads") or []}
+            quotes: dict[str, list[str]] = {}
+            for e in raw.get("evidence") or []:
+                quotes.setdefault(e.get("field"), []).append(e.get("quote") or "")
             for f in fields:
-                value, warn = _normalise(f, raw.get(f["name"])) if f.get("extract", True) else (None, None)
-                _set(rec, f["name"], value, "extracted", step["id"], warn)
+                if not f.get("extract", True):
+                    _set(rec, f["name"], None, "extracted", step["id"])
+                    continue
+                value, warn = _normalise(f, raw.get(f["name"]))
+                w = _apply_evidence(rec, f, value, quotes.get(f["name"], []), doc, step["id"], warn)
+                if w:
+                    field_warnings.append(w)
             records.append(rec)
     unverified = [r["id"] for r in records if not r["excerpt_verified"]]
     if unverified:
-        warnings.append(f"{len(unverified)} record(s) quote an excerpt not found in the source: treat as unconfirmed.")
+        warnings.append(f"{len(unverified)} record(s) quote an excerpt not found in the source: "
+                        f"{', '.join(unverified[:8])}. Treat as unconfirmed.")
+    if field_warnings:
+        warnings.append(f"{len(field_warnings)} value(s) without a confirmed quote: "
+                        + "; ".join(field_warnings[:6]) + ("…" if len(field_warnings) > 6 else ""))
     return records, warnings
+
+
+# ── Research: follow the trail like an analyst ───────────────────────────────
+
+CHOOSE_PROMPT = """You are a research analyst filling gaps in a dataset for a city planner in Bowie, Maryland.
+
+THE PIPELINE'S GOAL:
+{context}
+{instructions}
+The records below were read from this page: {url}
+Each lists what is known, the fields still blank, and any leads the first reading noted. Known values
+read from an overview page are often thin (a heading, a one-line summary); the item's own page usually
+states them in full.
+
+RECORDS:
+{records}
+
+LINKS ON THAT PAGE (number: link text -> url):
+{links}
+
+For each record, choose up to {n} links most likely to state its blank fields for THAT item: its own
+programme page, guidelines, a notice of funding, an application manual, an FAQ. Prefer official pages
+and links named after the item. Choose nothing for a record when no link is plausibly about it. Use only
+the numbers above."""
+
+FILL_FROM_PAGE_PROMPT = """You are a research analyst filling gaps in a dataset for a city planner in Bowie, Maryland.
+
+THE PIPELINE'S GOAL:
+{context}
+
+PAGE: {url}
+---
+{text}
+---
+
+For each record below, use THIS page to improve what is known about THAT item:
+- action "fill": a field listed as blank, where this page states it for this item.
+- action "replace": a field already known, where this page (typically the item's own page) states it
+  more fully or more precisely than the known value, e.g. eligibility described in full rather than a
+  heading. Do not replace a value with an equivalent one.
+- conflicts: where this page contradicts a known value, report the field, what the page says and the
+  quote. Do not change the value.
+- note: one or two sentences of caveats this page adds (a closed round, when the next cycle opens, a
+  cap that applies per year, a required pre-application). Empty if none.
+Rules:
+- Resolve what the page states, even indirectly ("up to $50,000" is 50000; "25% match" is 0.25). A
+  statement made for a group of items applies to each item in it.
+- No outside knowledge, no likely values. If the page does not state something for this item, omit it.
+- Every value and conflict needs a quote copied verbatim from the page (whole sentences or a full table
+  row). It is checked word for word; anything whose quote is not found is discarded.
+
+FIELDS (name: what it holds):
+{fields}
+
+RECORDS:
+{records}"""
+
+
+def _short_v(v: Any, n: int = 80) -> Any:
+    return v[:n] + "…" if isinstance(v, str) and len(v) > n else v
+
+
+def _page(url: str, fresh: bool = False) -> dict:
+    return fetch_source({"kind": "url", "url": url}, fresh=fresh)
+
+
+def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, context: str,
+              say: Callable[[str], None]) -> list[str]:
+    cfg = step["config"]
+    wanted = cfg.get("fields") or []
+    targets = [f for f in fields if f.get("extract", True) and (not wanted or f["name"] in wanted)]
+    by_name = {f["name"]: f for f in targets}
+    per_rec = int(min(max(cfg.get("max_pages_per_record") or 2, 1), 4))
+    # By default every record is researched: blank fields get filled, thin ones improved, and
+    # contradictions surfaced. refine=false limits it to records with blanks.
+    refine = cfg.get("refine", True) is not False
+    todo = [r for r in records if refine or any(_blank(r["values"].get(f["name"])) for f in targets)]
+    if not todo:
+        return ["Nothing to research: no blank fields."]
+    warnings: list[str] = []
+
+    def blanks(r: dict) -> list[str]:
+        return [f["name"] for f in targets if _blank(r["values"].get(f["name"]))]
+
+    # 1. Plan: which pages to read for which record, one model call per source page.
+    plan: dict[str, list[str]] = {}
+    groups: dict[str, list[dict]] = {}
+    for r in todo:
+        groups.setdefault(r.get("source_url") or "", []).append(r)
+    for src_url, recs in groups.items():
+        try:
+            links = (_page(src_url).get("links") or []) if src_url else []
+        except PipelineError as e:
+            warnings.append(f"could not reopen {src_url}: {e}")
+            links = []
+        links = [l for l in links if l["url"].rstrip("/") != (src_url or "").rstrip("/")][:250]
+        if links:
+            say(f"Choosing pages to read for {len(recs)} record(s)")
+            digest = [{"id": r["id"], "known": {k: _short_v(v) for k, v in r["values"].items() if not _blank(v)},
+                       "blank": blanks(r), "leads": r.get("leads") or []} for r in recs]
+            key = _hash(["choose", MODEL, cfg.get("instructions"), context, src_url, digest, links, per_rec])
+            if key not in cache:
+                schema = _obj({"choices": {"type": "array", "items": _obj({
+                    "id": {"type": "string"}, "links": {"type": "array", "items": {"type": "integer"}},
+                    "why": {"type": "string"}})}})
+                cache[key] = structured_call(CHOOSE_PROMPT.format(
+                    context=context or "(none given)",
+                    instructions=f"\nHOW TO RESEARCH (from the planner): {cfg['instructions']}\n" if cfg.get("instructions") else "",
+                    url=src_url, n=per_rec, records=json.dumps(digest, indent=1, default=str),
+                    links="\n".join(f"{i}: {l['text'] or '(no text)'} -> {l['url']}" for i, l in enumerate(links))),
+                    schema, max_tokens=16000, model=MODEL, effort=EFFORT)["choices"]
+            for c in cache[key]:
+                urls = [links[i]["url"] for i in c.get("links") or [] if isinstance(i, int) and 0 <= i < len(links)]
+                if urls:
+                    plan[c["id"]] = urls[:per_rec]
+        if cfg.get("web_search"):
+            for r in recs:
+                if r["id"] in plan:
+                    continue
+                name = next(iter(r["values"].values()), "") or ""
+                say(f"Searching the web for {name[:40]}")
+                key = _hash(["search", name, r["values"].get("source_agency")])
+                if key not in cache:
+                    res = web_source.search(f"{name} {r['values'].get('source_agency') or ''} official programme page")
+                    cache[key] = [x["url"] for x in res.get("results", []) if x.get("url")][:per_rec]
+                if cache[key]:
+                    plan[r["id"]] = cache[key]
+
+    # 2. Read each chosen page once, and fill every record that chose it.
+    pages: dict[str, list[dict]] = {}
+    recs_by_id = {r["id"]: r for r in todo}
+    for rid, urls in plan.items():
+        for u in urls:
+            if rid in recs_by_id:
+                pages.setdefault(u, []).append(recs_by_id[rid])
+    filled_total, replaced_total, conflicts_total, discarded = 0, 0, 0, 0
+    names = [f["name"] for f in targets]
+    for url, recs in pages.items():
+        say(f"Reading {url[:70]}")
+        try:
+            doc = _page(url)
+        except PipelineError as e:
+            warnings.append(f"could not read {url}: {e}")
+            for r in recs:
+                r.setdefault("research", []).append({"url": url, "error": str(e)})
+            continue
+        page_url = doc.get("final_url") or url
+        digest = [{"id": r["id"], "known": {k: v for k, v in r["values"].items() if not _blank(v)},
+                   "blank": blanks(r)} for r in recs]
+        key = _hash(["research_page", MODEL, context, url, (doc.get("text") or "")[:SOURCE_CHARS], digest])
+        if key not in cache:
+            schema = _obj({"results": {"type": "array", "items": _obj({
+                "id": {"type": "string"},
+                "values": {"type": "array", "items": _obj({
+                    "field": {"type": "string", "enum": names},
+                    "action": {"type": "string", "enum": ["fill", "replace"]},
+                    "value": {"type": ["string", "number", "boolean", "null"]},
+                    "quote": {"type": "string"}})},
+                "conflicts": {"type": "array", "items": _obj({
+                    "field": {"type": "string", "enum": names},
+                    "page_says": {"type": "string"}, "quote": {"type": "string"}})},
+                "note": {"type": "string"}})}})
+            cache[key] = structured_call(FILL_FROM_PAGE_PROMPT.format(
+                context=context or "(none given)", url=page_url,
+                text=(doc.get("text") or "")[:SOURCE_CHARS],
+                fields="\n".join(f"- {n}: {by_name[n]['description'] or n} ({by_name[n]['type']})" for n in names),
+                records=json.dumps(digest, indent=1, default=str)),
+                schema, max_tokens=16000, model=MODEL, effort=EFFORT)["results"]
+        got = {x["id"]: x for x in cache[key]}
+        for r in recs:
+            res = got.get(r["id"]) or {}
+            filled, replaced = [], []
+            for v in res.get("values") or []:
+                f = by_name.get(v.get("field"))
+                if not f:
+                    continue
+                old = r["values"].get(f["name"])
+                if not _blank(old) and v.get("action") != "replace":
+                    continue
+                raw = v.get("value")
+                if isinstance(raw, str) and f["type"] in PARSERS:
+                    raw = PARSERS[f["type"]](raw)
+                value, warn = _normalise(f, raw)
+                if _blank(value) or value == old:
+                    continue
+                if not web_source.check_excerpt(v.get("quote"), [doc])["verified"]:
+                    discarded += 1
+                    continue
+                how = (f"replaced {_short_v(old)!r} with the fuller statement on {page_url}" if not _blank(old)
+                       else f"found by research on {page_url}")
+                _set(r, f["name"], value, "extracted", step["id"], "; ".join(x for x in (how, warn) if x),
+                     quote=v.get("quote"), verified=True, source_url=page_url)
+                (replaced if not _blank(old) else filled).append(f["name"])
+            for c in res.get("conflicts") or []:
+                if c.get("field") in by_name and web_source.check_excerpt(c.get("quote"), [doc])["verified"]:
+                    r.setdefault("conflicts", []).append({**c, "url": page_url,
+                                                          "current": r["values"].get(c["field"])})
+                    conflicts_total += 1
+            note = (res.get("note") or "").strip()
+            if note:
+                r["analyst_note"] = " ".join(x for x in (r.get("analyst_note"), note) if x)
+            filled_total += len(filled)
+            replaced_total += len(replaced)
+            r.setdefault("research", []).append({"url": page_url, "filled": filled, "replaced": replaced})
+    nothing = [r["id"] for r in todo if r["id"] not in plan]
+    warnings.insert(0, f"Read {len(pages)} page(s) for {len(todo)} record(s): filled {filled_total} blank value(s), "
+                       f"improved {replaced_total}, found {conflicts_total} conflict(s).")
+    if conflicts_total:
+        warnings.append("Conflicts are listed on each record; the values were not changed. Check them.")
+    if discarded:
+        warnings.append(f"{discarded} value(s) discarded because their quote was not found on the page.")
+    if nothing:
+        warnings.append(f"No promising page for {len(nothing)} record(s)"
+                        + ("" if cfg.get("web_search") else "; web_search could look further") + ".")
+    return warnings
 
 
 FILL_PROMPT = """For each record below, set the field `{field}` ({type_desc}).
 
 INSTRUCTION FROM THE PLANNER: {instruction}
 
-Use only what each record's own excerpt and values support. If they do not support a value,
+Use only what each record's own values, evidence and notes support. If they do not support a value,
 return null for that record. Give a one-line reason for each.
 
 RECORDS:
@@ -490,8 +794,10 @@ RECORDS:
 GEO_INSTRUCTION = """Recommend each programme's geographic reach. The planner works on city blocks in Bowie,
 Prince George's County, Maryland (county FIPS 24033). Use one of: federal (available nationally),
 state:MD (Maryland only), county:24033 (Prince George's County only), tract:NMTC (only in tracts
-carrying a designation; name it after 'tract:'), unknown (the source does not say). A programme run
-by a state agency is state-scoped even when the money is federal. Base it on what the source says."""
+carrying a designation; name it after 'tract:'), unknown (the source does not say). Judge by who may
+apply and where the money may be spent, as the evidence states it: a programme open to every Maryland
+jurisdiction is state:MD even if a county or city administers its local share; a federal programme
+that a state agency runs is state:MD. Base it on the evidence, not on what would be convenient."""
 
 
 def _model_fill(step: dict, records: list[dict], fields: list[dict], cache: dict,
@@ -502,14 +808,15 @@ def _model_fill(step: dict, records: list[dict], fields: list[dict], cache: dict
     if not targets:
         return []
     digest = [{"id": r["id"], "values": r["values"], "excerpt": (r.get("excerpt") or "")[:800],
-               "source_url": r.get("source_url")} for r in targets]
+               "evidence": {k: (p.get("quote") or "")[:400] for k, p in r["prov"].items() if p.get("quote")},
+               "analyst_note": r.get("analyst_note"), "source_url": r.get("source_url")} for r in targets]
     schema = _obj({"results": {"type": "array", "items": _obj({
         "id": {"type": "string"}, "value": _json_type(f), "reason": {"type": "string"}})}})
-    key = _hash([kind_label, instruction, f, digest])
+    key = _hash([kind_label, MODEL, instruction, f, digest])
     if key not in cache:
         result = structured_call(FILL_PROMPT.format(
             field=f["name"], type_desc=_json_type(f)["description"], instruction=instruction,
-            records=json.dumps(digest, indent=1, default=str)), schema, max_tokens=8192)
+            records=json.dumps(digest, indent=1, default=str)), schema, max_tokens=16000, model=MODEL, effort=EFFORT)
         cache[key] = result["results"]
     by_id = {r["id"]: r for r in cache[key]}
     warnings = []
@@ -609,6 +916,7 @@ def definition_hash(definition: dict) -> str:
     """What a run's results depend on. Approval status and notes are excluded."""
     schema = definition.get("schema") or {}
     return _hash({
+        "goal": definition.get("goal"),
         "fields": [{k: f.get(k) for k in ("name", "type", "required", "enum_values", "extract")}
                    for f in schema.get("fields", [])],
         "sources": [{k: s.get(k) for k in ("id", "kind", "url", "query")} for s in definition.get("sources", [])],
@@ -696,6 +1004,8 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             if step["type"] == "extract":
                 new, warnings = _extract(step, sources, fetched, fields, context, cache)
                 records = records + new
+            elif step["type"] == "research":
+                warnings = _research(step, records, fields, cache, context, say)
             elif step["type"] == "llm_fill":
                 warnings = _model_fill(step, records, fields, cache, step["config"]["instruction"], "llm_fill")
             elif step["type"] == "geo_tie":
@@ -714,7 +1024,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             break
 
     # The cache only keeps entries this run used or still could, bounded.
-    state["cache"] = dict(list(cache.items())[-40:])
+    state["cache"] = dict(list(cache.items())[-120:])
     state["outputs"] = outputs
     state["last_run"] = {
         "at": datetime.now(timezone.utc).isoformat(),
