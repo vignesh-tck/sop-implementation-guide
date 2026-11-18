@@ -31,6 +31,8 @@ import hashlib
 import json
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Optional
 
@@ -50,8 +52,30 @@ FETCH_CHARS = 60_000         # how much of one source is fetched (5 chunks at mo
 PREVIEW_RECORDS = 300        # records kept per step output in state; a step can be reviewed only if all fit
 
 
+PARALLEL = 6                 # model calls or page reads in flight at once
+FILL_BATCH = 25              # records per llm_fill / geo_tie call; batches run in parallel
+
+
 class PipelineError(ValueError):
     """A definition, step config or source the engine cannot accept. The message is user-facing."""
+
+
+def _parallel(fn: Callable[[Any], Any], items: list, workers: int = PARALLEL) -> list:
+    """
+    fn over items, several at a time. Results come back in input order, with the
+    exception in place of a result that failed, so callers decide what a failure
+    means. Results are merged by the caller on one thread: fn must not write
+    shared state (the model cache in particular).
+    """
+    def safe(item):
+        try:
+            return fn(item)
+        except Exception as e:  # noqa: BLE001 — handed back to the caller
+            return e
+    if len(items) <= 1:
+        return [safe(i) for i in items]
+    with ThreadPoolExecutor(max_workers=min(workers, len(items))) as ex:
+        return list(ex.map(safe, items))
 
 
 # ── Catalog ──────────────────────────────────────────────────────────────────
@@ -501,7 +525,7 @@ def _apply_evidence(rec: dict, f: dict, value: Any, quotes: list[str], doc: dict
 
 
 def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: list[dict],
-             context: str, cache: dict) -> tuple[list[dict], list[str]]:
+             context: str, cache: dict, say: Callable[[str], None] = lambda _m: None) -> tuple[list[dict], list[str]]:
     ids = step["config"].get("source_ids") or [s["id"] for s in sources]
     readable = [f for f in fields if f.get("extract", True)]
     names = [f["name"] for f in readable]
@@ -516,23 +540,37 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
         "confidence": {"type": "number", "description": "0-1."}})
     schema = _obj({"records": {"type": "array", "items": record_schema}})
     records, warnings, field_warnings = [], [], []
+    # Every part of every source is read in parallel; records are then assembled in source order.
+    plan, jobs = [], {}
     for src in sources:
         if src["id"] not in ids or src["id"] not in fetched:
             continue
         doc = fetched[src["id"]]
-        raws = []
         parts = _chunks(doc.get("text") or "")
+        keys = []
         for i, text in enumerate(parts):
             key = _hash(["extract2", MODEL, step["config"].get("instructions"), readable, text, context])
-            if key not in cache:
-                result = structured_call(EXTRACT_PROMPT.format(
+            keys.append(key)
+            if key not in cache and key not in jobs:
+                jobs[key] = EXTRACT_PROMPT.format(
                     context=context or "(none given)",
                     instructions=step["config"].get("instructions") or "(no special instructions)",
                     url=doc.get("final_url") or src.get("url"),
                     part=f" (part {i + 1} of {len(parts)})" if len(parts) > 1 else "",
-                    text=text), schema, max_tokens=32000, model=MODEL, effort=EFFORT)
-                cache[key] = result["records"]
-            raws += cache[key]
+                    text=text)
+        plan.append((src, doc, parts, keys))
+    if jobs:
+        say(f"Extracting {len(jobs)} part(s), {min(len(jobs), PARALLEL)} at a time")
+        results = _parallel(lambda prompt: structured_call(prompt, schema, max_tokens=32000, model=MODEL,
+                                                           effort=EFFORT)["records"], list(jobs.values()))
+        for key, res in zip(jobs, results):
+            if not isinstance(res, Exception):
+                cache[key] = res
+        failed = [r for r in results if isinstance(r, Exception)]
+        if failed:
+            raise failed[0]   # the parts that succeeded stay cached for the next preview
+    for src, doc, parts, keys in plan:
+        raws = [x for key in keys for x in cache[key]]
         label = src.get("label") or src["id"]
         if len(parts) > 1:
             warnings.append(f"{label}: read in {len(parts)} parts; an item split across parts may appear twice "
@@ -657,37 +695,53 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
     def blanks(r: dict) -> list[str]:
         return [f["name"] for f in targets if _blank(r["values"].get(f["name"]))]
 
-    # 1. Plan: which pages to read for which record, one model call per source page.
+    # 1. Plan: which pages to read for which record, one model call per source page, all in parallel.
     plan: dict[str, list[str]] = {}
     groups: dict[str, list[dict]] = {}
     for r in todo:
         groups.setdefault(r.get("source_url") or "", []).append(r)
-    for src_url, recs in groups.items():
-        try:
-            links = (_page(src_url).get("links") or []) if src_url else []
-        except PipelineError as e:
-            warnings.append(f"could not reopen {src_url}: {e}")
+    group_items = list(groups.items())
+
+    def links_for(item: tuple[str, list[dict]]) -> list[dict]:
+        src_url = item[0]
+        links = (_page(src_url).get("links") or []) if src_url else []
+        return [l for l in links if l["url"].rstrip("/") != (src_url or "").rstrip("/")][:250]
+
+    choose_schema = _obj({"choices": {"type": "array", "items": _obj({
+        "id": {"type": "string"}, "links": {"type": "array", "items": {"type": "integer"}},
+        "why": {"type": "string"}})}})
+    choose_jobs: dict[str, str] = {}
+    chosen: list[tuple[list[dict], list[dict], str | None]] = []
+    for (src_url, recs), links in zip(group_items, _parallel(links_for, group_items)):
+        if isinstance(links, Exception):
+            warnings.append(f"could not reopen {src_url}: {links}")
             links = []
-        links = [l for l in links if l["url"].rstrip("/") != (src_url or "").rstrip("/")][:250]
+        key = None
         if links:
-            say(f"Choosing pages to read for {len(recs)} record(s)")
             digest = [{"id": r["id"], "known": {k: _short_v(v) for k, v in r["values"].items() if not _blank(v)},
                        "blank": blanks(r), "leads": r.get("leads") or []} for r in recs]
             key = _hash(["choose", MODEL, cfg.get("instructions"), context, src_url, digest, links, per_rec])
-            if key not in cache:
-                schema = _obj({"choices": {"type": "array", "items": _obj({
-                    "id": {"type": "string"}, "links": {"type": "array", "items": {"type": "integer"}},
-                    "why": {"type": "string"}})}})
-                cache[key] = structured_call(CHOOSE_PROMPT.format(
+            if key not in cache and key not in choose_jobs:
+                choose_jobs[key] = CHOOSE_PROMPT.format(
                     context=context or "(none given)",
                     instructions=cfg.get("instructions") or "(none given)",
                     url=src_url, n=per_rec, records=json.dumps(digest, indent=1, default=str),
-                    links="\n".join(f"{i}: {l['text'] or '(no text)'} -> {l['url']}" for i, l in enumerate(links))),
-                    schema, max_tokens=16000, model=MODEL, effort=EFFORT)["choices"]
-            for c in cache[key]:
-                urls = [links[i]["url"] for i in c.get("links") or [] if isinstance(i, int) and 0 <= i < len(links)]
-                if urls:
-                    plan[c["id"]] = urls[:per_rec]
+                    links="\n".join(f"{i}: {l['text'] or '(no text)'} -> {l['url']}" for i, l in enumerate(links)))
+        chosen.append((recs, links, key))
+    if choose_jobs:
+        say(f"Choosing pages to read for {len(todo)} record(s)")
+        results = _parallel(lambda prompt: structured_call(prompt, choose_schema, max_tokens=16000, model=MODEL,
+                                                           effort=EFFORT)["choices"], list(choose_jobs.values()))
+        for key, res in zip(choose_jobs, results):
+            if isinstance(res, Exception):
+                warnings.append(f"could not choose pages for some records: {res}")
+            else:
+                cache[key] = res
+    for recs, links, key in chosen:
+        for c in cache.get(key, []) if key else []:
+            urls = [links[i]["url"] for i in c.get("links") or [] if isinstance(i, int) and 0 <= i < len(links)]
+            if urls:
+                plan[c["id"]] = urls[:per_rec]
         if cfg.get("web_search"):
             for r in recs:
                 if r["id"] in plan:
@@ -701,7 +755,8 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
                 if cache[key]:
                     plan[r["id"]] = cache[key]
 
-    # 2. Read each chosen page once, and fill every record that chose it.
+    # 2. Read each chosen page once, for every record that chose it. Pages are read and
+    # questioned in parallel; their answers are applied below in a fixed order.
     pages: dict[str, list[dict]] = {}
     recs_by_id = {r["id"]: r for r in todo}
     for rid, urls in plan.items():
@@ -710,39 +765,49 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
                 pages.setdefault(u, []).append(recs_by_id[rid])
     filled_total, replaced_total, conflicts_total, discarded = 0, 0, 0, 0
     names = [f["name"] for f in targets]
-    for url, recs in pages.items():
-        say(f"Reading {url[:70]}")
-        try:
-            doc = _page(url)
-        except PipelineError as e:
-            warnings.append(f"could not read {url}: {e}")
-            for r in recs:
-                r.setdefault("research", []).append({"url": url, "error": str(e)})
-            continue
-        page_url = doc.get("final_url") or url
+    fill_schema = _obj({"results": {"type": "array", "items": _obj({
+        "id": {"type": "string"},
+        "values": {"type": "array", "items": _obj({
+            "field": {"type": "string", "enum": names},
+            "action": {"type": "string", "enum": ["fill", "replace"]},
+            "value": {"type": ["string", "number", "boolean", "null"]},
+            "quote": {"type": "string"}})},
+        "conflicts": {"type": "array", "items": _obj({
+            "field": {"type": "string", "enum": names},
+            "page_says": {"type": "string"}, "quote": {"type": "string"}})},
+        "note": {"type": "string"}})}})
+
+    def read(item: tuple[str, list[dict]]) -> tuple[dict, str, list[dict] | None]:
+        """Fetch a page and ask about it. Reads the cache, never writes it."""
+        url, recs = item
+        doc = _page(url)
         digest = [{"id": r["id"], "known": {k: v for k, v in r["values"].items() if not _blank(v)},
                    "blank": blanks(r)} for r in recs]
         key = _hash(["research_page", MODEL, context, url, (doc.get("text") or "")[:SOURCE_CHARS], digest]
                     + ([cfg["instructions"]] if cfg.get("instructions") else []))
-        if key not in cache:
-            schema = _obj({"results": {"type": "array", "items": _obj({
-                "id": {"type": "string"},
-                "values": {"type": "array", "items": _obj({
-                    "field": {"type": "string", "enum": names},
-                    "action": {"type": "string", "enum": ["fill", "replace"]},
-                    "value": {"type": ["string", "number", "boolean", "null"]},
-                    "quote": {"type": "string"}})},
-                "conflicts": {"type": "array", "items": _obj({
-                    "field": {"type": "string", "enum": names},
-                    "page_says": {"type": "string"}, "quote": {"type": "string"}})},
-                "note": {"type": "string"}})}})
-            cache[key] = structured_call(FILL_FROM_PAGE_PROMPT.format(
-                context=context or "(none given)", url=page_url,
-                instructions=cfg.get("instructions") or "(none given)",
-                text=(doc.get("text") or "")[:SOURCE_CHARS],
-                fields="\n".join(f"- {n}: {by_name[n]['description'] or n} ({by_name[n]['type']})" for n in names),
-                records=json.dumps(digest, indent=1, default=str)),
-                schema, max_tokens=16000, model=MODEL, effort=EFFORT)["results"]
+        if key in cache:
+            return doc, key, None
+        return doc, key, structured_call(FILL_FROM_PAGE_PROMPT.format(
+            context=context or "(none given)", url=doc.get("final_url") or url,
+            instructions=cfg.get("instructions") or "(none given)",
+            text=(doc.get("text") or "")[:SOURCE_CHARS],
+            fields="\n".join(f"- {n}: {by_name[n]['description'] or n} ({by_name[n]['type']})" for n in names),
+            records=json.dumps(digest, indent=1, default=str)),
+            fill_schema, max_tokens=16000, model=MODEL, effort=EFFORT)["results"]
+
+    page_items = list(pages.items())
+    if page_items:
+        say(f"Reading {len(page_items)} page(s), {min(len(page_items), PARALLEL)} at a time")
+    for (url, recs), got in zip(page_items, _parallel(read, page_items)):
+        if isinstance(got, Exception):
+            warnings.append(f"could not read {url}: {got}")
+            for r in recs:
+                r.setdefault("research", []).append({"url": url, "error": str(got)})
+            continue
+        doc, key, answer = got
+        if answer is not None:
+            cache[key] = answer
+        page_url = doc.get("final_url") or url
         got = {x["id"]: x for x in cache[key]}
         for r in recs:
             res = got.get(r["id"]) or {}
@@ -883,13 +948,22 @@ def _model_fill(step: dict, records: list[dict], fields: list[dict], cache: dict
                "analyst_note": r.get("analyst_note"), "source_url": r.get("source_url")} for r in targets]
     schema = _obj({"results": {"type": "array", "items": _obj({
         "id": {"type": "string"}, "value": _json_type(f), "reason": {"type": "string"}})}})
-    key = _hash([kind_label, MODEL, instruction, f, digest])
-    if key not in cache:
-        result = structured_call(FILL_PROMPT.format(
-            field=f["name"], type_desc=_json_type(f)["description"], instruction=instruction,
-            records=json.dumps(digest, indent=1, default=str)), schema, max_tokens=16000, model=MODEL, effort=EFFORT)
-        cache[key] = result["results"]
-    by_id = {r["id"]: r for r in cache[key]}
+    # Batches of records, judged in parallel. Each record is judged on its own evidence,
+    # so splitting them does not change what the model sees about any one record.
+    batches = [digest[i:i + FILL_BATCH] for i in range(0, len(digest), FILL_BATCH)]
+    keys = [_hash([kind_label, MODEL, instruction, f, b]) for b in batches]
+    jobs = {k: b for k, b in zip(keys, batches) if k not in cache}
+    results = _parallel(lambda b: structured_call(FILL_PROMPT.format(
+        field=f["name"], type_desc=_json_type(f)["description"], instruction=instruction,
+        records=json.dumps(b, indent=1, default=str)), schema, max_tokens=16000, model=MODEL,
+        effort=EFFORT)["results"], list(jobs.values()))
+    for k, res in zip(jobs, results):
+        if not isinstance(res, Exception):
+            cache[k] = res
+    failed = [r for r in results if isinstance(r, Exception)]
+    if failed:
+        raise failed[0]   # the batches that succeeded stay cached for the next preview
+    by_id = {r["id"]: r for k in keys for r in cache[k]}
     warnings = []
     for r in targets:
         hit = by_id.get(r["id"])
@@ -1213,16 +1287,21 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
     sources = definition.get("sources") or []
     steps = definition.get("steps") or []
     cache = {} if fresh else dict(state.get("cache") or {})
-    say = progress or (lambda _m: None)
+    lock = threading.Lock()
+
+    def say(msg: str) -> None:   # steps report progress from worker threads too
+        if progress:
+            with lock:
+                progress(msg)
 
     fetched, src_state = {}, {}
-    for s in sources:
-        say(f"Reading {s.get('label') or s['id']}")
-        try:
-            fetched[s["id"]] = fetch_source(s, fresh=fresh)
-            src_state[s["id"]] = source_meta(fetched[s["id"]])
-        except PipelineError as e:
-            src_state[s["id"]] = {"error": str(e)}
+    say(f"Reading {len(sources)} source(s)")
+    for s, got in zip(sources, _parallel(lambda s: fetch_source(s, fresh=fresh), sources)):
+        if isinstance(got, Exception):
+            src_state[s["id"]] = {"error": str(got)}
+        else:
+            fetched[s["id"]] = got
+            src_state[s["id"]] = source_meta(got)
     state["sources"] = src_state
 
     records: list[dict] = []
@@ -1235,7 +1314,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             cfg = validate_step(kind, step["type"], step["config"], fields)
             step = {**step, "config": cfg}
             if step["type"] == "extract":
-                new, warnings = _extract(step, sources, fetched, fields, context, cache)
+                new, warnings = _extract(step, sources, fetched, fields, context, cache, say)
                 records = records + new
             elif step["type"] == "research":
                 warnings = _research(step, records, fields, cache, context, say)
