@@ -164,7 +164,8 @@ def _preview_result(p: dict, summary: dict) -> dict:
         "required_gaps": cov["required_gaps"],
         "steps": {sid: {"count": o.get("count"), "warnings": o.get("warnings"), "error": o.get("error")}
                   for sid, o in outputs.items()},
-        "unverified_excerpts": sum(1 for r in records if r.get("excerpt_verified") is False),
+        "unverified_excerpts": [{"id": r["id"], "name": _short(next(iter(r["values"].values()), None), 60)}
+                                for r in records if r.get("excerpt_verified") is False],
         "sample": [{"id": r["id"], **{k: _short(v) for k, v in r["values"].items()}} for r in records[:4]],
         "errors": summary["errors"],
     }
