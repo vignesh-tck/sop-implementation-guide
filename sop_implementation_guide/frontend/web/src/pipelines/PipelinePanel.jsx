@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
 import { call } from "../api.js";
+import PipelineCanvas from "./PipelineCanvas.jsx";
 
 const KIND_TEXT = {
   extracted: "read from the source",
@@ -147,64 +148,63 @@ function SourcesCard({ view, act, disabled }) {
 
 // ── Steps: design each one (prompt, preview, approve), in order ──────────────
 
-function StepsCard({ view, act, disabled }) {
-  const steps = view.definition.steps || [];
-  const firstOpen = steps.find((s) => s.status !== "approved")?.id ?? null;
-  const [open, setOpen] = useState(firstOpen);
+function GapsNote({ view }) {
+  if (!view.definition.steps?.length || !view.design_gaps?.length) return null;
+  return (
+    <div className="pl-gate" style={{ marginTop: 0, marginBottom: ".5rem" }}>
+      <b>The pipeline is not complete:</b> no step produces {view.design_gaps.map((g, i) => <Fragment key={g}>{i > 0 && ", "}<code>{g}</code></Fragment>)}.
+      Ask the agent in the chat to add the missing steps.
+    </div>
+  );
+}
+
+function NoStepsCard({ view }) {
   return (
     <div className="card">
       <h4>Steps</h4>
-      <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
-        Design each step in order: read its prompt, tune the instructions, preview what it produces, then approve it.
-        Changing a step sends it and every later step back for approval.
-      </div>
-      {steps.length === 0 && <div className="assess">
+      <div className="assess">
         {view.definition.schema?.status !== "approved" ? "First approve the target schema, then add sources and mark them final."
-          : view.definition.sources_status !== "final" ? "Add the sources and mark them final: the agent then outlines every step here."
+          : view.definition.sources_status !== "final" ? "Add the sources and mark them final: the agent then outlines every step."
           : view.busy ? "The agent is looking at the sources and outlining the steps…"
           : "The agent outlines the steps from the final sources. If none appear, ask it in the chat."}
-      </div>}
-      {steps.length > 0 && view.design_gaps?.length > 0 && (
-        <div className="pl-gate" style={{ marginBottom: ".5rem" }}>
-          <b>The pipeline is not complete:</b> no step produces {view.design_gaps.map((g, i) => <Fragment key={g}>{i > 0 && ", "}<code>{g}</code></Fragment>)}.
-          Ask the agent in the chat to add the missing steps.
-        </div>
-      )}
-      <ol className="pl-steps">
-        {steps.map((s, i) => {
-          const out = view.outputs[s.id];
-          const cat = view.catalog[s.type] || {};
-          const isOpen = open === s.id;
-          const blockedBy = steps.slice(0, i).filter((x) => x.status !== "approved").map((x) => x.id);
-          return (
-            <li key={s.id} className={(isOpen ? "sel " : "") + (out?.error ? "failed" : "")}>
-              <div className="pl-step-head pl-step-toggle" onClick={() => setOpen(isOpen ? null : s.id)}>
-                <span className="assess">{isOpen ? "▾" : "▸"}</span>
-                <b className="pl-id">{s.id}</b>
-                <b>{cat.label || s.type}</b>
-                {cat.model && <span className="tag derived" title="Calls the model; its prompt is shown when you open the step">model</span>}
-                <StatusTag status={s.status} />
-                <span className="spacer" />
-                {out && !out.error && <span className="assess">{out.count} record(s)</span>}
-              </div>
-              {s.note && <div className="pl-step-note">{s.note}</div>}
-              {!isOpen && out?.error && <div className="banner err" style={{ margin: ".4rem 0 0" }}>{out.error}</div>}
-              {isOpen && (
-                <StepDesigner step={s} out={out} view={view} act={act} disabled={disabled}
-                              isLast={i === steps.length - 1} blockedBy={blockedBy}
-                              onApproved={() => setOpen(steps[i + 1]?.id ?? null)} />
-              )}
-              {isOpen && (
-                <div className="pl-step-actions">
-                  <button disabled={disabled || i === 0} title="Move up" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: -1 })}>↑</button>
-                  <button disabled={disabled || i === steps.length - 1} title="Move down" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: 1 })}>↓</button>
-                  <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove step</button>
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+      </div>
+    </div>
+  );
+}
+
+// The step selected on the canvas: read its prompt, tune the instructions,
+// preview what it produces, then approve it.
+function StepCard({ view, act, disabled, stepId, onSelect }) {
+  const steps = view.definition.steps || [];
+  const i = steps.findIndex((x) => x.id === stepId);
+  const s = steps[i];
+  const out = view.outputs[s.id];
+  const cat = view.catalog[s.type] || {};
+  const blockedBy = steps.slice(0, i).filter((x) => x.status !== "approved").map((x) => x.id);
+  const go = (j) => steps[j] && onSelect(`step:${steps[j].id}`);
+  return (
+    <div className={"card pl-step-card" + (out?.error ? " failed" : "")}>
+      <div className="pl-step-head">
+        <span className="assess">Step {i + 1} of {steps.length}</span>
+        <b className="pl-id">{s.id}</b>
+        <b>{cat.label || s.type}</b>
+        {cat.model && <span className="tag derived" title="Calls the model; its prompt is shown below">model</span>}
+        <StatusTag status={s.status} />
+        <span className="spacer" />
+        {out && !out.error && <span className="assess">{out.count} record(s)</span>}
+        <button className="pl-nav" disabled={i === 0} title="Previous step" onClick={() => go(i - 1)}>‹</button>
+        <button className="pl-nav" disabled={i === steps.length - 1} title="Next step" onClick={() => go(i + 1)}>›</button>
+      </div>
+      {cat.description && <div className="muted-note" style={{ marginTop: ".2rem" }}>{cat.description}</div>}
+      {s.note && <div className="pl-step-note">{s.note}</div>}
+      <StepDesigner key={s.id} step={s} out={out} view={view} act={act} disabled={disabled}
+                    isLast={i === steps.length - 1} blockedBy={blockedBy} />
+      <div className="pl-step-actions">
+        <button disabled={disabled || i === 0} title="Move earlier" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: -1 })}>← Move earlier</button>
+        <button disabled={disabled || i === steps.length - 1} title="Move later" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: 1 })}>Move later →</button>
+        <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove step</button>
+      </div>
+      <div className="muted-note">Changing a step sends it and every later step back for approval.</div>
     </div>
   );
 }
@@ -264,7 +264,7 @@ function PromptEditor({ step, prompt, act, disabled }) {
   );
 }
 
-function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy, onApproved }) {
+function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy }) {
   const fields = view.definition.schema?.fields || [];
   const [onlyAttention, setOnlyAttention] = useState(false);
   const prompt = view.prompts?.[step.id];
@@ -309,7 +309,7 @@ function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy, onApp
         {step.status === "approved" ? <span className="tag ok">approved</span> : (
           <button className="primary" disabled={disabled || !out || !!out?.error || blockedBy.length > 0}
                   title={blockedBy.length ? `Approve ${blockedBy.join(", ")} first` : !out ? "Preview it first" : ""}
-                  onClick={() => act("POST", `/steps/${step.id}/approve`).then((r) => r && onApproved())}>
+                  onClick={() => act("POST", `/steps/${step.id}/approve`)}>
             Approve {step.id}
           </button>
         )}
@@ -707,19 +707,60 @@ function LoadCard({ view, act, disabled }) {
   );
 }
 
+// Where the design currently waits, in the order the user set: schema, sources,
+// then each step in turn, then run and publish.
+function stageOf(view) {
+  const d = view.definition;
+  const steps = d.steps || [];
+  if (d.schema?.status !== "approved") return "schema";
+  if (d.sources_status !== "final") return "sources";
+  if (steps.length === 0) return "steps";
+  const open = steps.find((s) => s.status !== "approved");
+  if (open) return `step:${open.id}`;
+  return "publish";
+}
+
+function NoOutputCard() {
+  return (
+    <div className="card">
+      <h4>Output</h4>
+      <div className="assess">No run yet. Preview a step, or run the whole pipeline from Publish.</div>
+    </div>
+  );
+}
+
 export default function PipelinePanel({ view, act, pending }) {
   const disabled = pending || !!view.busy;
+  // The canvas selection follows the design: when the stage moves on (schema
+  // approved, sources final, a step approved), the next thing to do is selected.
+  const stage = stageOf(view);
+  const [sel, setSel] = useState(stage);
+  const [seenStage, setSeenStage] = useState(stage);
+  if (stage !== seenStage) { setSeenStage(stage); setSel(stage); }
+
+  const steps = view.definition.steps || [];
+  let shown = sel;
+  if (shown?.startsWith("step:") && !steps.some((s) => `step:${s.id}` === shown)) shown = stage;
+  if (shown === "steps" && steps.length) shown = `step:${steps[0].id}`;
+  if (shown === "gaps") shown = steps.length ? `step:${steps[steps.length - 1].id}` : "steps";
+
+  let body;
+  if (shown === "schema") body = <SchemaCard view={view} act={act} disabled={disabled} />;
+  else if (shown === "sources") body = <SourcesCard view={view} act={act} disabled={disabled} />;
+  else if (shown === "steps") body = <NoStepsCard view={view} />;
+  else if (shown?.startsWith("step:")) body = <StepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onSelect={setSel} />;
+  else if (shown === "output") body = view.last_run ? <OutputCard view={view} act={act} disabled={disabled} /> : <NoOutputCard />;
+  else body = <LoadCard view={view} act={act} disabled={disabled} />;
+
   return (
     <div className="pl-panel-inner">
       <div className="pl-panel-head">
         <h3>{view.name}</h3>
         <span className="assess">{view.kind_label} · def v{view.definition_version}</span>
       </div>
-      <SchemaCard view={view} act={act} disabled={disabled} />
-      <SourcesCard view={view} act={act} disabled={disabled} />
-      <StepsCard view={view} act={act} disabled={disabled} />
-      <OutputCard view={view} act={act} disabled={disabled} />
-      <LoadCard view={view} act={act} disabled={disabled} />
+      <PipelineCanvas view={view} sel={sel === "gaps" ? "gaps" : shown} onSelect={setSel} />
+      {(shown?.startsWith("step:") || sel === "gaps") && <GapsNote view={view} />}
+      {body}
     </div>
   );
 }
