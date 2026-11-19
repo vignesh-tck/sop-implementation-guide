@@ -4,8 +4,10 @@ PipelineBuilderAgent: the chat side of the Pipeline Development tab.
 A manual tool-use loop rather than the SDK's tool runner, because a turn has
 to survive across HTTP requests: every message is stored in
 pipeline_messages exactly as the API returned it and is sent back unchanged
-on the next turn (append-only, so thinking blocks stay valid), and the
-planner's approvals happen in the panel between turns, not inside a tool call.
+on the next turn (append-only), and the planner's approvals happen in the
+panel between turns, not inside a tool call. Thinking from earlier turns is
+left out when the history is sent: the API binds it to the system prompt and
+tools it was written under, which change as the app does.
 
 The agent's tools can only propose: schema, sources, steps, previews.
 Approving, accepting blanks and loading are the planner's, in the panel (see
@@ -400,8 +402,28 @@ def _run_tool(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
 
 # ── The turn ─────────────────────────────────────────────────────────────────
 
+THINKING = ("thinking", "redacted_thinking")
+
+
 def _history(rows: list[dict]) -> list[dict]:
-    return [{"role": r["role"], "content": r["content"]} for r in rows if r["role"] in ("user", "assistant")]
+    """
+    The stored conversation, without earlier turns' thinking. A thinking block
+    is only valid with the system prompt and tools it was made under, so after
+    either changes, replaying it fails the whole request. Earlier turns are
+    complete, so leaving their thinking out is allowed; the current turn's
+    thinking is kept in memory while its tool loop runs.
+    """
+    out = []
+    for r in rows:
+        if r["role"] not in ("user", "assistant"):
+            continue
+        content = r["content"]
+        if r["role"] == "assistant" and isinstance(content, list):
+            content = [b for b in content if not (isinstance(b, dict) and b.get("type") in THINKING)]
+            if not content:
+                content = [{"type": "text", "text": "(no reply)"}]
+        out.append({"role": r["role"], "content": content})
+    return out
 
 
 def _repair(db, pipeline_id: int, messages: list[dict]) -> None:
