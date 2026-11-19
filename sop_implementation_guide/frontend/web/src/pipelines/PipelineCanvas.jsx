@@ -4,7 +4,7 @@ import {
   useNodesState, useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { draftPortText, portText, stepsModel } from "./ports.js";
+import { draftPortText, isMulti, nodeOutput, outputList, outputNode, portText, stepsModel, unapprovedOutputs } from "./ports.js";
 
 // The pipeline as a node map: sources → steps → output. It leads the page:
 // clicking a node opens it in the inspector beside it.
@@ -23,6 +23,10 @@ import { draftPortText, portText, stepsModel } from "./ports.js";
 // their records); step → Output feeds the final output; source → Extract
 // makes that Extract step read the source. Node positions are saved in the
 // definition's layout, which is display only.
+//
+// A pipeline can have several Output nodes (output, output:o2 ...), each with its
+// own schema; every branch ends in one of them. A source wired to a step that
+// reads one source itself (a map lookup, the use tables) sets that step's source.
 
 const COL = 230;    // auto-layout spacing for nodes with no saved position
 const ROW = 90;
@@ -49,6 +53,9 @@ function stepSummary(s) {
     case "llm_fill": return `fills ${c.field}`;
     case "geo_tie": return `fills ${c.field || "geo_scope"}`;
     case "sql": return c.tables?.length ? `joins ${c.tables.join(", ")}` : cut((c.query || "").replace(/\s+/g, " "), 30);
+    case "from_table": return `from ${c.table || "?"}`;
+    case "spatial_lookup": return `${c.field || "?"} → ${c.writes || "?"}${c.layers?.length ? ` · layer${c.layers.length > 1 ? "s" : ""} ${c.layers.join(", ")}` : ""}`;
+    case "use_table": return c.source_id ? `from ${c.source_id}` : "use tables";
     default: return "";
   }
 }
@@ -193,6 +200,21 @@ function parseRuns(model) {
   return runs;
 }
 
+// "+ Output": add an Output node loading into a target no output uses yet.
+function AddOutput({ view, disabled, send }) {
+  const used = new Set(outputList(view).map((o) => o.target));
+  const free = (view.targets || []).filter((t) => !used.has(t.id));
+  if (!free.length) return null;
+  return (
+    <select className="pl-toolbar-select" value="" disabled={disabled} aria-label="Add an output"
+            title="Add an output with its own schema, loading into another part of the dataset"
+            onChange={(e) => e.target.value && send("POST", "/outputs", { target: e.target.value })}>
+      <option value="">+ Output</option>
+      {free.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+    </select>
+  );
+}
+
 function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEditStep, onAskAgent, onOpenSource,
                 fill, highlight, focus, proposal, trace, onClearTrace, onShowCheck }) {
   const d = view.definition;
@@ -204,8 +226,12 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   const gaps = useMemo(() => (!inDraft && steps.length ? view.design_gaps || [] : []), [inDraft, steps.length, view.design_gaps]);
   const busy = !!view.busy;
   const run = view.last_run;
-  const canDesign = d.schema?.status === "approved" && d.sources_status === "final";
-  const designWhy = d.schema?.status !== "approved" ? "Approve the target schema first" : "Mark the sources final first";
+  const multi = isMulti(view);
+  const extraOuts = useMemo(() => outputList(view).filter((o) => o.id !== "output"), [view]);
+  const mainOut = outputList(view)[0];
+  const named = multi || (view.targets || []).length > 1;   // a kind with several targets names its outputs
+  const canDesign = !unapprovedOutputs(view).length && d.sources_status === "final";
+  const designWhy = unapprovedOutputs(view).length ? `Approve the target schema first${multi ? " (every output's)" : ""}` : "Mark the sources final first";
   const editable = inDraft && !disabled;
   const flow = useReactFlow();
   const wrap = useRef(null);
@@ -222,11 +248,12 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   // Problems from the draft's check, by node id on the canvas.
   const problems = useMemo(() => {
     const errors = {}, warnings = {};
-    const key = (n) => (n === "output" ? "output" : n ? `step:${n}` : null);
+    const outs = new Set(extraOuts.map((o) => o.id));
+    const key = (n) => (n === "output" ? "output" : outs.has(n) ? outputNode(n) : n ? `step:${n}` : null);
     for (const e of view.draft?.check?.errors || []) if (key(e.node)) (errors[key(e.node)] ||= []).push(e.text);
     for (const w of view.draft?.check?.warnings || []) if (key(w.node)) (warnings[key(w.node)] ||= []).push(w.text);
     return { errors, warnings };
-  }, [view.draft]);
+  }, [view.draft, extraOuts]);
 
   // Which step the server is on, from progress lines like "Running s2 (parse)".
   const [running, setRunning] = useState(null);
@@ -234,8 +261,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   const [seenProgress, setSeenProgress] = useState(undefined);
   if (progress !== seenProgress) {
     setSeenProgress(progress);
-    const m = /^Running (\S+) /.exec(progress || "");
-    setRunning(progress === null ? null : m ? m[1] : /^Reading \d+ source/.test(progress) ? "sources" : running);
+    const m = /(?:^|: )Running (\S+) /.exec(progress || "");   // "Use permissions: Running t5 (use_table)" with several outputs
+    setRunning(progress === null ? null : m ? m[1] : /(?:^|: )Reading \d+ source/.test(progress) ? "sources" : running);
   }
 
   // Every change goes through act; errors show on the canvas.
@@ -273,7 +300,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       changed: new Set(proposal.steps.filter((s) => s.prop_state === "changed").map((s) => s.id)),
       removed: new Set(proposal.removed || []),
       sources: proposal.sources.filter((x) => x.prop_state === "new" && !haveSrc.has(x.id)),
-      all: proposal.steps, outputFrom: proposal.output_from, allSources: proposal.sources,
+      all: proposal.steps, outputFrom: proposal.output_from, outputsFrom: proposal.outputs_from || {}, allSources: proposal.sources,
     };
   }, [proposal, steps, sources]);
 
@@ -281,8 +308,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     ...(boxed ? ["srcbox", ...sources.map((s) => `src:${s.id}`)] : ["sources"]),
     ...(steps.length ? steps.map((s) => `step:${s.id}`) : ["steps"]),
     ...runs.map((r) => `parse:${r[0]}`),
-    ...(gaps.length ? ["gaps"] : []), "output",
-  ], [boxed, sources, steps, runs, gaps.length]);
+    ...(gaps.length ? ["gaps"] : []), "output", ...extraOuts.map((o) => outputNode(o.id)),
+  ], [boxed, sources, steps, runs, gaps.length, extraOuts]);
 
   const positions = useMemo(() => {
     const pos = {};
@@ -310,6 +337,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     if (!steps.length) pos.steps = layout.steps || { x: COL, y: 0 };
     if (gaps.length) pos.gaps = layout.gaps || { x: (last + 1) * COL, y: 0 };
     pos.output = layout.output || { x: (last + 1 + (gaps.length ? 1 : 0)) * COL, y: 0 };
+    extraOuts.forEach((o, i) => { pos[outputNode(o.id)] = layout[outputNode(o.id)] || { x: pos.output.x, y: pos.output.y + (i + 1) * ROW * 1.6 }; });
     // Proposed nodes: new sources under the sources box, new steps in a row below the graph.
     if (prop) {
       const bottom = Math.max(ROW, ...Object.entries(pos).filter(([k]) => !k.startsWith("src:") && !runOf[k.slice(5)]).map(([k, v]) => v.y + (k === "srcbox" ? srcH : 70)));
@@ -326,7 +354,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       prop.steps.forEach((x, i) => { pos[`prop:step:${x.id}`] = { x: (depthOf(x.id) + 1) * COL, y: bottom + 40 + (i % 2) * 10 }; });
     }
     return pos;
-  }, [boxed, srcH, sources, layout, model, steps, runs, runOf, gaps.length, prop]);
+  }, [boxed, srcH, sources, layout, model, steps, runs, runOf, gaps.length, prop, extraOuts]);
 
   // ── what to draw ───────────────────────────────────────────────────────────
   const status = useMemo(() => {
@@ -342,8 +370,12 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     st.steps = "idle";
     st.gaps = "bad";
     st.output = problems.errors.output ? "bad" : d.schema?.status !== "approved" ? "pending" : run ? (run.upto ? "pending" : "ok") : "idle";
+    for (const o of extraOuts) {
+      const id = outputNode(o.id);
+      st[id] = problems.errors[id] ? "bad" : o.schema?.status !== "approved" ? "pending" : o.last_run ? (o.last_run.upto ? "pending" : "ok") : "idle";
+    }
     return st;
-  }, [d.schema?.status, d.sources_status, sources, steps, view.sources, view.outputs, run, inDraft, problems, liveSteps]);
+  }, [d.schema?.status, d.sources_status, sources, steps, view.sources, view.outputs, run, inDraft, problems, liveSteps, extraOuts]);
 
   const reads = useCallback((s) => (s.config?.source_ids?.length ? s.config.source_ids : sources.map((x) => x.id)), [sources]);
 
@@ -413,11 +445,24 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     });
     if (gaps.length) add("gaps", "marker", { kind: "Missing", title: "No step fills", sub: cut(gaps.join(", "), 40), meta: "right-click for help", ghost: true });
     add("output", "output", {
-      kind: "Output", title: run && !run.upto && !inDraft ? "Final output" : "Output", connectable: editable,
+      kind: "Output", title: named ? mainOut.name : run && !run.upto && !inDraft ? "Final output" : "Output", connectable: editable,
       sub: inDraft ? (model.outputFrom.length ? `takes ${model.outputFrom.join(" + ")}` : "nothing wired in") : run ? `${run.coverage?.records ?? 0} records` : "no run yet",
       meta: inDraft ? null : run?.upto ? `preview to ${run.upto}` : run ? (run.at || "").slice(5, 16).replace("T", " ") : null,
       errs: problems.errors.output, prop: prop && JSON.stringify(prop.outputFrom) !== JSON.stringify(model.outputFrom) ? "changed" : null,
     }, { connectable: editable });
+    for (const o of extraOuts) {
+      const id = outputNode(o.id);
+      const from = model.outputsFrom[o.id] || [];
+      const r = o.last_run;
+      add(id, "output", {
+        kind: `Output · ${o.id}`, title: o.name, connectable: editable,
+        sub: inDraft ? (from.length ? `takes ${from.join(" + ")}` : "nothing wired in")
+          : o.schema?.status !== "approved" ? "schema to approve" : r ? `${r.coverage?.records ?? 0} records` : from.length ? "no run yet" : "nothing wired in",
+        meta: inDraft ? null : (o.design_gaps || []).length ? `no step fills ${cut(o.design_gaps.join(", "), 30)}` : r?.upto ? `preview to ${r.upto}` : null,
+        errs: problems.errors[id],
+        prop: prop && JSON.stringify(prop.outputsFrom[o.id] || []) !== JSON.stringify(from) ? "changed" : null,
+      }, { connectable: editable });
+    }
     // The agent's proposed nodes: dashed, not editable until added to the draft.
     for (const x of prop?.sources || []) {
       add(`prop:src:${x.id}`, "source", { kind: x.id, title: cut(x.label, 26), sub: x.kind === "grants_gov" ? "Grants.gov search" : cut(x.url, 30), prop: "new", status: "pending" },
@@ -430,7 +475,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     }
     return ns;
   }, [positions, status, sel, sources, steps, view, editable, disabled, running, busy, d.sources_status, canDesign, designWhy, gaps, run, model, inDraft,
-      problems, runs, runOf, srcH, highlight, prop, proposal]);
+      problems, runs, runOf, srcH, highlight, prop, proposal, named, mainOut, extraOuts]);
 
   const edges = useMemo(() => {
     const es = [];
@@ -452,11 +497,15 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       if (s.type === "extract") reads(s).forEach((sid) => edge(`src:${sid}`, `step:${s.id}`, "source", wired));
       if (s.type === "sql") (s.config?.tables || []).filter((t) => sources.some((x) => x.id === t))
         .forEach((sid) => edge(`src:${sid}`, `step:${s.id}`, "table", { deletable: editable }));
+      if (s.config?.source_id && sources.some((x) => x.id === s.config.source_id)) edge(`src:${s.config.source_id}`, `step:${s.id}`, "reads");
     }
     if (!steps.length) (sources.length ? sources.map((s) => `src:${s.id}`) : ["sources"]).forEach((n) => edge(n, "steps", "chain"));
     const ends = model.outputFrom.filter((i) => steps.some((s) => s.id === i)).map((i) => `step:${i}`);
     if (gaps.length) { ends.forEach((e) => edge(e, "gaps", "chain")); edge("gaps", "output", "chain"); }
     else ends.forEach((e) => edge(e, "output", "out", wired));
+    for (const o of extraOuts) {
+      for (const i of model.outputsFrom[o.id] || []) if (steps.some((s) => s.id === i)) edge(`step:${i}`, outputNode(o.id), "out", wired);
+    }
     // The proposal's new wires, dashed.
     if (prop) {
       const has = new Set(es.map((e) => `${e.source}>${e.target}`));
@@ -477,9 +526,10 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         if (x.type === "extract") for (const sid of x.config?.source_ids?.length ? x.config.source_ids : allSrc) ghost(srcNode(sid), sNode(x.id));
       }
       for (const i of prop.outputFrom) ghost(sNode(i), "output");
+      for (const o of extraOuts) for (const i of prop.outputsFrom[o.id] || []) ghost(sNode(i), outputNode(o.id));
     }
     return es;
-  }, [steps, sources, gaps.length, status, busy, editable, reads, model, inDraft, runOf, highlight, prop]);
+  }, [steps, sources, gaps.length, status, busy, editable, reads, model, inDraft, runOf, highlight, prop, extraOuts]);
 
   // React Flow keeps measurements and selection on the node objects; refresh the rest.
   const [nodes, setNodes, onNodesChange] = useNodesState(base);
@@ -519,12 +569,17 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   const stepOf = (nodeId) => steps.find((s) => `step:${s.id}` === nodeId);
   const sourceOf = (nodeId) => sources.find((s) => `src:${s.id}` === nodeId);
   const label = (s) => `${s.id} (${view.catalog[s.type]?.label || s.type})`;
-  const nodeOf = (id) => (id === "output" ? "output" : id.slice(5));
+  const nodeOf = (id) => nodeOutput(id) || id.slice(5);   // a step id, or an output id for an Output node
+  const outName = (oid) => (multi ? outputList(view).find((o) => o.id === oid)?.name || oid : "Output");
 
   const openDraft = () => send("POST", "/draft");
   const link = (a, b) => send("POST", "/draft/links", { source: a, target: b });
   const unlink = (a, b) => send("POST", "/draft/unlink", { source: a, target: b });
   const wire = (src, s) => {
+    if (view.catalog[s.type]?.config?.source_id) {   // a step that reads one source itself
+      if (s.config?.source_id === src.id) { flash(`${s.id} already reads ${src.id}.`); return null; }
+      return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, source_id: src.id } });
+    }
     if (s.type === "sql") {   // a CSV source joins a SQL step as a table
       if (!view.source_tables?.[src.id]) { flash(`${src.id} is not a CSV, so it cannot be a table: wire it to an Extract step.`); return null; }
       const tables = s.config?.tables || [];
@@ -559,13 +614,13 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     if (!editable || !source || !target || source === target) return;
     const src = sourceOf(source), from = stepOf(source), to = stepOf(target);
     if (src && to) return wire(src, to);
-    if (from && (to || target === "output")) return link(from.id, to ? to.id : "output");
+    if (from && (to || nodeOutput(target))) return link(from.id, to ? to.id : nodeOutput(target));
     flash("Wire sources into Extract steps, and steps into the steps (or Output) that take their records.");
   };
   const isValidConnection = ({ source, target }) => {
     if (!source || !target || source === target) return false;
     if (source.startsWith("src:")) return target.startsWith("step:");
-    return source.startsWith("step:") && (target.startsWith("step:") || target === "output");
+    return source.startsWith("step:") && (target.startsWith("step:") || !!nodeOutput(target));
   };
   const reconnect = async (old, next) => {
     if (!editable) return;
@@ -654,7 +709,10 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       "-",
       { label: "Insert step before…", run: () => addAt({ before: s.id }), ...lock },
       { label: "Insert step after…", run: () => addAt({ after: s.id }), ...lock },
-      { label: "Wire into Output", run: () => link(s.id, "output"), ...lock, ...(model.outputFrom.includes(s.id) ? off("Already wired into Output") : {}) },
+      ...outputList(view).map((o) => ({
+        label: `Wire into ${outName(o.id)}`, run: () => link(s.id, o.id), ...lock,
+        ...((model.outputsFrom[o.id] || []).includes(s.id) ? off(`Already wired into ${outName(o.id)}`) : {}),
+      })),
       { label: "Ask the agent about it…", run: () => onAskAgent(`About step ${label(s)} in the draft: `), ...lock },
       "-",
       { label: "Remove from draft", key: "Del", danger: true, run: () => removeStep(s), ...lock },
@@ -708,10 +766,18 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       "-",
       { label: d.sources_status === "final" ? "Remove source (in a draft)" : "Remove source", key: "Del", danger: true, run: () => removeSource(src), ...lock },
     ];
-    if (id === "output") return [
-      { label: "Open", run: () => onSelect("output") },
-      !inDraft && { label: "Run the whole pipeline", run: () => send("POST", "/run", {}), ...lock, ...(steps.length ? {} : off("No steps yet")) },
-    ];
+    if (nodeOutput(id)) {
+      const oid = nodeOutput(id);
+      const wiredIn = (model.outputsFrom[oid] || []).length;
+      return [
+        { label: "Open", run: () => onSelect(id) },
+        !inDraft && { label: "Run the whole pipeline", run: () => send("POST", "/run", {}), ...lock, ...(steps.length ? {} : off("No steps yet")) },
+        multi && { label: `Add step feeding ${outName(oid)}…`, run: () => addAt({ connect: true, output: oid }), ...lock, ...design },
+        oid !== "output" && "-",
+        oid !== "output" && { label: "Remove output", danger: true, run: () => send("DELETE", `/outputs/${oid}`), ...lock,
+                              ...(wiredIn ? off("Unwire its steps in a draft first") : {}) },
+      ];
+    }
     if (id === "gaps") return [
       { label: "Explain", run: () => flash(`No step produces ${gaps.join(", ")}. Add the steps that fill them in a draft, or ask the agent.`) },
       { label: "Edit pipeline to add them", run: openDraft, ...lock, ...design },
@@ -737,7 +803,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         <button disabled={disabled} onClick={() => addSource(null)}
                 title={d.sources_status === "final" ? "Goes into the draft; wire it to an Extract step" : "Fetched and added now"}>+ Source</button>
         <button disabled={disabled || !canDesign} onClick={() => addAt({ connect: true })}
-                title={canDesign ? (inDraft ? "Add a step at the end, feeding Output" : "Opens a draft") : designWhy}>+ Step</button>
+                title={canDesign ? (inDraft ? `Add a step at the end, feeding ${outName("output")}` : "Opens a draft") : designWhy}>+ Step</button>
+        {(view.targets || []).length > 1 && <AddOutput view={view} disabled={disabled} send={send} />}
         <span className="pl-toolbar-sep" />
         <button title="Put every node back in its default place" disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
       </div>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { call } from "../api.js";
-import { stepsModel } from "./ports.js";
+import { isMulti, outputList, ownerOf, stepView, stepsModel } from "./ports.js";
 
 // Add a step, or change one, two ways side by side: set it up yourself from the
 // catalog (the server checks it against the schema, the same as the agent's
@@ -8,8 +8,11 @@ import { stepsModel } from "./ports.js";
 //
 // Steps change in a draft: adding and editing here open one if needed.
 //
-// mode: { kind: "add", after?, before?, connect?, type?, at? } | { kind: "edit", stepId }
+// mode: { kind: "add", after?, before?, connect?, output?, type?, at? } | { kind: "edit", stepId }
 //     | { kind: "ask", text } (the agent half only)
+//
+// With several outputs a step works in the schema of the output it feeds: the
+// one its neighbour feeds, or the one picked under Wiring.
 
 const OPS = ["equals", "not_equals", "contains", "not_contains", "is_blank", "not_blank", "before", "after", "gte", "lte"];
 const NO_VALUE = ["is_blank", "not_blank"];
@@ -28,6 +31,11 @@ function initial(type, fields) {
     case "llm_fill": return { field: first, instruction: "", only_if_blank: true };
     case "geo_tie": return { field: geo };
     case "sql": return { query: "SELECT *\nFROM records", tables: null };
+    case "from_table": return { table: "blocks" };
+    case "spatial_lookup": return { layers: [59], field: "CLASS", writes: fields.find((f) => f.name === "zones")?.name || first,
+                                    buffer_m: 25, block_field: fields.find((f) => f.name === "block_id")?.name || first,
+                                    ...(fields.some((f) => f.name === "lookup_status") ? { status_field: "lookup_status" } : {}) };
+    case "use_table": return {};
     default: return {};
   }
 }
@@ -119,6 +127,16 @@ function MappingRows({ mapping, onChange }) {
       ))}
       <button type="button" className="link" onClick={() => update([...rows, ["", ""]])}>+ add a row</button>
     </div>
+  );
+}
+
+function SourcePick({ sources, kind, value, onChange }) {
+  const fit = sources.filter((s) => s.kind === kind);
+  return (
+    <select value={value || ""} onChange={(e) => onChange(e.target.value || null)}>
+      <option value="">—</option>
+      {fit.map((s) => <option key={s.id} value={s.id}>{s.id} · {s.label}</option>)}
+    </select>
   );
 }
 
@@ -358,6 +376,63 @@ function ConfigForm({ type, c, set, fields, sources, refTables, srcTables, sqlTy
     case "sql":
       return <SqlForm c={c} set={set} fields={fields} refTables={refTables} srcTables={srcTables} sqlTypes={sqlTypes}
                       pipelineId={pipelineId} inputs={inputs} />;
+    case "from_table":
+      return (
+        <>
+          <Row label="Data on file" hint="One record per row. Fields named like a column are filled from it.">
+            <select value={c.table || ""} onChange={(e) => put("table", e.target.value)}>
+              {Object.entries(refTables || {}).map(([k, r]) => <option key={k} value={k} title={r.description}>{k}</option>)}
+            </select>
+          </Row>
+          {c.table && refTables?.[c.table] && (
+            <div className="assess">{refTables[c.table].description} Columns: {Object.keys(refTables[c.table].columns).slice(0, 14).join(", ")}
+              {Object.keys(refTables[c.table].columns).length > 14 ? " …" : ""}</div>
+          )}
+        </>
+      );
+    case "spatial_lookup":
+      return (
+        <>
+          <Row label="Map source" hint="An ArcGIS service or layer source.">
+            <SourcePick sources={sources} kind="arcgis" value={c.source_id} onChange={(v) => put("source_id", v)} />
+          </Row>
+          <Row label="Layers" hint="Layer ids in the service, comma-separated (e.g. 59 for zoning, 65 prior zoning, 26, 46, 29, 31 cases).">
+            <input value={(c.layers || []).join(", ")}
+                   onChange={(e) => put("layers", e.target.value.split(/[ ,]+/).filter(Boolean).map(Number).filter((n) => !isNaN(n)))} />
+          </Row>
+          <Row label="Layer field" hint="The attribute to read (CLASS, CASE_NUM), or * for each polygon's name.">
+            <input value={c.field || ""} onChange={(e) => put("field", e.target.value)} />
+          </Row>
+          <Row label="Writes"><FieldSelect fields={fields} value={c.writes} onChange={(v) => put("writes", v)} /></Row>
+          <Row label="Block id field"><FieldSelect fields={fields} value={c.block_field || "block_id"} onChange={(v) => put("block_field", v)} /></Row>
+          <Row label="Buffer (m)" hint="How far from the block's centreline counts as fronting it (5-100).">
+            <input type="number" min={5} max={100} value={c.buffer_m ?? 25} onChange={(e) => put("buffer_m", Number(e.target.value))} />
+          </Row>
+          <Row label="Status field" hint="Optional, on the zones lookup: records found / no_zone / failed. A failed lookup is never stored as no zone.">
+            <FieldSelect fields={fields} allowBlank value={c.status_field} onChange={(v) => put("status_field", v || null)} />
+          </Row>
+        </>
+      );
+    case "use_table":
+      return (
+        <>
+          <Row label="Use-table source" hint="The enCodePlus page of §27-5101 (doc-view.aspx?secid=649).">
+            <SourcePick sources={sources} kind="url" value={c.source_id} onChange={(v) => put("source_id", v)} />
+          </Row>
+          <Row label="Tables" hint="None ticked reads (c), (d) and (e). The overlay table (f) is not read as permissions.">
+            <div className="pl-checks">
+              {["27-5101(c)", "27-5101(d)", "27-5101(e)"].map((t) => (
+                <label key={t}><input type="checkbox" checked={(c.tables || []).includes(t)}
+                       onChange={(e) => {
+                         const next = ["27-5101(c)", "27-5101(d)", "27-5101(e)"].filter((x) => (x === t ? e.target.checked : (c.tables || []).includes(x)));
+                         put("tables", next.length ? next : null);
+                       }} /> <code>{t}</code></label>
+              ))}
+            </div>
+          </Row>
+          <div className="assess">Fields named like a column are filled: use, use_group, use_category, standards, amended_through, and zone_&lt;code&gt; (zone_tac_c …).</div>
+        </>
+      );
     default:
       return <div className="assess">No settings.</div>;
   }
@@ -383,15 +458,25 @@ function cleanConfig(type, c, fields) {
 export default function StepDialog({ view, mode, act, onClose, onAdded }) {
   const model = stepsModel(view);          // the draft if one is open, else the applied steps
   const steps = model.steps;
-  const fields = view.definition.schema?.fields || [];
+  const multi = isMulti(view);
+  const outs = outputList(view);
   const sources = model.sources;
   const catalog = view.catalog || {};
   const editing = mode.kind === "edit" ? steps.find((s) => s.id === mode.stepId) : null;
 
+  // Where a new step is wired: "none" (wire it on the canvas), "end" / "end:o2" (feeds an output),
+  // "after:ID", "before:ID".
+  const endOf = (oid) => (oid && oid !== "output" ? `end:${oid}` : "end");
+  const [wiring, setWiring] = useState(mode.after ? `after:${mode.after}` : mode.before ? `before:${mode.before}` : mode.connect ? endOf(mode.output) : "none");
+  const wiredOutput = wiring.startsWith("end:") ? wiring.slice(4) : wiring === "end" ? "output" : null;
+  const near = editing?.id || (wiring.startsWith("after:") ? wiring.slice(6) : wiring.startsWith("before:") ? wiring.slice(7) : null);
+  // The schema the step works in: its output's.
+  const owner = near ? ownerOf(view, near) : wiredOutput || mode.output || "output";
+  const fields = near ? stepView(view, near).definition.schema?.fields || []
+    : outs.find((o) => o.id === owner)?.schema?.fields || view.definition.schema?.fields || [];
+
   const [type, setType] = useState(editing?.type || mode.type || "");
   const [config, setConfig] = useState(() => (editing ? { ...editing.config } : mode.type ? initial(mode.type, fields) : {}));
-  // Where a new step is wired: "none" (wire it on the canvas), "end" (feeds Output), "after:ID", "before:ID".
-  const [wiring, setWiring] = useState(mode.after ? `after:${mode.after}` : mode.before ? `before:${mode.before}` : mode.connect ? "end" : "none");
   const [note, setNote] = useState(editing?.note || "");
   const [ask, setAsk] = useState(() => {
     if (mode.kind === "ask") return mode.text || "";
@@ -404,7 +489,7 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
   const inputs = editing ? model.inputs[editing.id] || []
     : wiring.startsWith("after:") ? [wiring.slice(6)]
     : wiring.startsWith("before:") ? model.inputs[wiring.slice(7)] || []
-    : wiring === "end" ? model.outputFrom : [];
+    : wiredOutput ? model.outputsFrom[wiredOutput] || [] : [];
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -427,7 +512,7 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
       } else {
         const known = new Set([...steps.map((x) => x.id), ...(view.definition.steps || []).map((x) => x.id)]);
         const where = wiring.startsWith("after:") ? { after: wiring.slice(6) } : wiring.startsWith("before:") ? { before: wiring.slice(7) }
-          : { connect: wiring === "end" };
+          : { connect: !!wiredOutput, output: wiredOutput || owner };
         const r = await act("POST", "/draft/steps", { type, config: cfg, note: note || null, ...where }, { throwErrors: true });
         const added = (r?.draft?.steps || []).find((x) => !known.has(x.id));
         if (added) onAdded?.(added.id, mode.at);
@@ -487,8 +572,8 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
                 {!editing && (
                   <Row label="Wiring" hint="Several wires into one step merge their records. You can rewire on the canvas.">
                     <select value={wiring} onChange={(e) => setWiring(e.target.value)}>
-                      <option value="none">not wired yet: I'll wire it on the canvas</option>
-                      <option value="end">at the end, feeding Output</option>
+                      <option value="none">not wired yet: I'll wire it on the canvas{multi ? ` (works in ${outs.find((o) => o.id === owner)?.name}'s schema)` : ""}</option>
+                      {outs.map((o) => <option key={o.id} value={endOf(o.id)}>at the end, feeding {multi ? o.name : "Output"}</option>)}
                       {steps.map((x) => <option key={x.id} value={`after:${x.id}`}>right after {x.id} ({catalog[x.type]?.label || x.type})</option>)}
                       {mode.before && <option value={`before:${mode.before}`}>right before {mode.before}</option>}
                     </select>

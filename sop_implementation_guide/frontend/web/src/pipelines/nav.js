@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { unapprovedOutputs } from "./ports.js";
 
 // Two pages: the Pipeline canvas, where the design happens in the order the
 // user set (approve the schema on the Output node, mark the sources final, then
@@ -13,7 +14,7 @@ export const PAGES = [
 export function stageOf(view) {
   const d = view.definition;
   const steps = d.steps || [];
-  if (d.schema?.status !== "approved") return "schema";
+  if (unapprovedOutputs(view).length) return "schema";   // every output's schema
   if (d.sources_status !== "final") return "sources";
   if (steps.length === 0) return "steps";
   const open = steps.find((s) => s.status !== "approved");

@@ -2,6 +2,9 @@
 // contain. Required fields gate publishing; steps are designed only after the
 // schema is approved. The agent proposes fields from the chat; the planner can
 // load the defaults, accept blanks for a required field, and approve.
+//
+// With several outputs, view and act are the output's own (outputView,
+// outputAct in ports.js): each Output node has its schema.
 
 export default function Schema({ view, act, disabled }) {
   const schema = view.definition.schema || {};
@@ -13,9 +16,11 @@ export default function Schema({ view, act, disabled }) {
   if (!fields.length) {
     return (
       <div className="sch">
-        <div className="assess">No fields yet. Describe the fields you need to the agent, or start from the defaults.</div>
-        <button disabled={disabled} onClick={() => act("POST", "/schema/default")}>
-          Use default {view.kind_label.toLowerCase()} fields</button>
+        <div className="assess">No fields yet. Describe the fields you need to the agent{view.has_defaults === false ? "." : ", or start from the defaults."}</div>
+        {view.has_defaults !== false && (
+          <button disabled={disabled} onClick={() => act("POST", "/schema/default")}>
+            Use default {(view.target_label || view.kind_label).toLowerCase()} fields</button>
+        )}
       </div>
     );
   }

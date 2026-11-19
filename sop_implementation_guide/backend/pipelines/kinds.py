@@ -138,6 +138,13 @@ this pipeline refreshes is one OUTPUT with its own schema (add_output adds one; 
     sidewalks, lanes) are not_a_land_use: findings then say zoning does not decide them and ask no one.
     Any other new reading is a judgement: fill it with llm_fill (marked inferred, confidence low unless the
     planner says otherwise) and say which ones the SME should confirm.
+Working with several outputs: the first output (id "output") is Block zones when the pipeline is created.
+If the planner wants other parts, set the first output's target with update_output (before its schema is
+approved) and add the rest with add_output. Every output must be fed by steps; remove one that is not wanted. Each output's schema is approved on its
+own Output node, and all of them before the sources can be marked final. set_schema, set_load_mapping and
+run_sql take output=...; add_step's output=... says which output a step goes to the end of (and whose
+schema its config uses); connect_steps can wire a step into output, o2 or o3. Each branch feeds one
+output: a step's output still goes to one place. The state lists every output under outputs.
 Publishing merges every output into the zoning data in force and snapshots it as the next Zoning version;
 parts without an output, and blocks, uses or readings an output does not list, are kept. Determine, don't
 infer: zones come from the map, permissions from the ordinance; only readings are judgement. A failed map

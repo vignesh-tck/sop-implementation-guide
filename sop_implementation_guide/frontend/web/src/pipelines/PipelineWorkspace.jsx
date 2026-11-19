@@ -7,7 +7,8 @@ import RecordsView from "./RecordsView.jsx";
 import StepDialog from "./StepDialog.jsx";
 import SourceDialog from "./SourceDialog.jsx";
 import { SourceReaderDialog } from "./SourceReader.jsx";
-import { ancestorsOf, stepsModel } from "./ports.js";
+import { ancestorsOf, isMulti, nodeOutput, outputAct, outputList, outputNode, outputView, stepsModel, unapprovedOutputs } from "./ports.js";
+import OutputTabs from "./OutputTabs.jsx";
 
 // The Pipeline page: the canvas leads. The design starts here too: the target
 // schema is on the Output node, sources are added on the canvas and marked
@@ -27,16 +28,20 @@ function DraftBar({ view, act, disabled, onCheck, onAgent, onSelect }) {
   const d = view.draft;
   const prop = view.proposal;
   const def = view.definition;
-  const canDesign = def.schema?.status === "approved" && def.sources_status === "final";
+  const waiting = unapprovedOutputs(view);
+  const canDesign = !waiting.length && def.sources_status === "final";
   const propChip = prop && (
     <button type="button" className="ws-chip prop" onClick={onAgent}>Agent proposal · {prop.changes.length} change{prop.changes.length === 1 ? "" : "s"}</button>
   );
-  if (!d && def.schema?.status !== "approved") {
+  if (!d && waiting.length) {
+    const multi = isMulti(view);
     return (
       <div className="ws-bar">
-        <span className="ws-chip draft">1 · Approve the target schema</span>
-        <span className="assess">The fields every record must have. They’re on the Output node; the agent can propose them.</span>
-        <button className="primary" onClick={() => onSelect("output")}>Open the schema</button>
+        <span className="ws-chip draft">1 · Approve the target schema{multi ? `s (${waiting.length} of ${outputList(view).length} to go)` : ""}</span>
+        <span className="assess">{multi
+          ? `Each output has its own fields, on its Output node: ${waiting.map((o) => o.name).join(", ")} still need${waiting.length === 1 ? "s" : ""} approving.`
+          : "The fields every record must have. They’re on the Output node; the agent can propose them."}</span>
+        <button className="primary" onClick={() => onSelect(outputNode(waiting[0].id))}>Open {multi ? waiting[0].name : "the schema"}</button>
         {propChip}
       </div>
     );
@@ -97,7 +102,7 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
 
   // The selection follows the design: when a step is approved the next one opens.
   // Before the schema is approved, the Output node (which holds it) is open.
-  const stageSel = (st) => (st.startsWith("step:") ? st : st === "schema" ? "output" : null);
+  const stageSel = (st) => (st.startsWith("step:") ? st : st === "schema" ? outputNode(unapprovedOutputs(view)[0]?.id || "output") : null);
   const [sel, setSel] = useState(initialSel || stageSel(nav.stage));
   const [seenStage, setSeenStage] = useState(nav.stage);
   if (nav.stage !== seenStage) { setSeenStage(nav.stage); if (stageSel(nav.stage)) setSel(stageSel(nav.stage)); }
@@ -105,7 +110,8 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
   // The selected node rides along with the next message, unless removed.
   const [noContext, setNoContext] = useState(null);
   const context = sel && sel !== noContext && sel !== "gaps" ? sel : null;
-  const contextLabel = context === "output" ? "Output" : context?.startsWith("src:") ? context.slice(4)
+  const contextLabel = nodeOutput(context) ? (isMulti(view) ? outputList(view).find((o) => o.id === nodeOutput(context))?.name || "Output" : "Output")
+    : context?.startsWith("src:") ? context.slice(4)
     : context ? `${context.slice(5)} ${view.catalog[model.steps.find((s) => `step:${s.id}` === context)?.type]?.label || ""}` : "";
 
   const [compose, setCompose] = useState(null);       // text to put in the agent box
@@ -119,7 +125,9 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
   const [reader, setReader] = useState(null);         // a source whose full text is open
   const onOpenSource = (id) => id && setReader(id);
 
-  const known = (id) => id === "output" || model.steps.some((s) => `step:${s.id}` === id) || model.sources.some((s) => `src:${s.id}` === id);
+  const known = (id) => (nodeOutput(id) && outputList(view).some((o) => o.id === nodeOutput(id)))
+    || model.steps.some((s) => `step:${s.id}` === id) || model.sources.some((s) => `src:${s.id}` === id);
+  const [recordsOut, setRecordsOut] = useState("output");   // which output the Records view shows
   const focusNodes = (ids) => {
     const list = (ids || []).filter(Boolean);
     setMode("canvas");
@@ -160,9 +168,13 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
                 onAgent={() => { setMode("canvas"); setOpen(true); setTab("agent"); }} onSelect={(id) => focusNodes([id])} />
       {error && <div className="banner err ws-error" onClick={onClearError} role="alert">{error}</div>}
       {mode === "records" ? (
-        <RecordsView view={view} act={act} disabled={disabled} selected={recordSel} onSelect={setRecordSel}
-                     onShowOnCanvas={(recordId, field, step) => { setTrace({ recordId, field, step }); showRecords("final"); focusNodes([`step:${step}`]); }}
-                     onAsk={askAgent} />
+        <>
+          {isMulti(view) && <OutputTabs view={view} value={recordsOut} onChange={(o) => { setRecordsOut(o); setRecordSel(null); }} />}
+          <RecordsView key={recordsOut} view={outputView(view, recordsOut)} act={outputAct(act, recordsOut)} disabled={disabled}
+                       selected={recordSel} onSelect={setRecordSel}
+                       onShowOnCanvas={(recordId, field, step) => { setTrace({ recordId, field, step }); showRecords(recordsOut === "output" ? "final" : `final:${recordsOut}`); focusNodes([`step:${step}`]); }}
+                       onAsk={askAgent} />
+        </>
       ) : (
         <div className={"ws-body" + (sel && known(sel) ? " with-ins" : "")}>
           <div className="ws-canvas">

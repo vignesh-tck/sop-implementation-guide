@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { uploadFiles } from "../api.js";
 import { Message } from "./ChatPane.jsx";
 import { KIND_TEXT, cellState, isBlank, matchesFilter, recordName, recordStatus, short } from "./records.js";
+import { isMulti, outputAct, outputList, outputNode, outputView, stepView } from "./ports.js";
+
+// A node named by the server (a check item, a proposed change) as the canvas names it:
+// outputs are "output" and o2, o3 ...; steps are bare ids in check items.
+const canvasNode = (n, bareSteps = false) => (!n ? n : n === "output" || /^o\d+$/.test(n) ? outputNode(n)
+  : bareSteps && !n.includes(":") ? `step:${n}` : n);
 
 // Under the canvas: the agent (which proposes, never applies), the records the
 // last run produced with the evidence behind each value, and what Check found.
@@ -11,7 +17,7 @@ import { KIND_TEXT, cellState, isBlank, matchesFilter, recordName, recordStatus,
 function ProposalCard({ view, act, disabled, onFocus, onShow }) {
   const p = view.proposal;
   if (!p) return null;
-  const nodes = p.changes.map((c) => c.node).filter(Boolean);
+  const nodes = p.changes.map((c) => canvasNode(c.node)).filter(Boolean);
   return (
     <div className="ws-prop">
       <div className="ws-prop-head"><b>Proposed changes</b><span className="ws-count">{p.changes.length}</span>
@@ -22,7 +28,7 @@ function ProposalCard({ view, act, disabled, onFocus, onShow }) {
           {p.changes.map((c, i) => (
             <li key={i} className={"op " + ({ "+": "add", "~": "chg", "-": "del" }[c.op] || "")}>
               <span className="op-mark" aria-hidden="true">{c.op}</span>
-              <button type="button" className="link" onClick={() => onFocus([c.node])}>{c.text}</button>
+              <button type="button" className="link" onClick={() => onFocus([canvasNode(c.node)])}>{c.text}</button>
             </li>
           ))}
         </ul>
@@ -188,11 +194,15 @@ export function EvidencePane({ view, act, disabled, r, field, final, onOpen, onC
   );
 }
 
-function RecordsTab({ view, act, disabled, recordsOf, setRecordsOf, trace, setTrace, onOpenRecord }) {
+function RecordsTab({ view: whole, act: wholeAct, disabled, recordsOf, setRecordsOf, trace, setTrace, onOpenRecord }) {
+  // "final" is the first output's final records, "final:o2" another output's, else a step's output.
+  const finalOf = recordsOf === "final" ? "output" : recordsOf.startsWith("final:") ? recordsOf.slice(6) : null;
+  const final = finalOf != null;
+  const view = final ? outputView(whole, finalOf) : stepView(whole, recordsOf);
+  const act = final ? outputAct(wholeAct, finalOf) : wholeAct;
   const fields = view.definition.schema?.fields || [];
   const [q, setQ] = useState("");
   const [filt, setFilt] = useState("all");
-  const final = recordsOf === "final";
   const out = final ? null : view.outputs[recordsOf];
   const records = final ? view.last_records || [] : out?.records || [];
   const marks = final ? view.review_marks || {} : {};
@@ -210,7 +220,9 @@ function RecordsTab({ view, act, disabled, recordsOf, setRecordsOf, trace, setTr
           ))}
           <span className="spacer" />
           <select value={recordsOf} onChange={(e) => { setRecordsOf(e.target.value); setTrace(null); }} aria-label="Whose records">
-            <option value="final">Final output</option>
+            {isMulti(whole) ? outputList(whole).map((o) => (
+              <option key={o.id} value={o.id === "output" ? "final" : `final:${o.id}`}>Final output: {o.name}</option>
+            )) : <option value="final">Final output</option>}
             {withOutput.map((s) => <option key={s.id} value={s.id}>Output of {s.id} {view.catalog[s.type]?.label}</option>)}
           </select>
           <span className="assess">{final ? (run ? `${run.upto ? `Preview to ${run.upto}` : "Last run"} on the applied pipeline` : "No run yet")
@@ -255,7 +267,7 @@ function RecordsTab({ view, act, disabled, recordsOf, setRecordsOf, trace, setTr
 function CheckTab({ view, onFocus }) {
   const item = (x, k, cls) => (
     <li key={k} className={cls}>
-      {x.node ? <button type="button" className="link" onClick={() => onFocus([x.node === "output" ? "output" : `step:${x.node}`])}>{x.node === "output" ? "Output" : x.node}</button> : null}
+      {x.node ? <button type="button" className="link" onClick={() => onFocus([canvasNode(x.node, true)])}>{x.node === "output" ? "Output" : x.node}</button> : null}
       {x.node ? " · " : ""}{x.text}
     </li>
   );

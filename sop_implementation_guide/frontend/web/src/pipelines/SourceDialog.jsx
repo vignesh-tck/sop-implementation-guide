@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { uploadFiles } from "../api.js";
 
-// Add a source from the canvas: a URL, a Grants.gov search (funding), or an
-// uploaded file. While sources are being collected it is added straight away;
+// Add a source from the canvas: a URL, a Grants.gov search (funding), a county
+// map service (zoning: an ArcGIS REST service or layer), or an uploaded file. While sources are being collected it is added straight away;
 // once they are final it goes into the draft, read by no step until it is wired.
 
 export default function SourceDialog({ view, act, at, onClose, onAdded }) {
@@ -33,6 +33,8 @@ export default function SourceDialog({ view, act, at, onClose, onAdded }) {
       let r;
       if (tab === "url") {
         r = await act("POST", "/sources", { kind: "url", url: url.trim(), label: label.trim() || null }, { throwErrors: true });
+      } else if (tab === "arcgis") {
+        r = await act("POST", "/sources", { kind: "arcgis", url: url.trim(), label: label.trim() || null }, { throwErrors: true });
       } else if (tab === "grants_gov") {
         r = await act("POST", "/sources", { kind: "grants_gov", query: query.trim(), label: label.trim() || null }, { throwErrors: true });
       } else {
@@ -49,7 +51,8 @@ export default function SourceDialog({ view, act, at, onClose, onAdded }) {
     }
   }
 
-  const ready = tab === "url" ? /^https?:\/\//i.test(url.trim()) : tab === "grants_gov" ? !!query.trim() : files.length > 0;
+  const ready = tab === "url" ? /^https?:\/\//i.test(url.trim()) : tab === "arcgis" ? /^https:\/\/.+\/rest\/services\//i.test(url.trim())
+    : tab === "grants_gov" ? !!query.trim() : files.length > 0;
   return (
     <div className="pl-modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="pl-modal narrow" role="dialog" aria-modal="true" aria-label="Add a source">
@@ -62,7 +65,8 @@ export default function SourceDialog({ view, act, at, onClose, onAdded }) {
         <div className="pl-modal-body">
           <section className="pl-modal-col">
             <div className="pl-tabs" role="tablist">
-              {[["url", "URL"], ...(view.kind === "funding" ? [["grants_gov", "Grants.gov search"]] : []), ["file", "Upload a file"]].map(([k, t]) => (
+              {[["url", "URL"], ...(view.kind === "funding" ? [["grants_gov", "Grants.gov search"]] : []),
+                ...(view.kind === "zoning" ? [["arcgis", "County map (ArcGIS)"]] : []), ["file", "Upload a file"]].map(([k, t]) => (
                 <button key={k} type="button" role="tab" aria-selected={tab === k} className={"pl-tab" + (tab === k ? " on" : "")} onClick={() => setTab(k)}>{t}</button>
               ))}
             </div>
@@ -70,6 +74,12 @@ export default function SourceDialog({ view, act, at, onClose, onAdded }) {
               <label className="pl-form-row"><span className="pl-form-label">URL</span>
                 <input autoFocus placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)}
                        onKeyDown={(e) => e.key === "Enter" && ready && add()} /></label>
+            )}
+            {tab === "arcgis" && (
+              <label className="pl-form-row"><span className="pl-form-label">Service URL</span>
+                <input autoFocus placeholder="https://…/arcgis/rest/services/…/MapServer" value={url} onChange={(e) => setUrl(e.target.value)}
+                       onKeyDown={(e) => e.key === "Enter" && ready && add()} />
+                <span className="assess">A MapServer or one of its layers, e.g. the county's ZoningCertificationLetter service. Its layers are listed when it is read.</span></label>
             )}
             {tab === "grants_gov" && (
               <label className="pl-form-row"><span className="pl-form-label">Keywords</span>

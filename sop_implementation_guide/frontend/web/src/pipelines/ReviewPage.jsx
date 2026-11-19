@@ -1,6 +1,8 @@
 import { Fragment, useRef, useState } from "react";
 import { call } from "../api.js";
 import Stepper from "./Stepper.jsx";
+import OutputTabs from "./OutputTabs.jsx";
+import { isMulti, outputAct, outputList, outputNode, outputView } from "./ports.js";
 import { AgentTab } from "./Drawer.jsx";
 import { attention, isBlank, isEdited, short } from "./records.js";
 
@@ -61,7 +63,10 @@ function gateActions(text, view, h) {
     };
   }
   if (text.includes("on the Output node")) {
-    return { text: <>Choose which column holds the programme name: the ▾ under its column name in the table below.</>,
+    const col = (text.match(/`([^`]+)`/) || [])[1];
+    return { text: col && col !== "program_name"
+               ? <>Choose which column fills <code>{col}</code>: the ▾ under its column name in the table below.</>
+               : <>Choose which column holds the programme name: the ▾ under its column name in the table below.</>,
              buttons: [<button key="m" onClick={h.showTable}>Show the table</button>] };
   }
   const req = text.match(/^Required field `([^`]+)` is blank/);
@@ -75,7 +80,7 @@ function gateActions(text, view, h) {
   if (/not been run|run it again|preview up to|had errors|produced no records/.test(text)) {
     return { buttons: [<button key="r" disabled={h.disabled} onClick={h.run}>Run pipeline</button>] };
   }
-  if (/schema/i.test(text)) return { buttons: [<button key="g" onClick={() => h.openNode("output")}>Open the schema</button>] };
+  if (/schema/i.test(text)) return { buttons: [<button key="g" onClick={() => h.openNode(h.outputNode || "output")}>Open the schema</button>] };
   if (/source|step/i.test(text)) return { buttons: [<button key="g" onClick={() => h.openNode(null)}>Open the pipeline</button>] };
   return { buttons: [] };
 }
@@ -139,7 +144,9 @@ function StatusCard({ view, state, handlers }) {
     }
     if (steps.length && steps.every((s) => s.status === "approved")) items.push(<Check key="s" ok>All steps approved</Check>);
     if (required.length && required.every((c) => c.field)) {
-      items.push(<Check key="m" ok>{required.map((c) => <Fragment key={c.column}><code>{c.field}</code> is the programme name (<code>{c.column}</code>)</Fragment>)}</Check>);
+      items.push(<Check key="m" ok>{required.map((c) => (view.kind === "funding"
+        ? <Fragment key={c.column}><code>{c.field}</code> is the programme name (<code>{c.column}</code>)</Fragment>
+        : <Fragment key={c.column}><code>{c.field}</code> fills <code>{c.column}</code>{" "}</Fragment>))}</Check>);
     }
     if (records) items.push(<Check key="r" ok>{records} records {state === "ready" ? `ready · ${changeText(review)}` : "produced"}</Check>);
   }
@@ -157,7 +164,7 @@ function StatusCard({ view, state, handlers }) {
       <div className="pub-status-note">
         {state === "published" ? "Run again to pick up changes. The next run stops here and waits for your review."
           : state === "blocked" ? "Fix the items above, then run again. Approve unlocks once every check passes."
-          : `A run never publishes. Nothing reaches the ${kind.toLowerCase()} catalogue or the blocks until you approve it here.`}
+          : `A run never publishes. Nothing reaches the ${kind.toLowerCase()} ${view.kind === "zoning" ? "data" : "catalogue"} or the blocks until you approve it here.`}
       </div>
       {state === "ready" && review?.since && <ChangeList review={review} kind={kind} />}
     </div>
@@ -503,15 +510,48 @@ function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
 
 // ── Publish ──────────────────────────────────────────────────────────────────
 
+// What a zoning publish would change against the zoning data in force.
+function ZoningDiff({ diff }) {
+  const ut = diff.use_table || {};
+  const rd = diff.readings || { added: [], changed: [], removed: [] };
+  return (
+    <div className="pl-diff">
+      {diff.problems?.length > 0 && (
+        <div className="banner err">Publishing is refused until these are fixed:
+          <ul>{diff.problems.map((p, i) => <li key={i}>{p}</li>)}</ul></div>
+      )}
+      <div>Against the zoning data in force{diff.base_version ? ` (Zoning v${diff.base_version.version})` : ""}:</div>
+      {diff.outputs?.includes("use_permissions") && (
+        <div className="assess">Use table: <b>{ut.cells_changed_count || 0}</b> cell(s) changed{ut.uses_added?.length ? `, ${ut.uses_added.length} use(s) added` : ""}
+          {ut.old_amended_through !== ut.new_amended_through ? ` · current through ${ut.old_amended_through} → ${ut.new_amended_through}` : ` · current through ${ut.new_amended_through}`}</div>
+      )}
+      {diff.outputs?.includes("readings") && (
+        <div className="assess">Readings: <b>{rd.added.length}</b> new · <b>{rd.changed.length}</b> changed · <b>{rd.removed.length}</b> removed
+          {rd.added.length > 0 && ` (${rd.added.slice(0, 6).map((a) => `${a.rec_label}${a.governed_by === "not_a_land_use" ? ": not a land use" : ""}`).join("; ")}${rd.added.length > 6 ? " …" : ""})`}</div>
+      )}
+      {diff.outputs?.includes("block_zones") && (
+        <div className="assess">Blocks: <b>{diff.blocks_looked_up}</b> looked up · <b>{diff.blocks_changed?.length || 0}</b> changed
+          {diff.lookup_failures?.length ? ` · ${diff.lookup_failures.length} failed and keep their zones` : ""}</div>
+      )}
+      <div className="assess">Findings: <b>{diff.outcome_flips?.length || 0}</b> recommendation × zone outcome(s) change ·
+        {" "}<b>{diff.score_changes?.length || 0}</b> block score(s) change</div>
+      {diff.score_changes?.length > 0 && <div className="assess">{diff.score_changes.slice(0, 8).map((s) => `Block ${s.id}: ${s.old ?? "—"} → ${s.new ?? "—"}`).join("; ")}</div>}
+      <div className="assess">{diff.note}</div>
+    </div>
+  );
+}
+
 function PublishDialog({ view, act, disabled, onClose }) {
   const kind = view.kind_label;
+  const zoningKind = view.kind === "zoning";
   const slug = (view.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
   const [name, setName] = useState(`${slug || "pipeline"}_v${(view.loads?.length || 0) + 1}`);
   const [by, setBy] = useState(() => pref("pl.publisher", ""));
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
-  const records = view.last_run?.coverage?.records ?? 0;
-  const review = view.last_run?.review;
+  const lasts = outputList(view).map((o) => o.last_run);
+  const records = lasts.reduce((n, l) => n + (l?.coverage?.records ?? 0), 0);
+  const review = isMulti(view) ? null : view.last_run?.review;
 
   async function compare() {
     setDiffError(null);
@@ -528,13 +568,15 @@ function PublishDialog({ view, act, disabled, onClose }) {
         <div className="pl-modal-head"><b>Approve & publish as {kind} v{view.next_dataset_version}</b><span className="spacer" />
           <button className="link" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="pub-dialog-body">
-          <div>Publishes <b>{records} records</b>{review ? ` (${changeText(review)})` : ""} into the {kind.toLowerCase()} catalogue as a new, numbered version.
+          <div>Publishes <b>{records} records</b>{review ? ` (${changeText(review)})` : ""}{isMulti(view) ? ` from ${outputList(view).map((o) => o.name).join(", ")}` : ""}
+            {" "}into the {kind.toLowerCase()} {zoningKind ? "data in force" : "catalogue"} as a new, numbered version.
             Blocks stay on the version they were analysed with until they’re re-run.</div>
           <label><span>Version name</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label><span>Approved by</span><input value={by} placeholder="Your name" onChange={(e) => setBy(e.target.value)} /></label>
-          <button className="link" onClick={compare} disabled={disabled}>Compare with the whole catalogue first</button>
+          <button className="link" onClick={compare} disabled={disabled}>Compare with the whole {zoningKind ? "zoning data" : "catalogue"} first</button>
           {diffError && <div className="banner err">{diffError}</div>}
-          {diff && (
+          {diff && zoningKind && <ZoningDiff diff={diff} />}
+          {diff && !zoningKind && (
             <div className="pl-diff">
               <div>Against {diff.base_version ? `${kind} v${diff.base_version.version}` : "an empty catalogue"} ({diff.catalogue_size} programme(s)):{" "}
                 <b>{diff.added.length}</b> new · <b>{diff.changed.length}</b> changed · <b>{diff.unchanged}</b> unchanged</div>
@@ -563,7 +605,8 @@ function History({ view }) {
       {view.loads.map((l) => (
         <li key={l.id}>
           <div><b>{kind} v{l.dataset_version}</b>{l.name ? ` “${l.name}”` : ""}</div>
-          <div className="assess">{l.coverage?.records ?? "?"} records · pipeline def v{l.definition_version}</div>
+          <div className="assess">{l.coverage?.records ?? (l.coverage && typeof l.coverage === "object"
+            ? Object.values(l.coverage).reduce((n, c) => n + (c?.records || 0), 0) : "?")} records · pipeline def v{l.definition_version}</div>
           <div className="assess">approved {when(l.created_at)}{l.created_by ? ` by ${l.created_by}` : ""}</div>
         </li>
       ))}
@@ -603,10 +646,17 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
   const [publishing, setPublishing] = useState(false);
   const setSide = (o) => { setSideState(o); keep("pl.review.side", o); };
 
-  const last = view.last_run;
-  const published = last?.review?.published;
-  const state = !last ? "none" : published ? "published" : view.gate.length ? "blocked" : "ready";
-  const records = last?.coverage?.records ?? 0;
+  // With several outputs the page reviews one output at a time (its tab), but runs
+  // and publishes them together: the header, the chip and Approve & publish are the pipeline's.
+  const multi = isMulti(view);
+  const [oid, setOid] = useState("output");
+  const ov = outputView(view, oid);
+  const oact = outputAct(act, oid);
+  const lasts = outputList(view).map((o) => o.last_run);
+  const published = lasts[0]?.review?.published;
+  const state = lasts.some((l) => !l) ? "none" : lasts.every((l) => l.review?.published) ? "published" : view.gate.length ? "blocked" : "ready";
+  const ostate = !ov.last_run ? "none" : ov.last_run.review?.published ? "published" : ov.gate.length ? "blocked" : "ready";
+  const records = lasts.reduce((n, l) => n + (l?.coverage?.records ?? 0), 0);
   const run = (fresh) => act("POST", "/run", fresh ? { fresh: true } : {});
 
   const chip = view.busy ? ["", view.busy === "run" ? "Running…" : "Agent working…"]
@@ -614,12 +664,12 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
         blocked: ["warn", "Not ready to publish"], ready: ["ready", "Ready for review"] }[state];
 
   const handlers = {
-    act, disabled, openNode: onOpenNode, run: () => run(false),
+    act: oact, disabled, openNode: onOpenNode, run: () => run(false), outputNode: outputNode(oid),
     showTable: () => document.getElementById("pub-output")?.scrollIntoView({ behavior: "smooth" }),
     showAttention: () => { setFilter("attention"); document.getElementById("pub-output")?.scrollIntoView({ behavior: "smooth" }); },
   };
   const ask = (r) => {
-    const name = r.values?.[view.definition.schema?.fields?.[0]?.name];
+    const name = r.values?.[ov.definition.schema?.fields?.[0]?.name];
     setCtx(`${r.id}${name ? ` ${short(name, 50)}` : ""}`);
     setSide(true); setTab("agent"); setCompose({ text: "", at: Date.now() });
   };
@@ -645,8 +695,9 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
       <div className={"pub-body" + (side ? " with-side" : "")}>
         <div className="pub-main">
           <div className="pub-scroll">
-            <StatusCard view={view} state={state} handlers={handlers} />
-            <OutputCard view={view} act={act} disabled={disabled} filter={filter} setFilter={setFilter} onAsk={ask} />
+            {multi && <OutputTabs view={view} value={oid} onChange={(o) => { setOid(o); setFilter("all"); }} />}
+            <StatusCard view={ov} state={multi ? ostate : state} handlers={handlers} />
+            <OutputCard key={oid} view={ov} act={oact} disabled={disabled} filter={filter} setFilter={setFilter} onAsk={ask} />
           </div>
           {state === "ready" && (
             <div className="pub-publish-bar">

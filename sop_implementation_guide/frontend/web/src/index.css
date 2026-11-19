@@ -876,6 +876,7 @@ main.view.pl-view {
 .pl-wire.chain path.react-flow__edge-path { stroke-dasharray: 4 4; }
 .pl-wire.source path.react-flow__edge-path { stroke-dasharray: 2 3; }
 .pl-wire.table path.react-flow__edge-path { stroke-dasharray: 8 3 2 3; }
+.pl-wire.reads path.react-flow__edge-path { stroke-dasharray: 2 3; }   /* a source a map-lookup or use-table step reads */
 .pl-wire.implicit path.react-flow__edge-path { stroke-dasharray: 1 5; opacity: .7; }
 .pl-wire.done path.react-flow__edge-path { stroke: var(--teal); stroke-dasharray: none; }
 .react-flow__edge.selected .pl-wire path.react-flow__edge-path,
@@ -1171,6 +1172,15 @@ button.ws-chip.prop { background: color-mix(in srgb, var(--orange) 12%, var(--su
 .pl-toolbar button { border: none; background: none; font-size: .8rem; font-weight: 500; padding: .3rem .6rem; }
 .pl-toolbar button:hover:not(:disabled) { background: var(--surface-2); }
 .pl-toolbar-sep { width: 1px; height: 1.1rem; background: var(--border); margin: 0 .15rem; }
+.pl-toolbar-select { border: none; background: none; font-size: .8rem; font-weight: 500; padding: .3rem .4rem; color: inherit; cursor: pointer; }
+.pl-toolbar-select:hover:not(:disabled) { background: var(--surface-2); }
+/* Several outputs: one tab per output above the records and the review table. */
+.out-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 .6rem; }
+.out-tabs button { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .7rem; font-size: .82rem; border-radius: 999px; }
+.out-tabs button.on { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--accent, #6055C9); font-weight: 650; }
+.out-tabs .n { font-variant-numeric: tabular-nums; color: var(--muted, #6b7a8c); }
+.out-tabs .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--warn, #d9a03f); }
+.out-tabs .dot.ok { background: var(--ok, #18B4A5); }
 .pl-trace-chip {
   position: absolute; top: .7rem; right: .7rem; z-index: 6; display: flex; align-items: center; gap: .4rem; font-size: .8rem;
   padding: .3rem .6rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);

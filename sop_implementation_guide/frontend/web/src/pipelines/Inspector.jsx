@@ -2,7 +2,7 @@ import { useState } from "react";
 import LoadMap from "./LoadMap.jsx";
 import Schema from "./Schema.jsx";
 import StepPorts, { DraftPorts } from "./StepPorts.jsx";
-import { ancestorsOf, stepsModel } from "./ports.js";
+import { ancestorsOf, isMulti, nodeOutput, outputAct, outputList, outputView, stepView, stepsModel } from "./ports.js";
 import { attention } from "./records.js";
 
 // The selected node, on the right of the canvas: what it does, its instructions
@@ -101,6 +101,19 @@ function StepSettings({ step, setConfig, disabled }) {
       <Toggle on locked>Values are marked as model judgements</Toggle>
     </Section>
   );
+  if (step.type === "spatial_lookup") return (
+    <Section title="Settings">
+      <div className="assess">Layers {(c.layers || []).join(", ") || "of the source"} · field <code>{c.field}</code> · within {c.buffer_m || 25} m → <code>{c.writes}</code></div>
+      <Toggle on locked>A failed lookup is left blank{c.status_field ? ` and marked failed in ${c.status_field}` : ""}, never stored as no zone</Toggle>
+      {c.status_field && <Toggle on locked>A layer with no polygons around the blocks stops the run</Toggle>}
+    </Section>
+  );
+  if (step.type === "use_table") return (
+    <Section title="Settings">
+      <Toggle on locked>Zone columns are checked against the ordinance's headers before any value is filed</Toggle>
+      <Toggle on locked>Values are read exactly from the table, no model</Toggle>
+    </Section>
+  );
   if (step.type === "geo_tie") return (
     <Section title="Settings"><Toggle on locked>Allowed values stay fixed (federal, state:MD, county, tract, unknown)</Toggle></Section>
   );
@@ -120,7 +133,8 @@ function StepSettings({ step, setConfig, disabled }) {
   );
 }
 
-function StepInspector({ view, act, disabled, step, model, onClose, onSelect, onEditStep, onShowRecords }) {
+function StepInspector({ view: whole, act, disabled, step, model, onClose, onSelect, onEditStep, onShowRecords }) {
+  const view = stepView(whole, step.id);   // the step works in its output's schema
   const cat = view.catalog[step.type] || {};
   const live = !model.draft;
   const liveStep = (view.definition.steps || []).find((s) => s.id === step.id);
@@ -134,9 +148,10 @@ function StepInspector({ view, act, disabled, step, model, onClose, onSelect, on
   const blocked = model.steps.filter((x) => before.has(x.id) && (view.definition.steps || []).find((y) => y.id === x.id)?.status !== "approved").map((x) => x.id);
   const fields = view.definition.schema?.fields || [];
   const needLook = (out?.records || []).filter((r) => attention(r, fields).length).length;
-  const feedsAlone = model.outputFrom.length === 1 && model.outputFrom[0] === step.id;
+  const feedsAlone = Object.values(model.outputsFrom).some((f) => f.length === 1 && f[0] === step.id);
   const setConfig = (patch) => act("PATCH", `/draft/steps/${step.id}`, { config: { ...step.config, ...patch } });
-  const sources = step.type === "extract" ? (step.config?.source_ids?.length ? step.config.source_ids : model.sources.map((s) => s.id)) : [];
+  const sources = step.type === "extract" ? (step.config?.source_ids?.length ? step.config.source_ids : model.sources.map((s) => s.id))
+    : step.config?.source_id ? [step.config.source_id] : [];
   const reads = [
     ...ins.map((i) => [i, `${i} ${view.catalog[model.steps.find((x) => x.id === i)?.type]?.label || ""}`, `step:${i}`]),
     ...sources.map((s) => [s, s, `src:${s}`]),
@@ -243,24 +258,42 @@ function SourceInspector({ view, act, disabled, src, model, onClose, onSelect, o
   );
 }
 
-function OutputInspector({ view, act, disabled, model, onClose, onSelect, onPublish, onShowRecords }) {
+function OutputInspector({ view: whole, act: wholeAct, oid, disabled, model, onClose, onSelect, onPublish, onShowRecords }) {
+  const view = outputView(whole, oid);       // this output's schema, run, mapping and gate
+  const act = outputAct(wholeAct, oid);
+  const multi = isMulti(whole);
   const run = view.last_run;
   const check = view.draft?.check;
-  const errs = model.draft ? (check?.errors || []).filter((e) => e.node === "output") : [];
-  const warns = model.draft ? (check?.warnings || []).filter((e) => e.node === "output") : [];
+  const errs = model.draft ? (check?.errors || []).filter((e) => e.node === oid) : [];
+  const warns = model.draft ? (check?.warnings || []).filter((e) => e.node === oid) : [];
+  const takes = model.outputsFrom[oid] || [];
+  const wired = takes.length || (whole.graph?.outputs_from?.[oid] || []).length;
+  const remove = () => window.confirm(`Remove the output ${view.output_name}?`) && wholeAct("DELETE", `/outputs/${oid}`);
   return (
     <>
       <div className="ins-head">
-        <div className="ins-tags"><code className="pl-id">out</code><span className="ins-kind rule">Output</span></div>
+        <div className="ins-tags"><code className="pl-id">{oid === "output" ? "out" : oid}</code><span className="ins-kind rule">Output</span>
+          {multi && view.target_label && <span className="ins-badge">{`loads into ${view.target_label}`}</span>}</div>
         <button className="link" onClick={onClose} aria-label="Close">✕</button>
       </div>
-      <h3 className="ins-title">Output</h3>
+      <h3 className="ins-title">{multi || (whole.targets || []).length > 1 ? outputList(whole).find((o) => o.id === oid)?.name || "Output" : "Output"}</h3>
       <div className="ins-body">
+        {(whole.targets || []).length > 1 && view.definition.schema?.status !== "approved" && (
+          <Section title="Loads into">
+            <select value={outputList(whole).find((o) => o.id === oid)?.target || ""} disabled={disabled}
+                    onChange={(e) => wholeAct("PATCH", `/outputs/${oid}`, { target: e.target.value })}>
+              {whole.targets.map((t) => (
+                <option key={t.id} value={t.id} disabled={outputList(whole).some((o) => o.id !== oid && o.target === t.id)}>{t.label}</option>
+              ))}
+            </select>
+            <div className="assess">Which part of the {whole.kind_label.toLowerCase()} data this output refreshes. It can change until its schema is approved.</div>
+          </Section>
+        )}
         <Section title={<>Target schema {view.definition.schema?.status === "approved" ? <span className="tag ok">approved</span>
           : (view.definition.schema?.fields || []).length ? <span className="tag edited">needs approval</span> : null}</>}>
           <Schema view={view} act={act} disabled={disabled} />
         </Section>
-        <Section title="Takes"><Chips items={model.outputFrom.map((i) => [i, i, `step:${i}`])} onPick={onSelect} /></Section>
+        <Section title="Takes"><Chips items={takes.map((i) => [i, i, `step:${i}`])} onPick={onSelect} /></Section>
         {(errs.length > 0 || warns.length > 0) && (
           <ul className="pl-check-list">
             {errs.map((e, k) => <li key={"e" + k} className="err">{e.text}</li>)}
@@ -273,14 +306,17 @@ function OutputInspector({ view, act, disabled, model, onClose, onSelect, onPubl
             <div>{run.coverage?.records ?? 0} records{" "}<button className="link" onClick={() => onShowRecords("final")}>see records</button></div>
           </>
         ) : <span className="assess">No run yet.</span>}</Section>
-        <Section title="Publishing">{view.gate?.length ? <ul className="pl-warn-list">{view.gate.map((g, k) => <li key={k}>{g}</li>)}</ul> : "Ready for review."}</Section>
+        <Section title="Publishing">{view.gate?.length ? <ul className="pl-warn-list">{view.gate.map((g, k) => <li key={k}>{g}</li>)}</ul>
+          : multi ? "This output is ready for review." : "Ready for review."}</Section>
         {view.load_map && <Section title="Catalogue mapping"><LoadMap view={view} act={act} disabled={disabled} /></Section>}
       </div>
       <div className="ins-foot">
-        <button disabled={disabled || !(view.definition.steps || []).length} onClick={() => act("POST", "/run", {})}>Run the whole pipeline</button>
+        <button disabled={disabled || !(view.definition.steps || []).length} onClick={() => wholeAct("POST", "/run", {})}>Run the whole pipeline</button>
+        {oid !== "output" && <button className="link danger" disabled={disabled || !!wired} onClick={remove}
+                                     title={wired ? "Unwire its steps in a draft first" : ""}>Remove output</button>}
         <span className="spacer" />
-        <button className="primary" disabled={!!view.gate?.length} onClick={onPublish}
-                title={view.gate?.length ? "Not ready yet: see Publishing" : ""}>Review & publish →</button>
+        <button className="primary" disabled={!!whole.gate?.length} onClick={onPublish}
+                title={whole.gate?.length ? "Not ready yet: see Publishing" : ""}>Review & publish →</button>
       </div>
     </>
   );
@@ -297,9 +333,12 @@ export default function Inspector({ view, act, disabled, sel, onClose, onSelect,
     const src = model.sources.find((s) => `src:${s.id}` === sel);
     if (src) body = <SourceInspector view={view} act={act} disabled={disabled} src={src} model={model} onClose={onClose}
                                      onSelect={onSelect} onOpenSource={onOpenSource} />;
-  } else if (sel === "output") {
-    body = <OutputInspector view={view} act={act} disabled={disabled} model={model} onClose={onClose} onSelect={onSelect}
-                            onPublish={onPublish} onShowRecords={onShowRecords} />;
+  } else if (nodeOutput(sel)) {
+    const oid = nodeOutput(sel);
+    if (outputList(view).some((o) => o.id === oid)) {
+      body = <OutputInspector key={oid} view={view} act={act} oid={oid} disabled={disabled} model={model} onClose={onClose} onSelect={onSelect}
+                              onPublish={onPublish} onShowRecords={(of) => onShowRecords(of === "final" && oid !== "output" ? `final:${oid}` : of)} />;
+    }
   }
   if (!body) return null;
   return <aside className="ws-inspector" aria-label="Selected node">{body}</aside>;

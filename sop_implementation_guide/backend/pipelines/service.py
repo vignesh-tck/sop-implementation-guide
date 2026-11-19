@@ -1175,11 +1175,18 @@ def update_output(db: Client, pipeline_id: int, output: str, name: str | None = 
             raise PipelineError("Change what an output loads into before approving its schema.")
         if any(kinds.target_id(p["kind"], outputs.project(d, o)) == target for o in outputs.ids(d) if o != output):
             raise PipelineError(f"An output already loads into {targets[target]['label']}.")
+        old = kinds.target_id(p["kind"], outputs.project(d, output))
+        if not e.get("name") or e.get("name") == (targets.get(old) or {}).get("label"):
+            e["name"] = targets[target]["label"]   # a name that was the target's follows it
         e["target"] = target
         e.pop("load_map", None)
+        if (e.get("schema") or {}).get("fields"):
+            e["schema"] = {"status": None, "fields": []}   # the old target's fields would not fit
+            _invalidate_from(_out(p, output), 0)
+        event(db, pipeline_id, f"{_who(by_user)} set {output} to load into {targets[target]['label']}.")
     if name is not None and name.strip():
         e["name"] = name.strip()[:60]
-    _save(db, p)
+    _save(db, p, state=p["state"])
     return e
 
 

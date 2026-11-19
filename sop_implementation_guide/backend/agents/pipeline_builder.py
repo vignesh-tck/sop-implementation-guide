@@ -24,7 +24,7 @@ from typing import Any
 import anthropic
 
 from backend.db.session import get_supabase
-from backend.pipelines import engine, graph, kinds, service
+from backend.pipelines import engine, graph, kinds, outputs, service
 from backend.pipelines.engine import PipelineError
 from backend.repositories.pipelines import PipelineMessageRepository, PipelineRepository
 from backend.tools.llm_extractor import _get_client
@@ -162,9 +162,32 @@ Step catalog (the only step types you can add):
 {catalog}"""
 
 
+OUTPUT_ARG = {"output": {"type": "string", "description": "Which output (output, o2, o3 ...); default the first."}}
+
+
 def _tools(kind: str) -> list[dict]:
     step_types = list(engine.catalog_for(kind))
-    return [
+    targets = kinds.spec(kind)["targets"]
+    multi = len(targets) > 1   # a kind whose pipelines can have several outputs gets the output tools
+    out_arg = OUTPUT_ARG if multi else {}
+    source_kinds = ["url", "arcgis"] if kind == "zoning" else ["url", "grants_gov"]
+    extra = [
+        {"name": "add_output",
+         "description": "Add an output (an Output node with its own schema) loading into one of: "
+                        + "; ".join(f"{t} ({v['label']})" for t, v in targets.items())
+                        + ". Each target takes one output. Then propose its schema with set_schema(output=...).",
+         "input_schema": {"type": "object", "properties": {
+             "target": {"type": "string", "enum": list(targets)}, "name": {"type": "string"}}, "required": ["target"]}},
+        {"name": "update_output",
+         "description": "Change what an output loads into (only before its schema is approved; its fields are cleared) "
+                        "or rename it. Use it on the first output (id output) when the planner wants a different part.",
+         "input_schema": {"type": "object", "properties": {
+             "output": {"type": "string"}, "target": {"type": "string", "enum": list(targets)}, "name": {"type": "string"}},
+             "required": ["output"]}},
+        {"name": "remove_output", "description": "Remove an output nothing is wired into.",
+         "input_schema": {"type": "object", "properties": {"output": {"type": "string"}}, "required": ["output"]}},
+    ] if multi else []
+    return extra + [
         {"name": "set_schema",
          "description": "Propose the target schema, replacing the current one. The planner must approve it.",
          "input_schema": {"type": "object", "properties": {"fields": {"type": "array", "items": {
@@ -176,13 +199,15 @@ def _tools(kind: str) -> list[dict]:
                  "enum_values": {"type": "array", "items": {"type": "string"}, "description": "For type enum only."},
                  "extract": {"type": "boolean", "description": "Default true. False for a judgement field that "
                              "extraction must leave blank and a model step (llm_fill, geo_tie) fills."}},
-             "required": ["name", "type", "required", "description"]}}},
+             "required": ["name", "type", "required", "description"]}}, **out_arg},
              "required": ["fields"]}},
         {"name": "add_source",
-         "description": "Add a source and fetch it now. kind url needs url; kind grants_gov needs a 2-5 word keyword query. "
-                        "Once the sources are final it goes into the draft, read by no step until you wire it.",
+         "description": "Add a source and fetch it now. kind url needs url; "
+                        + ("kind arcgis needs an ArcGIS REST service or layer url. " if kind == "zoning"
+                           else "kind grants_gov needs a 2-5 word keyword query. ")
+                        + "Once the sources are final it goes into the draft, read by no step until you wire it.",
          "input_schema": {"type": "object", "properties": {
-             "kind": {"type": "string", "enum": ["url", "grants_gov"]},
+             "kind": {"type": "string", "enum": source_kinds},
              "url": {"type": "string"}, "query": {"type": "string"}, "label": {"type": "string"}},
              "required": ["kind"]}},
         {"name": "remove_source", "description": "Remove a source.",
@@ -202,7 +227,10 @@ def _tools(kind: str) -> list[dict]:
              "after": {"type": "string", "description": "Put it right after this step (it takes that step's place in the wiring)."},
              "inputs": {"type": "array", "items": {"type": "string"},
                         "description": "Wire these steps into it instead (several = a merge). [] for an Extract step "
-                                       "that starts a new branch; then connect its output with connect_steps."}},
+                                       "that starts a new branch; then connect its output with connect_steps."},
+             **({"output": {"type": "string", "description": "Which output it goes to the end of, and whose schema "
+                                                              "its config is checked against; default the first."}}
+                if multi else {})},
              "required": ["type", "config", "note"]}},
         {"name": "update_step",
          "description": "Change a step's config or note, in your proposal.",
@@ -212,7 +240,8 @@ def _tools(kind: str) -> list[dict]:
         {"name": "remove_step", "description": "Remove a step in your proposal; a step between two others is bridged.",
          "input_schema": {"type": "object", "properties": {"step_id": {"type": "string"}}, "required": ["step_id"]}},
         {"name": "connect_steps", "description": "In your proposal, wire from_step's output into to_step (a step id, "
-                                                  "or 'output'). Several inputs into one step merge.",
+                                                  "or 'output'" + (", o2, o3 for the other outputs" if multi else "")
+                                                  + "). Several inputs into one step merge.",
          "input_schema": {"type": "object", "properties": {
              "from_step": {"type": "string"}, "to_step": {"type": "string"}}, "required": ["from_step", "to_step"]}},
         {"name": "disconnect_steps", "description": "In your proposal, remove the wire from from_step into to_step (or 'output').",
@@ -239,13 +268,13 @@ def _tools(kind: str) -> list[dict]:
                                 "description": "Instead of on_step_id, for a join: the steps a sql step with several "
                                                "inputs would take. `records` holds all of them, and each is also its own "
                                                "table named by its step id."},
-             "limit": {"type": "integer", "description": "Rows to return, at most 50 (default 20)."}},
+             "limit": {"type": "integer", "description": "Rows to return, at most 50 (default 20)."}, **out_arg},
              "required": ["query"]}},
         {"name": "set_load_mapping",
          "description": "Set which output field Load writes to each catalogue column: {column: field, or null for "
                         "none}. Columns left out keep their mapping. Resets no step.",
          "input_schema": {"type": "object", "properties": {
-             "mapping": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}},
+             "mapping": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}, **out_arg},
              "required": ["mapping"]}},
         {"name": "set_goal", "description": "Record the planner's goal for this pipeline, in their words.",
          "input_schema": {"type": "object", "properties": {"goal": {"type": "string"}}, "required": ["goal"]}},
@@ -297,11 +326,32 @@ def state_snapshot(p: dict) -> dict:
                       "required_gaps": {g: cov["fields"][g]["missing"] for g in cov.get("required_gaps", [])},
                       "errors": last.get("errors")} if last else None),
         "load_blocked_by": service.gate(p),
+        **({"outputs": [_output_snapshot(p, oid) for oid in outputs.ids(d)]} if outputs.multi(d) else {}),
     }
 
 
+def _output_snapshot(p: dict, oid: str) -> dict:
+    """One output of a pipeline with several: its schema, wiring, mapping, last run and what blocks it."""
+    po = service._out(p, oid)
+    v = service._output_view(p, oid)
+    last = po["state"].get("last_run") or {}
+    cov = last.get("coverage") or {}
+    lm = v["load_map"]
+    return {"id": oid, "name": v["name"], "target": v["target"], "output_from": v["output_from"],
+            "schema": {"status": v["schema"].get("status"),
+                       "fields": [{k: f.get(k) for k in ("name", "type", "required", "extract", "accept_blank", "enum_values")
+                                   if f.get(k) is not None} for f in v["schema"].get("fields", [])]},
+            "load_map": ({"columns": {c["column"]: c["field"] for c in lm["columns"] if c["field"]},
+                          "unmapped_fields": lm["extras"], "notes": lm["notes"]} if lm else None),
+            "design_gaps": v["design_gaps"], "planner_overrides": v["overrides"],
+            "last_run": ({"at": last.get("at"), "upto": last.get("upto"), "records": cov.get("records"),
+                          "required_gaps": {g: cov["fields"][g]["missing"] for g in cov.get("required_gaps", [])},
+                          "errors": last.get("errors")} if last else None),
+            "publish_blocked_by": v["gate"]}
+
+
 def _preview_result(p: dict, summary: dict) -> dict:
-    outputs = p["state"].get("outputs") or {}
+    step_out = p["state"].get("outputs") or {}
     records = (p["state"].get("last_run") or {}).get("records") or []
     cov = summary["coverage"]
     return {
@@ -310,11 +360,18 @@ def _preview_result(p: dict, summary: dict) -> dict:
                    for n, c in cov["fields"].items()},
         "required_gaps": cov["required_gaps"],
         "steps": {sid: {"count": o.get("count"), "warnings": o.get("warnings"), "error": o.get("error")}
-                  for sid, o in outputs.items()},
+                  for sid, o in step_out.items()},
         "unverified_excerpts": [{"id": r["id"], "name": _short(next(iter(r["values"].values()), None), 60)}
                                 for r in records if r.get("excerpt_verified") is False],
         "sample": [{"id": r["id"], **{k: _short(v) for k, v in r["values"].items()}} for r in records[:4]],
         "errors": summary["errors"],
+        **({"outputs": {oid: {"records": (l.get("coverage") or {}).get("records"),
+                              "required_gaps": (l.get("coverage") or {}).get("required_gaps"),
+                              "upto": l.get("upto"), "errors": l.get("errors"),
+                              "sample": [{"id": r["id"], **{k: _short(v) for k, v in r["values"].items()}}
+                                         for r in (l.get("records") or [])[:3]]}
+                        for oid in outputs.ids(p["definition"]) if (l := outputs.last_run(p["state"], oid))}}
+           if outputs.multi(p["definition"]) else {}),
     }
 
 
@@ -344,8 +401,18 @@ def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
 
 def _run_tool(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
     try:
+        if name == "add_output":
+            o = service.add_output(db, pipeline_id, args.get("target") or "", args.get("name"))
+            return {"output": {k: o[k] for k in ("id", "name", "target")},
+                    "next": "propose its schema with set_schema(output=...)"}, False
+        if name == "update_output":
+            o = service.update_output(db, pipeline_id, args.get("output") or "", args.get("name"), args.get("target"))
+            return {"output": {"id": args.get("output"), "name": o.get("name"), "target": o.get("target")}}, False
+        if name == "remove_output":
+            service.remove_output(db, pipeline_id, args.get("output") or "")
+            return {"removed": args.get("output")}, False
         if name == "set_schema":
-            schema = service.set_schema(db, pipeline_id, args.get("fields") or [])
+            schema = service.set_schema(db, pipeline_id, args.get("fields") or [], output=args.get("output"))
             return {"status": "proposed: the planner must approve it in the panel",
                     "fields": [f["name"] for f in schema["fields"]]}, False
         if name == "add_source":
@@ -360,7 +427,7 @@ def _run_tool(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
             return service.read_source(db, pipeline_id, args["source_id"], args.get("offset") or 0, args.get("length") or 3000), False
         if name == "add_step":
             step = service.draft_add_step(db, pipeline_id, args["type"], args.get("config") or {}, args.get("note"),
-                                          after=args.get("after"), inputs=args.get("inputs"))
+                                          after=args.get("after"), inputs=args.get("inputs"), output=args.get("output"))
             return {"step": step, "status": "added to your proposal", "check": _check_result(db, pipeline_id)}, False
         if name == "update_step":
             step = service.draft_update_step(db, pipeline_id, args["step_id"], args.get("config"), args.get("note"))
@@ -381,11 +448,12 @@ def _run_tool(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
             return _preview_result(service.get(db, pipeline_id), summary), False
         if name == "run_sql":
             r = service.explore_sql(db, pipeline_id, args.get("query") or "", args.get("tables"),
-                                    args.get("on_step_id"), args.get("limit") or 20, args.get("input_step_ids"))
+                                    args.get("on_step_id"), args.get("limit") or 20, args.get("input_step_ids"),
+                                    output=args.get("output"))
             r["rows"] = [[_short(v) for v in row] for row in r["rows"]]
             return r, False
         if name == "set_load_mapping":
-            m = service.set_load_map(db, pipeline_id, args.get("mapping") or {})
+            m = service.set_load_map(db, pipeline_id, args.get("mapping") or {}, output=args.get("output"))
             return {"columns": {c["column"]: c["field"] for c in m["columns"]}, "unmapped_fields": m["extras"]}, False
         if name == "set_goal":
             return {"goal": service.set_goal(db, pipeline_id, args.get("goal") or "")}, False
