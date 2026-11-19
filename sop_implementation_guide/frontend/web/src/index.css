@@ -1088,3 +1088,29 @@ main.view.pl-view {
 .pl-sql-result { display: flex; flex-direction: column; gap: .3rem; padding: .45rem .55rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); font-size: .8rem; }
 .pl-sql-result .table-wrap { max-height: 14rem; overflow: auto; }
 .pl-sql-ok { color: var(--teal); }
+
+/* ---- draft mode on the canvas ---- */
+.pl-canvas.drafting { border-color: var(--orange); box-shadow: 0 0 0 1px color-mix(in srgb, var(--orange) 40%, transparent), var(--shadow); }
+.pl-canvas.drafting .pl-flow .react-flow { --xy-background-pattern-color: color-mix(in srgb, var(--orange) 30%, transparent); }
+.pl-bar-btn.primary { background: var(--orange); color: #fff; border-color: var(--orange); }
+.pl-bar-btn.on { border-color: var(--orange); color: var(--orange); }
+.pl-node.draft-new { border-style: dashed; }
+.pl-node.draft-changed { border-top: 2px solid var(--amber); }
+.pl-node-draft { font-size: .58rem; letter-spacing: .04em; border-radius: 3px; padding: 0 .25rem; text-transform: uppercase; }
+.pl-node-draft.new { color: var(--orange); border: 1px solid var(--orange); }
+.pl-node-draft.changed { color: var(--amber); border: 1px solid var(--amber); }
+.pl-node-err {
+  position: absolute; top: -.45rem; right: -.45rem; width: 1.1rem; height: 1.1rem; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: .72rem; font-weight: 700;
+  background: var(--red); color: #fff; box-shadow: 0 0 0 2px var(--surface);
+}
+.pl-check { padding: .45rem .7rem; border-bottom: 1px solid var(--border); background: var(--bg); font-size: .8rem; max-height: 12rem; overflow: auto; }
+.pl-check-head { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+.pl-check-list { margin: .35rem 0 0; padding-left: 1.1rem; font-size: .8rem; }
+.pl-check-list li { margin: .15rem 0; }
+.pl-check-list li.err { color: var(--red); }
+.pl-check-list li.warn { color: var(--amber); }
+.pl-check-list .link { font-family: ui-monospace, Consolas, monospace; font-size: .78rem; }
+.pl-state { font-size: .74rem; padding: 0 .3rem; border-radius: 3px; }
+.pl-state.set { color: var(--teal); background: color-mix(in srgb, var(--teal) 10%, transparent); }
+.pl-state.text { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }

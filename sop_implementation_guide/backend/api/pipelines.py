@@ -217,23 +217,6 @@ def approve_step(pipeline_id: int, step_id: str, db: Client = Depends(get_supaba
     return _view(db, pipeline_id)
 
 
-class NewStep(BaseModel):
-    type: str
-    config: dict = {}
-    note: Optional[str] = None
-    after: Optional[str] = None         # insert after this step id
-    position: Optional[int] = None      # or at this index (0 = first); default the end
-
-
-@router.post("/{pipeline_id}/steps")
-def add_step(pipeline_id: int, body: NewStep, db: Client = Depends(get_supabase)):
-    """The planner adds a step from the canvas; it goes through the same checks as the agent's."""
-    _idle(db, pipeline_id)
-    _call(lambda: service.add_step(db, pipeline_id, body.type, body.config, body.note, body.after,
-                                   body.position, by_user=True))
-    return _view(db, pipeline_id)
-
-
 class StepEdit(BaseModel):
     config: Optional[dict] = None
     note: Optional[str] = None
@@ -243,13 +226,6 @@ class StepEdit(BaseModel):
 def edit_step(pipeline_id: int, step_id: str, body: StepEdit, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
     _call(lambda: service.update_step(db, pipeline_id, step_id, body.config, body.note, by_user=True))
-    return _view(db, pipeline_id)
-
-
-@router.delete("/{pipeline_id}/steps/{step_id}")
-def remove_step(pipeline_id: int, step_id: str, db: Client = Depends(get_supabase)):
-    _idle(db, pipeline_id)
-    _call(lambda: service.remove_step(db, pipeline_id, step_id, by_user=True))
     return _view(db, pipeline_id)
 
 
@@ -267,20 +243,78 @@ def edit_output(pipeline_id: int, body: RecordEdit, db: Client = Depends(get_sup
     return _view(db, pipeline_id)
 
 
-class Move(BaseModel):
-    direction: Optional[Literal[-1, 1]] = None
-    position: Optional[int] = None      # move to this index in the run order instead (canvas rewiring)
+# ── Draft: the steps change here, are checked, then applied ─────────────────
 
-
-@router.post("/{pipeline_id}/steps/{step_id}/move")
-def move_step(pipeline_id: int, step_id: str, body: Move, db: Client = Depends(get_supabase)):
+@router.post("/{pipeline_id}/draft")
+def open_draft(pipeline_id: int, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
-    if body.position is not None:
-        _call(lambda: service.place_step(db, pipeline_id, step_id, body.position))
-    elif body.direction is not None:
-        _call(lambda: service.move_step(db, pipeline_id, step_id, body.direction))
-    else:
-        raise HTTPException(status_code=422, detail="Give a direction or a position.")
+    _call(lambda: service.open_draft(db, pipeline_id, by_user=True))
+    return _view(db, pipeline_id)
+
+
+@router.delete("/{pipeline_id}/draft")
+def discard_draft(pipeline_id: int, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.discard_draft(db, pipeline_id))
+    return _view(db, pipeline_id)
+
+
+@router.post("/{pipeline_id}/draft/apply")
+def apply_draft(pipeline_id: int, db: Client = Depends(get_supabase)):
+    """Refused while the draft's check has errors; otherwise replaces the steps."""
+    _idle(db, pipeline_id)
+    result = _call(lambda: service.apply_draft(db, pipeline_id))
+    return {**result, "pipeline": _view(db, pipeline_id)}
+
+
+class DraftStep(BaseModel):
+    type: str
+    config: dict = {}
+    note: Optional[str] = None
+    after: Optional[str] = None         # take this step's place in the wiring, right after it
+    before: Optional[str] = None        # or right before this step
+    connect: bool = False               # or (true) at the end, feeding Output; default: not wired
+
+
+@router.post("/{pipeline_id}/draft/steps")
+def draft_add_step(pipeline_id: int, body: DraftStep, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.draft_add_step(db, pipeline_id, body.type, body.config, body.note, after=body.after,
+                                         before=body.before, connect=body.connect, by_user=True))
+    return _view(db, pipeline_id)
+
+
+@router.patch("/{pipeline_id}/draft/steps/{step_id}")
+def draft_edit_step(pipeline_id: int, step_id: str, body: StepEdit, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.draft_update_step(db, pipeline_id, step_id, body.config, body.note, by_user=True))
+    return _view(db, pipeline_id)
+
+
+@router.delete("/{pipeline_id}/draft/steps/{step_id}")
+def draft_remove_step(pipeline_id: int, step_id: str, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.draft_remove_step(db, pipeline_id, step_id, by_user=True))
+    return _view(db, pipeline_id)
+
+
+class Link(BaseModel):
+    source: str                         # a step id
+    target: str                         # a step id, or "output"
+
+
+@router.post("/{pipeline_id}/draft/links")
+def draft_link(pipeline_id: int, body: Link, db: Client = Depends(get_supabase)):
+    """Wire one step's output into another (or into Output). Several inputs into one step merge."""
+    _idle(db, pipeline_id)
+    _call(lambda: service.draft_link(db, pipeline_id, body.source, body.target, by_user=True))
+    return _view(db, pipeline_id)
+
+
+@router.post("/{pipeline_id}/draft/unlink")
+def draft_unlink(pipeline_id: int, body: Link, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.draft_unlink(db, pipeline_id, body.source, body.target, by_user=True))
     return _view(db, pipeline_id)
 
 

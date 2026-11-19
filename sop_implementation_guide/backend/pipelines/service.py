@@ -15,7 +15,7 @@ from typing import Any
 
 from supabase import Client
 
-from backend.pipelines import engine, kinds
+from backend.pipelines import check, engine, graph, kinds
 from backend.pipelines.engine import PipelineError
 from backend.repositories.pipelines import (
     PipelineMessageRepository,
@@ -182,11 +182,11 @@ def remove_source(db: Client, pipeline_id: int, source_id: str, by_user: bool = 
     p["state"].get("sources", {}).pop(source_id, None)
     # Extract steps wired to it stop naming it; one wired to nothing else falls back to all sources.
     rewired = []
-    for s in p["definition"]["steps"]:
+    for s in p["definition"]["steps"] + ((p["definition"].get("draft") or {}).get("steps") or []):
         ids = (s.get("config") or {}).get("source_ids")
         if s["type"] == "extract" and ids and source_id in ids:
             s["config"]["source_ids"] = [i for i in ids if i != source_id] or None
-            if s["config"]["source_ids"] is None:
+            if s["config"]["source_ids"] is None and s["id"] not in rewired:
                 rewired.append(s["id"])
     reopened = _reopen_sources(p)
     _save(db, p, state=p["state"])
@@ -251,6 +251,11 @@ def read_source(db: Client, pipeline_id: int, source_id: str, offset: int = 0, l
 
 
 # ── Steps ────────────────────────────────────────────────────────────────────
+#
+# The applied steps are reviewed one at a time: tune a model step's
+# instructions, preview, approve. Everything else about them (adding,
+# removing, rewiring, settings) changes in a draft, below, which is checked
+# and then applied in one go.
 
 def _check_sources(p: dict, step_type: str, cfg: dict) -> dict:
     """An Extract step's wiring must name sources that exist. An empty list means all sources."""
@@ -261,37 +266,6 @@ def _check_sources(p: dict, step_type: str, cfg: dict) -> dict:
             raise PipelineError(f"No source {', '.join(map(str, unknown))}; the sources are {', '.join(known) or 'none'}.")
         cfg["source_ids"] = [i for i in known if i in cfg["source_ids"]] or None
     return cfg
-
-
-def add_step(db: Client, pipeline_id: int, step_type: str, config: dict, note: str | None = None,
-             after: str | None = None, position: int | None = None, by_user: bool = False) -> dict:
-    """Insert after the step `after`, or at index `position` (0 = first), or at the end."""
-    p = get(db, pipeline_id)
-    who = "you approve" if by_user else "the planner approves"
-    if p["definition"]["schema"].get("status") != "approved":
-        raise PipelineError(f"Steps are outlined after {who} the target schema."
-                            + ("" if by_user else " Ask them to approve it."))
-    if p["definition"].get("sources_status") != "final":
-        raise PipelineError("Steps are added after the sources are marked final (the 'Sources are final' button)."
-                            + ("" if by_user else " Ask the planner to finish adding sources and press it."))
-    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config, _fields(p)))
-    steps = p["definition"]["steps"]
-    step = {"id": _next_id(steps, "t"), "type": step_type, "config": cfg,
-            "note": (note or "").strip(), "status": "proposed"}
-    if position is not None:
-        idx = max(0, min(int(position), len(steps)))
-    else:
-        idx = next((i + 1 for i, s in enumerate(steps) if s["id"] == after), len(steps))
-    steps.insert(idx, step)
-    reset = _invalidate_from(p, idx)   # later steps now work on this step's output
-    _save(db, p, state=p["state"])
-    if by_user:
-        where = f"after {steps[idx - 1]['id']}" if idx > 0 else "as the first step"
-        event(db, pipeline_id, f"You added step {step['id']} ({engine.CATALOG[step_type]['label']}) {where}. "
-              "Preview it, then approve it." + _reset_text(reset))
-    elif reset:
-        event(db, pipeline_id, f"Step {step['id']} was added before approved steps." + _reset_text(reset))
-    return step
 
 
 def _invalidate_from(p: dict, index: int) -> list[str]:
@@ -313,8 +287,19 @@ def _reset_text(reset: list[str]) -> str:
     return f" Steps {', '.join(reset)} need approving again." if reset else ""
 
 
+def _downstream(p: dict, step_id: str) -> list[str]:
+    """The step and every step its records reach, in run order."""
+    g = graph.normalise(p["definition"])
+    return [sid for sid in graph.order(g) if sid == step_id or step_id in graph.ancestors(g, sid)]
+
+
 def update_step(db: Client, pipeline_id: int, step_id: str, config: dict | None = None,
                 note: str | None = None, by_user: bool = False) -> dict:
+    """
+    Tune an applied step while reviewing it: a model step's instructions, and
+    its note. Other settings change in a draft. The step and every step after
+    it go back for approval.
+    """
     p = get(db, pipeline_id)
     steps = p["definition"]["steps"]
     step = next((s for s in steps if s["id"] == step_id), None)
@@ -323,37 +308,36 @@ def update_step(db: Client, pipeline_id: int, step_id: str, config: dict | None 
     reset, changed = [], False
     if config is not None:
         clean = _check_sources(p, step["type"], engine.validate_step(p["kind"], step["type"], config, _fields(p)))
+        slot = engine.EDITABLE.get(step["type"])
+        other = {k for k in set(clean) | set(step["config"]) if k != slot and clean.get(k) != step["config"].get(k)}
+        if other:
+            raise PipelineError(f"Only {step_id}'s instructions can change while reviewing it; change {', '.join(f'`{k}`' for k in sorted(other))} "
+                                "in a draft (Edit pipeline), where the change is checked before it applies.")
         if clean != step["config"]:
+            # An open draft holds a copy of this step: keep it in step, or Apply would undo the tuning.
+            copy = next((s for s in (p["definition"].get("draft") or {}).get("steps") or [] if s["id"] == step_id), None)
+            if copy and copy.get("type") == step["type"]:
+                copy["config"] = {**copy["config"], **({slot: clean.get(slot)} if slot else {})}
             step["config"], changed = clean, True
-            reset = _invalidate_from(p, steps.index(step))
+            for sid in _downstream(p, step_id):
+                s = next(x for x in steps if x["id"] == sid)
+                if s.get("status") == "approved":
+                    reset.append(sid)
+                s["status"] = "proposed"
+                (p["state"].get("outputs") or {}).pop(sid, None)
     if note is not None:
         step["note"] = note.strip()
     _save(db, p, state=p["state"])
-    if by_user and changed:
-        what = "prompt instructions" if step["type"] in engine.EDITABLE else "settings"
-        event(db, pipeline_id, f"You changed step {step_id}'s {what}. Preview it again to check the output."
-              + _reset_text(reset))
+    if changed:
+        event(db, pipeline_id, f"{'You' if by_user else 'The agent'} changed step {step_id}'s prompt instructions. "
+              "Preview it again to check the output." + _reset_text(reset))
     return step
-
-
-def remove_step(db: Client, pipeline_id: int, step_id: str, by_user: bool = False) -> None:
-    p = get(db, pipeline_id)
-    steps = p["definition"]["steps"]
-    i = next((n for n, s in enumerate(steps) if s["id"] == step_id), None)
-    if i is None:
-        raise PipelineError(f"No step {step_id}.")
-    steps.pop(i)
-    (p["state"].get("outputs") or {}).pop(step_id, None)
-    reset = _invalidate_from(p, i)
-    _save(db, p, state=p["state"])
-    if by_user:
-        event(db, pipeline_id, f"You removed step {step_id}." + _reset_text(reset))
 
 
 def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
     """
     Approving a step means its prompt (or settings) and its output were checked.
-    So it needs a preview with the current settings, and the steps before it
+    So it needs a preview with the current settings, and the steps feeding it
     approved first: its output depends on theirs.
     """
     p = get(db, pipeline_id)
@@ -361,7 +345,8 @@ def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
     step = next((s for s in steps if s["id"] == step_id), None)
     if not step:
         raise PipelineError(f"No step {step_id}.")
-    earlier = [s["id"] for s in steps[:steps.index(step)] if s.get("status") != "approved"]
+    before = graph.ancestors(graph.normalise(p["definition"]), step_id)
+    earlier = [s["id"] for s in steps if s["id"] in before and s.get("status") != "approved"]
     if earlier:
         raise PipelineError(f"Approve {', '.join(earlier)} first: this step works on their output.")
     out = (p["state"].get("outputs") or {}).get(step_id)
@@ -375,43 +360,250 @@ def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
     done = all(s.get("status") == "approved" for s in steps)
     event(db, pipeline_id, f"You approved step {step_id} ({engine.CATALOG[step['type']]['label']})."
           + ("" if not done else
-             f" The pipeline still has no step for {', '.join(f'`{g}`' for g in gaps)}: ask the agent to add it."
+             f" The pipeline still has no step for {', '.join(f'`{g}`' for g in gaps)}: add one in a draft."
              if gaps else " Every step is approved: run the pipeline to see the final output."),
           level="warn" if done and gaps else "info")
     return step
 
 
-def move_step(db: Client, pipeline_id: int, step_id: str, direction: int) -> list[dict]:
-    p = get(db, pipeline_id)
-    steps = p["definition"]["steps"]
-    i = next((n for n, s in enumerate(steps) if s["id"] == step_id), None)
-    if i is None:
-        raise PipelineError(f"No step {step_id}.")
-    j = i + (1 if direction > 0 else -1)
-    if 0 <= j < len(steps):
-        steps[i], steps[j] = steps[j], steps[i]
-        reset = _invalidate_from(p, min(i, j))
-        _save(db, p, state=p["state"])
-        event(db, pipeline_id, f"You moved step {step_id}." + _reset_text(reset))
-    return steps
+# ── Draft: change the steps, check, apply ────────────────────────────────────
+#
+# Structural edits (by the planner on the canvas or by the agent) go to
+# definition["draft"]: a copy of the steps with their wiring. Nothing runs or
+# resets while it is edited. Check reports errors and warnings; Apply refuses
+# while there are errors, then replaces the steps and keeps the approval (and
+# preview) of every step whose inputs and settings did not change.
+
+def _require_design(p: dict) -> None:
+    if p["definition"]["schema"].get("status") != "approved":
+        raise PipelineError("Steps are designed after the target schema is approved.")
+    if p["definition"].get("sources_status") != "final":
+        raise PipelineError("Steps are designed after the sources are marked final (the 'Sources are final' button).")
 
 
-def place_step(db: Client, pipeline_id: int, step_id: str, position: int) -> list[dict]:
-    """Move a step to index `position` in the run order (rewiring it on the canvas)."""
+def _draft(p: dict, open_: bool = False) -> dict:
+    d = p["definition"].get("draft")
+    if d is None:
+        if not open_:
+            raise PipelineError("There is no draft open. Press Edit pipeline to change the steps.")
+        _require_design(p)
+        g = graph.normalise(p["definition"])
+        d = {"steps": [{k: s.get(k) for k in ("id", "type", "config", "note", "inputs")} for s in g["steps"]],
+             "output_from": g["output_from"]}
+        p["definition"]["draft"] = d
+    return d
+
+
+def _draft_definition(p: dict) -> dict:
+    d = p["definition"]["draft"]
+    return {**{k: v for k, v in p["definition"].items() if k != "draft"},
+            "steps": d["steps"], "output_from": d["output_from"]}
+
+
+def _draft_step(d: dict, step_id: str) -> dict:
+    s = next((x for x in d["steps"] if x["id"] == step_id), None)
+    if not s:
+        raise PipelineError(f"No step {step_id} in the draft.")
+    return s
+
+
+def _who(by_user: bool) -> str:
+    return "You" if by_user else "The agent"
+
+
+def open_draft(db: Client, pipeline_id: int, by_user: bool = True) -> dict:
     p = get(db, pipeline_id)
-    steps = p["definition"]["steps"]
-    i = next((n for n, s in enumerate(steps) if s["id"] == step_id), None)
-    if i is None:
-        raise PipelineError(f"No step {step_id}.")
-    j = max(0, min(int(position), len(steps) - 1))
-    if i == j:
-        return steps
-    steps.insert(j, steps.pop(i))
-    reset = _invalidate_from(p, min(i, j))
+    if p["definition"].get("draft") is not None:
+        return p["definition"]["draft"]
+    d = _draft(p, open_=True)
+    _save(db, p)
+    event(db, pipeline_id, f"{_who(by_user)} opened a draft of the steps. Changes apply only when you press Apply.")
+    return d
+
+
+def discard_draft(db: Client, pipeline_id: int) -> None:
+    p = get(db, pipeline_id)
+    if p["definition"].pop("draft", None) is None:
+        raise PipelineError("There is no draft open.")
+    _save(db, p)
+    event(db, pipeline_id, "You discarded the draft: the steps are as they were.")
+
+
+def check_draft(p: dict) -> dict:
+    return check.check(p["kind"], _draft_definition(p))
+
+
+def _splice_after(d: dict, after: str, new_id: str) -> None:
+    """Put new_id between `after` and whatever `after` fed."""
+    for s in d["steps"]:
+        if s["id"] != new_id:
+            s["inputs"] = [new_id if i == after else i for i in s["inputs"]]
+    d["output_from"] = [new_id if i == after else i for i in d["output_from"]]
+
+
+def draft_add_step(db: Client, pipeline_id: int, step_type: str, config: dict, note: str | None = None,
+                   after: str | None = None, before: str | None = None, inputs: list[str] | None = None,
+                   connect: bool = True, by_user: bool = False) -> dict:
+    """
+    Add a step to the draft. Placed after `after` (taking its place in the
+    wiring), before `before`, with explicit `inputs`, or (connect) at the end:
+    it then takes what fed Output and feeds Output itself. connect=False leaves
+    it unwired, for the planner to wire on the canvas.
+    """
+    p = get(db, pipeline_id)
+    d = _draft(p, open_=True)
+    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config or {}, _fields(p)))
+    taken = d["steps"] + p["definition"]["steps"]
+    step = {"id": _next_id(taken, "t"), "type": step_type, "config": cfg, "note": (note or "").strip(), "inputs": []}
+    ids = {s["id"] for s in d["steps"]}
+    pos = len(d["steps"])
+    if after:
+        if after not in ids:
+            raise PipelineError(f"No step {after} in the draft.")
+        _splice_after(d, after, step["id"])
+        step["inputs"] = [after]
+        pos = next(i for i, s in enumerate(d["steps"]) if s["id"] == after) + 1
+        where = f" after {after}"
+    elif before:
+        target = _draft_step(d, before)
+        step["inputs"], target["inputs"] = list(target["inputs"]), [step["id"]]
+        pos = next(i for i, s in enumerate(d["steps"]) if s["id"] == before)
+        where = f" before {before}"
+    elif inputs is not None:
+        bad = [i for i in inputs if i not in ids]
+        if bad:
+            raise PipelineError(f"No step {', '.join(bad)} in the draft.")
+        step["inputs"] = list(dict.fromkeys(inputs))
+        where = f" taking {', '.join(step['inputs'])}" if step["inputs"] else " (not wired yet)"
+    elif connect:
+        step["inputs"], d["output_from"] = list(d["output_from"]), [step["id"]]
+        where = " at the end" if step["inputs"] else ""
+    else:
+        where = " (not wired yet)"
+    d["steps"].insert(pos, step)
+    _save(db, p)
+    if by_user:
+        event(db, pipeline_id, f"You added {step['id']} ({engine.CATALOG[step_type]['label']}) to the draft{where}.")
+    return step
+
+
+def draft_update_step(db: Client, pipeline_id: int, step_id: str, config: dict | None = None,
+                      note: str | None = None, by_user: bool = False) -> dict:
+    p = get(db, pipeline_id)
+    d = _draft(p, open_=True)
+    s = _draft_step(d, step_id)
+    if config is not None:
+        s["config"] = _check_sources(p, s["type"], engine.validate_step(p["kind"], s["type"], config, _fields(p)))
+    if note is not None:
+        s["note"] = note.strip()
+    _save(db, p)
+    return s
+
+
+def draft_remove_step(db: Client, pipeline_id: int, step_id: str, by_user: bool = False) -> None:
+    """Remove a step from the draft. In a plain run of steps, its input is wired straight to what it fed."""
+    p = get(db, pipeline_id)
+    d = _draft(p, open_=True)
+    s = _draft_step(d, step_id)
+    d["steps"].remove(s)
+    fed = [x for x in d["steps"] if step_id in x["inputs"]] + (["output"] if step_id in d["output_from"] else [])
+    heal = s["inputs"] if len(s["inputs"]) == 1 and len(fed) == 1 else []
+    for x in d["steps"]:
+        if step_id in x["inputs"]:
+            x["inputs"] = list(dict.fromkeys(i for j in x["inputs"] for i in (heal if j == step_id else [j])))
+    d["output_from"] = list(dict.fromkeys(i for j in d["output_from"] for i in (heal if j == step_id else [j])))
+    _save(db, p)
+    if by_user:
+        event(db, pipeline_id, f"You removed {step_id} from the draft.")
+
+
+def draft_link(db: Client, pipeline_id: int, source: str, target: str, by_user: bool = False) -> None:
+    """Wire `source`'s output into `target` (a step, or "output"). A step with several inputs merges them."""
+    p = get(db, pipeline_id)
+    d = _draft(p, open_=True)
+    _draft_step(d, source)
+    if source == target:
+        raise PipelineError("A step cannot take its own output.")
+    if target == "output":
+        if source not in d["output_from"]:
+            d["output_from"].append(source)
+    else:
+        t = _draft_step(d, target)
+        if source not in t["inputs"]:
+            t["inputs"].append(source)
+    _save(db, p)
+
+
+def draft_unlink(db: Client, pipeline_id: int, source: str, target: str, by_user: bool = False) -> None:
+    p = get(db, pipeline_id)
+    d = _draft(p, open_=True)
+    if target == "output":
+        d["output_from"] = [i for i in d["output_from"] if i != source]
+    else:
+        t = _draft_step(d, target)
+        t["inputs"] = [i for i in t["inputs"] if i != source]
+    _save(db, p)
+
+
+def apply_draft(db: Client, pipeline_id: int) -> dict:
+    """
+    The planner applies the draft. Refused while Check reports errors. Steps
+    whose settings and inputs are unchanged keep their approval and preview;
+    the rest are proposed again.
+    """
+    p = get(db, pipeline_id)
+    d = _draft(p)
+    _require_design(p)
+    result = check_draft(p)
+    if not result["ok"]:
+        listed = "; ".join(e["text"] for e in result["errors"][:3])
+        raise PipelineError(f"The draft has {len(result['errors'])} error(s), so it was not applied: {listed}"
+                            + (" …" if len(result["errors"]) > 3 else ""))
+    context = p["definition"].get("goal") or p["name"]
+    old_steps = {s["id"]: s for s in p["definition"]["steps"]}
+    old_g = {s["id"]: s for s in graph.normalise(p["definition"])["steps"]}
+    try:
+        old_sigs = engine.step_signatures(p["definition"], context)
+    except graph.GraphError:
+        old_sigs = {}
+    by_id = {s["id"]: s for s in d["steps"]}
+    g = {"steps": [dict(by_id[sid]) for sid in result["order"]], "output_from": list(d["output_from"])}
+    new_def = {**_draft_definition(p), "steps": g["steps"], "output_from": g["output_from"]}
+    new_sigs = engine.step_signatures(new_def, context)
+
+    kept, reset = [], []
+    for s in g["steps"]:
+        old = old_steps.get(s["id"])
+        if old and old_sigs.get(s["id"]) == new_sigs[s["id"]]:
+            s["status"] = old.get("status") or "proposed"
+            kept.append(s["id"])
+        else:
+            if old and old.get("status") == "approved":
+                reset.append(s["id"])
+            s["status"] = "proposed"
+            (p["state"].get("outputs") or {}).pop(s["id"], None)
+    added = [s["id"] for s in g["steps"] if s["id"] not in old_steps]
+    removed = [sid for sid in old_steps if sid not in by_id]
+    for sid in removed:
+        (p["state"].get("outputs") or {}).pop(sid, None)
+    changed = [s["id"] for s in g["steps"] if s["id"] in old_g and s["id"] not in kept
+               and ({k: s.get(k) for k in ("type", "config", "inputs")} != {k: old_g[s["id"]].get(k) for k in ("type", "config", "inputs")})]
+
+    stored = graph.stored(g)
+    p["definition"]["steps"] = stored["steps"]
+    if "output_from" in stored:
+        p["definition"]["output_from"] = stored["output_from"]
+    else:
+        p["definition"].pop("output_from", None)
+    p["definition"].pop("draft", None)
     _save(db, p, state=p["state"])
-    where = f"after {steps[j - 1]['id']}" if j > 0 else "to the start"
-    event(db, pipeline_id, f"You moved step {step_id} {where}." + _reset_text(reset))
-    return steps
+    parts = [f"added {', '.join(added)}" if added else "", f"removed {', '.join(removed)}" if removed else "",
+             f"changed {', '.join(changed)}" if changed else ""]
+    summary = "; ".join(x for x in parts if x) or "no changes to the steps"
+    event(db, pipeline_id, f"You applied the draft: {summary}." + _reset_text(reset)
+          + (f" {len(result['warnings'])} warning(s) from the check remain." if result["warnings"] else ""),
+          level="warn" if reset or result["warnings"] else "info")
+    return {"added": added, "removed": removed, "changed": changed, "reset": reset, "warnings": result["warnings"]}
 
 
 # Where the planner put each node on the canvas. Display only: not part of the
@@ -717,6 +909,32 @@ def _prompts(p: dict) -> dict:
     return out
 
 
+def _graph_view(definition: dict) -> dict:
+    g = graph.normalise(definition)
+    try:
+        order = graph.order(g)
+    except graph.GraphError:
+        order = [s["id"] for s in g["steps"]]
+    return {"inputs": {s["id"]: s["inputs"] for s in g["steps"]}, "output_from": g["output_from"], "order": order}
+
+
+def _draft_view(p: dict) -> dict | None:
+    """The open draft as the canvas draws it, with its check and each step's ports."""
+    d = p["definition"].get("draft")
+    if d is None:
+        return None
+    live = {s["id"]: s for s in graph.normalise(p["definition"])["steps"]}
+    steps = []
+    for s in d["steps"]:
+        old = live.get(s["id"])
+        state = ("new" if not old else "unchanged" if all(old.get(k) == s.get(k) for k in ("type", "config", "inputs"))
+                 else "changed")
+        steps.append({**s, "draft_state": state})
+    return {"steps": steps, "output_from": d["output_from"], "check": check_draft(p),
+            "removed": [sid for sid in live if sid not in {s["id"] for s in d["steps"]}],
+            "ports": {s["id"]: engine.step_io(s, _fields(p)) for s in d["steps"]}}
+
+
 def view(db: Client, pipeline_id: int) -> dict[str, Any]:
     p = get(db, pipeline_id)
     s = kinds.spec(p["kind"])
@@ -737,6 +955,8 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
         "design_gaps": engine.design_gaps(p["definition"]),
         "overrides": p["definition"].get("overrides"),
         "ports": {st["id"]: engine.step_io(st, _fields(p)) for st in p["definition"]["steps"]},
+        "graph": _graph_view(p["definition"]),
+        "draft": _draft_view(p),
         "ref_tables": {k: {"description": v["description"], "columns": v["columns"]} for k, v in engine.REF_TABLES.items()},
         "sql_types": engine.SQL_TYPES,
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"], "config": v["config"]}

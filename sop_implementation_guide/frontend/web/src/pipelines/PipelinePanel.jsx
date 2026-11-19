@@ -2,7 +2,8 @@ import { Fragment, Suspense, lazy, useState } from "react";
 import { call } from "../api.js";
 import SourceReader from "./SourceReader.jsx";
 import StepDialog from "./StepDialog.jsx";
-import StepPorts from "./StepPorts.jsx";
+import StepPorts, { DraftPorts } from "./StepPorts.jsx";
+import { ancestorsOf, stepsModel } from "./ports.js";
 
 // The node editor library is large; load it only when the Pipeline page opens.
 const PipelineCanvas = lazy(() => import("./PipelineCanvas.jsx"));
@@ -159,7 +160,7 @@ function GapsNote({ view }) {
   return (
     <div className="pl-gate" style={{ marginTop: 0, marginBottom: ".5rem" }}>
       <b>The pipeline is not complete:</b> no step produces {view.design_gaps.map((g, i) => <Fragment key={g}>{i > 0 && ", "}<code>{g}</code></Fragment>)}.
-      Add the missing steps on the canvas, or ask the agent.
+      Add the missing steps in a draft (Edit pipeline on the canvas), or ask the agent.
     </div>
   );
 }
@@ -172,7 +173,8 @@ function NoStepsCard({ view }) {
         {view.definition.schema?.status !== "approved" ? "First approve the target schema, then add sources and mark them final."
           : view.definition.sources_status !== "final" ? "Add the sources and mark them final: the agent then outlines every step."
           : view.busy ? "The agent is looking at the sources and outlining the steps…"
-          : "The agent outlines the steps from the final sources. If none appear, ask it in the chat, or add one yourself with + Add step on the canvas."}
+          : view.draft ? "The steps are in a draft on the canvas: check it, then press Apply to review them one by one."
+          : "The agent outlines the steps from the final sources into a draft. If none appear, ask it in the chat, or press Edit pipeline on the canvas to add them yourself."}
       </div>
     </div>
   );
@@ -181,13 +183,17 @@ function NoStepsCard({ view }) {
 // The step selected on the canvas: read its prompt, tune the instructions,
 // preview what it produces, then approve it.
 function StepCard({ view, act, disabled, stepId, onSelect, onEdit }) {
-  const steps = view.definition.steps || [];
+  const model = stepsModel(view, false);
+  const steps = model.order.map((id) => model.steps.find((x) => x.id === id)).filter(Boolean);
   const i = steps.findIndex((x) => x.id === stepId);
   const s = steps[i];
+  if (!s) return null;
   const out = view.outputs[s.id];
   const cat = view.catalog[s.type] || {};
-  const blockedBy = steps.slice(0, i).filter((x) => x.status !== "approved").map((x) => x.id);
+  const before = ancestorsOf(model, s.id);
+  const blockedBy = steps.filter((x) => before.has(x.id) && x.status !== "approved").map((x) => x.id);
   const go = (j) => steps[j] && onSelect(`step:${steps[j].id}`);
+  const feedsOutputAlone = model.outputFrom.length === 1 && model.outputFrom[0] === s.id;
   return (
     <div className={"card pl-step-card" + (out?.error ? " failed" : "")}>
       <div className="pl-step-head">
@@ -204,14 +210,14 @@ function StepCard({ view, act, disabled, stepId, onSelect, onEdit }) {
       {cat.description && <div className="muted-note" style={{ marginTop: ".2rem" }}>{cat.description}</div>}
       {s.note && <div className="pl-step-note">{s.note}</div>}
       <StepDesigner key={s.id} step={s} out={out} view={view} act={act} disabled={disabled}
-                    isLast={i === steps.length - 1} blockedBy={blockedBy} onEdit={() => onEdit(s.id)} />
+                    isLast={feedsOutputAlone} blockedBy={blockedBy} onEdit={() => onEdit(s.id)} />
       <div className="pl-step-actions">
-        <button disabled={disabled} onClick={() => onEdit(s.id)}>Edit settings…</button>
-        <button disabled={disabled || i === 0} title="Move earlier" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: -1 })}>← Move earlier</button>
-        <button disabled={disabled || i === steps.length - 1} title="Move later" onClick={() => act("POST", `/steps/${s.id}/move`, { direction: 1 })}>Move later →</button>
-        <button disabled={disabled} onClick={() => act("DELETE", `/steps/${s.id}`)}>Remove step</button>
+        <button disabled={disabled} onClick={() => onEdit(s.id)} title="Opens a draft if none is open">Edit settings…</button>
       </div>
-      <div className="muted-note">Changing a step sends it and every later step back for approval. On the canvas, right-click a step for the same actions.</div>
+      <div className="muted-note">
+        Settings, wiring, adding and removing steps change in a draft (Edit pipeline on the canvas), checked before they apply.
+        Tuning a model step's instructions here sends it and the steps after it back for approval.
+      </div>
     </div>
   );
 }
@@ -301,7 +307,7 @@ function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy, onEdi
         <button disabled={disabled} className={!out ? "primary" : ""} onClick={preview}>
           {out ? "Preview again" : "Preview this step"}
         </button>
-        {isLast && <span className="assess">previewing the last step runs the whole pipeline</span>}
+        {isLast && <span className="assess">previewing the step that feeds Output runs the whole pipeline</span>}
       </div>
       {!out && <div className="assess">Not previewed with the current settings yet.</div>}
       {out && view.last_run?.upto === step.id && view.last_run.reused?.length > 0 && (
@@ -825,6 +831,42 @@ function SourceNodeCard({ view, sourceId, onOpen }) {
   );
 }
 
+// A step selected while a draft is open: its draft settings, ports and problems.
+function DraftStepCard({ view, act, disabled, stepId, onEdit }) {
+  const s = (view.draft?.steps || []).find((x) => x.id === stepId);
+  if (!s) return null;
+  const cat = view.catalog[s.type] || {};
+  const check = view.draft.check || { errors: [], warnings: [] };
+  const errs = check.errors.filter((e) => e.node === s.id), warns = check.warnings.filter((w) => w.node === s.id);
+  return (
+    <div className="card pl-step-card">
+      <div className="pl-step-head">
+        <span className="tag edited">draft</span>
+        <b className="pl-id">{s.id}</b>
+        <b>{cat.label || s.type}</b>
+        {cat.model && <span className="tag derived">model</span>}
+        <span className="assess">{{ new: "new", changed: "changed", unchanged: "unchanged" }[s.draft_state]}</span>
+      </div>
+      {cat.description && <div className="muted-note" style={{ marginTop: ".2rem" }}>{cat.description}</div>}
+      {s.note && <div className="pl-step-note">{s.note}</div>}
+      {errs.length > 0 && <ul className="pl-check-list">{errs.map((e, k) => <li key={k} className="err">{e.text}</li>)}</ul>}
+      {warns.length > 0 && <ul className="pl-check-list">{warns.map((w, k) => <li key={k} className="warn">{w.text}</li>)}</ul>}
+      <div className="pl-settings">
+        <b>{s.type === "sql" ? "SQL" : "Settings"}</b>{" "}
+        <button className="link" disabled={disabled} onClick={() => onEdit(s.id)}>edit</button>
+        {s.type === "sql" ? <pre className="pl-prompt-text pl-sql">{s.config?.query}</pre>
+          : <pre className="pl-prompt-text">{JSON.stringify(s.config, null, 2)}</pre>}
+      </div>
+      <DraftPorts view={view} stepId={s.id} />
+      <div className="pl-step-actions">
+        <button disabled={disabled} onClick={() => onEdit(s.id)}>Edit settings…</button>
+        <button disabled={disabled} onClick={() => act("DELETE", `/draft/steps/${s.id}`)}>Remove from draft</button>
+      </div>
+      <div className="muted-note">Draft steps have no output yet: preview and approve them after Apply.</div>
+    </div>
+  );
+}
+
 function StepsPage({ view, act, disabled, stage, onSources }) {
   // The selection follows the design: when a step is approved the next one opens.
   const [sel, setSel] = useState(stage);
@@ -834,8 +876,10 @@ function StepsPage({ view, act, disabled, stage, onSources }) {
 
   const steps = view.definition.steps || [];
   const sources = view.definition.sources || [];
+  const draftIds = new Set((view.draft?.steps || []).map((s) => s.id));
   let shown = sel;
-  if (shown?.startsWith("step:") && !steps.some((s) => `step:${s.id}` === shown)) shown = null;
+  const draftPick = view.draft && shown?.startsWith("step:") && draftIds.has(shown.slice(5));
+  if (shown?.startsWith("step:") && !draftPick && !steps.some((s) => `step:${s.id}` === shown)) shown = null;
   if (shown?.startsWith("src:") && !sources.some((s) => `src:${s.id}` === shown)) shown = null;
   if (!shown || shown === "steps" || shown === "publish" || shown === "sources") {
     const open = steps.find((s) => s.status !== "approved") || steps[0];
@@ -849,6 +893,7 @@ function StepsPage({ view, act, disabled, stage, onSources }) {
   if (shown === "steps") body = <NoStepsCard view={view} />;
   else if (shown === "output") body = view.last_run ? <OutputCard view={view} act={act} disabled={disabled} /> : <NoOutputCard />;
   else if (shown.startsWith("src:")) body = <SourceNodeCard view={view} sourceId={shown.slice(4)} onOpen={() => onSources(shown.slice(4))} />;
+  else if (view.draft && draftIds.has(shown.slice(5))) body = <DraftStepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onEdit={onEdit} />;
   else body = <StepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onSelect={setSel} onEdit={onEdit} />;
   return (
     <>

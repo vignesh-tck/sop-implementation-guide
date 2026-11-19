@@ -4,21 +4,22 @@ import {
   useNodesState, useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { portText } from "./ports.js";
+import { STATE_TEXT, draftPortText, portText, stepsModel } from "./ports.js";
 
-// The pipeline as an editable node map: sources → steps → output.
+// The pipeline as a node map: sources → steps → output.
 //
-// Steps run as one chain, so wires mean two things:
-//   step → step     "run the target right after the source" (reorders the chain)
-//   source → Extract "this Extract step reads that source" (its source_ids)
-// Nodes go wherever the planner drags them; positions are saved in the
-// definition's layout, which is display only (no step is reset by it).
+// Two modes. Outside a draft the canvas shows the applied steps: inspect,
+// preview and approve them, and drag nodes around. "Edit pipeline" opens a
+// draft, where steps are added, wired, merged and removed freely; nothing runs
+// or resets until Check passes and the planner presses Apply.
 //
-// Right-click anything for its actions and details; Delete removes the
-// selection; drag from a node's right-hand dot to rewire.
+// Wires: step → step feeds the target (several wires into one step merge
+// their records); step → Output feeds the final output; source → Extract
+// makes that Extract step read the source. Node positions are saved in the
+// definition's layout, which is display only.
 
 const COL = 230;    // auto-layout spacing for nodes with no saved position
-const ROW = 76;
+const ROW = 90;
 
 function cut(v, n = 28) {
   if (v == null) return "";
@@ -46,29 +47,34 @@ function stepSummary(s) {
 
 function stepStatus(s, out) {
   if (out?.error) return "bad";
-  if (s.status === "approved") return "ok";
-  if (s.status === "proposed") return "pending";
+  if (s?.status === "approved") return "ok";
+  if (s?.status === "proposed") return "pending";
   return "idle";
 }
 
 const STATUS_TEXT = { ok: "approved", pending: "needs approval", bad: "failed", idle: "not set" };
+const DRAFT_TEXT = { new: "new in the draft", changed: "changed in the draft", unchanged: "unchanged" };
 const TEAL = "#18B4A5", FAINT = "#8FA8BF";
 
 // ── Nodes ────────────────────────────────────────────────────────────────────
 
 function Box({ data, children, inputs, outputs }) {
+  const tip = data.errs?.length ? data.errs.join("\n")
+    : data.draft ? `${data.title}: ${DRAFT_TEXT[data.draft]}` : STATUS_TEXT[data.status] ? `${data.title}: ${STATUS_TEXT[data.status]}` : data.title;
   return (
-    <div className={`pl-node ${data.status}${data.sel ? " sel" : ""}${data.running ? " running" : ""}${data.ghost ? " ghost" : ""}`}
-         title={STATUS_TEXT[data.status] ? `${data.title}: ${STATUS_TEXT[data.status]}` : data.title}>
+    <div className={`pl-node ${data.status}${data.sel ? " sel" : ""}${data.running ? " running" : ""}${data.ghost ? " ghost" : ""}${data.draft ? " draft-" + data.draft : ""}`}
+         title={tip}>
       {inputs && <Handle type="target" position={Position.Left} className="pl-handle" isConnectable={!!data.connectable} title={data.inTip} />}
       <span className="pl-node-kind">
         <span className="pl-node-dot" />{data.kind}
         {data.n != null && <span className="pl-node-n">#{data.n}</span>}
+        {data.draft && data.draft !== "unchanged" && <span className={"pl-node-draft " + data.draft}>{data.draft}</span>}
         {data.model && <span className="pl-node-model" title="Calls the model">model</span>}
       </span>
       <span className="pl-node-title">{data.title}</span>
       {data.sub && <span className="pl-node-sub">{data.sub}</span>}
       {data.meta && <span className="pl-node-meta">{data.meta}</span>}
+      {data.errs?.length > 0 && <span className="pl-node-err" aria-label={`${data.errs.length} problem(s)`}>!</span>}
       {children}
       {outputs && <Handle type="source" position={Position.Right} className="pl-handle" isConnectable={!!data.connectable} title={data.outTip} />}
     </div>
@@ -131,49 +137,73 @@ function ConfigTable({ config }) {
   );
 }
 
-function DetailsPane({ id, view, onClose, actions }) {
+function Settings({ s }) {
+  return s.type === "sql" ? (
+    <>
+      <Detail label="Joins">{s.config?.tables?.join(", ") || "records only"}</Detail>
+      <Detail label="SQL"><pre className="pl-sql pl-sql-small">{s.config?.query}</pre></Detail>
+    </>
+  ) : <Detail label="Settings"><ConfigTable config={s.config} /></Detail>;
+}
+
+function DetailsPane({ id, view, model, problems, onClose, actions }) {
   const d = view.definition;
-  const steps = d.steps || [];
   const sources = d.sources || [];
+  const fields = d.schema?.fields || [];
   let title, body;
   if (id.startsWith("step:")) {
     const sid = id.slice(5);
-    const i = steps.findIndex((s) => s.id === sid);
-    const s = steps[i];
+    const s = model.steps.find((x) => x.id === sid);
     if (!s) return null;
     const cat = view.catalog[s.type] || {};
-    const out = view.outputs[s.id];
-    const prompt = view.prompts?.[s.id];
-    const port = portText(view, s.id);
     title = `${s.id} · ${cat.label || s.type}`;
-    body = (
-      <>
-        {cat.description && <div className="muted-note" style={{ marginTop: 0 }}>{cat.description}</div>}
-        <Detail label="Status">{STATUS_TEXT[stepStatus(s, out)]}</Detail>
-        <Detail label="Runs">{`#${i + 1} of ${steps.length}`}{i > 0 ? `, after ${steps[i - 1].id}` : ", first"}</Detail>
-        {s.type === "extract" && <Detail label="Reads">{s.config?.source_ids?.length ? s.config.source_ids.join(", ") : `every source (${sources.length})`}</Detail>}
-        <Detail label="Model call">{cat.model ? "yes, its prompt is in the editor below" : "no"}</Detail>
-        <Detail label="Note">{s.note}</Detail>
-        <Detail label="Input port">{port.input}</Detail>
-        <Detail label="Output port">{port.output}</Detail>
-        <Detail label="Writes">{port.writes.length ? port.writes.map((w) => <code key={w} style={{ marginRight: ".3rem" }}>{w}</code>) : "no fields"}</Detail>
-        {port.error && <Detail label="Problem"><span className="pl-bad">{port.error}</span></Detail>}
-        {s.type === "sql" ? (
-          <>
-            <Detail label="Joins">{s.config?.tables?.join(", ") || "records only"}</Detail>
-            <Detail label="SQL"><pre className="pl-sql pl-sql-small">{s.config?.query}</pre></Detail>
-          </>
-        ) : <Detail label="Settings"><ConfigTable config={s.config} /></Detail>}
-        {prompt?.value && <Detail label="Instructions"><span className="pl-pre">{prompt.value}</span></Detail>}
-        <Detail label="Last preview">{out ? (out.error ? <span className="pl-bad">{out.error}</span> : `${out.count} record(s)`) : "not previewed with these settings"}</Detail>
-        {out?.warnings?.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{out.warnings.map((w, k) => <li key={k}>{w}</li>)}</ul></Detail>}
-      </>
-    );
+    const errs = problems.errors[id] || [], warns = problems.warnings[id] || [];
+    if (model.draft) {
+      const port = draftPortText(view, sid);
+      body = (
+        <>
+          {cat.description && <div className="muted-note" style={{ marginTop: 0 }}>{cat.description}</div>}
+          {errs.length > 0 && <Detail label="Errors"><ul className="pl-warn-list pl-bad">{errs.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
+          {warns.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{warns.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
+          <Detail label="Draft">{DRAFT_TEXT[s.draft_state]}</Detail>
+          <Detail label="Input">{port.input}</Detail>
+          <Detail label="Output">{port.output}</Detail>
+          <Detail label="Writes">{port.writes.length ? port.writes.map((w) => <code key={w} style={{ marginRight: ".3rem" }}>{w}</code>) : "no fields"}</Detail>
+          {port.schema && <Detail label="Out schema">{fields.map((f) => (
+            <div key={f.name}><code>{f.name}</code> <span className="assess">{STATE_TEXT[port.schema[f.name]] || "not produced"}</span></div>
+          ))}</Detail>}
+          <Detail label="Note">{s.note}</Detail>
+          <Settings s={s} />
+        </>
+      );
+    } else {
+      const order = model.order;
+      const out = view.outputs[s.id];
+      const prompt = view.prompts?.[s.id];
+      const port = portText(view, s.id);
+      body = (
+        <>
+          {cat.description && <div className="muted-note" style={{ marginTop: 0 }}>{cat.description}</div>}
+          <Detail label="Status">{STATUS_TEXT[stepStatus(s, out)]}</Detail>
+          <Detail label="Runs">{`#${order.indexOf(s.id) + 1} of ${order.length}`}</Detail>
+          <Detail label="Model call">{cat.model ? "yes, its prompt is in the editor below" : "no"}</Detail>
+          <Detail label="Note">{s.note}</Detail>
+          <Detail label="Input port">{port.input}</Detail>
+          <Detail label="Output port">{port.output}</Detail>
+          <Detail label="Writes">{port.writes.length ? port.writes.map((w) => <code key={w} style={{ marginRight: ".3rem" }}>{w}</code>) : "no fields"}</Detail>
+          {port.error && <Detail label="Problem"><span className="pl-bad">{port.error}</span></Detail>}
+          <Settings s={s} />
+          {prompt?.value && <Detail label="Instructions"><span className="pl-pre">{prompt.value}</span></Detail>}
+          <Detail label="Last preview">{out ? (out.error ? <span className="pl-bad">{out.error}</span> : `${out.count} record(s)`) : "not previewed with these settings"}</Detail>
+          {out?.warnings?.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{out.warnings.map((w, k) => <li key={k}>{w}</li>)}</ul></Detail>}
+        </>
+      );
+    }
   } else if (id.startsWith("src:")) {
     const s = sources.find((x) => `src:${x.id}` === id);
     if (!s) return null;
     const meta = view.sources[s.id] || {};
-    const readers = steps.filter((x) => x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)));
+    const readers = model.steps.filter((x) => x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)));
     title = `${s.id} · source`;
     body = (
       <>
@@ -190,17 +220,25 @@ function DetailsPane({ id, view, onClose, actions }) {
   } else if (id === "output") {
     const run = view.last_run;
     title = "Output";
-    body = run ? (
+    const errs = problems.errors.output || [], warns = problems.warnings.output || [];
+    body = (
       <>
-        <Detail label="Last run">{(run.at || "").slice(0, 16).replace("T", " ")}{run.upto ? ` (preview to ${run.upto})` : " (full run)"}</Detail>
-        <Detail label="Records">{run.coverage?.records ?? 0}</Detail>
-        <Detail label="Required blanks">{(run.coverage?.required_gaps || []).join(", ") || "none"}</Detail>
-        <Detail label="Publish">{view.gate?.length ? <ul className="pl-warn-list">{view.gate.map((g, k) => <li key={k}>{g}</li>)}</ul> : "ready for review"}</Detail>
+        <Detail label="Takes">{model.outputFrom.join(" + ") || "nothing wired in"}</Detail>
+        {errs.length > 0 && <Detail label="Errors"><ul className="pl-warn-list pl-bad">{errs.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
+        {warns.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{warns.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
+        {run ? (
+          <>
+            <Detail label="Last run">{(run.at || "").slice(0, 16).replace("T", " ")}{run.upto ? ` (preview to ${run.upto})` : " (full run)"}</Detail>
+            <Detail label="Records">{run.coverage?.records ?? 0}</Detail>
+            <Detail label="Required blanks">{(run.coverage?.required_gaps || []).join(", ") || "none"}</Detail>
+            <Detail label="Publish">{view.gate?.length ? <ul className="pl-warn-list">{view.gate.map((g, k) => <li key={k}>{g}</li>)}</ul> : "ready for review"}</Detail>
+          </>
+        ) : <div className="assess">No run yet.</div>}
       </>
-    ) : <div className="assess">No run yet.</div>;
+    );
   } else if (id === "gaps") {
     title = "Missing steps";
-    body = <div>No step produces {(view.design_gaps || []).map((g) => <code key={g} style={{ marginRight: ".3rem" }}>{g}</code>)}. Add a step that fills them, or ask the agent.</div>;
+    body = <div>No step produces {(view.design_gaps || []).map((g) => <code key={g} style={{ marginRight: ".3rem" }}>{g}</code>)}. Add a step that fills them in a draft, or ask the agent.</div>;
   } else return null;
   return (
     <aside className="pl-details" onContextMenu={(e) => e.preventDefault()}>
@@ -213,18 +251,57 @@ function DetailsPane({ id, view, onClose, actions }) {
   );
 }
 
+// What Check found, and what Apply would do.
+function CheckPanel({ view, onFocus, onClose }) {
+  const c = view.draft?.check;
+  if (!c) return null;
+  const steps = view.draft.steps || [];
+  const added = steps.filter((s) => s.draft_state === "new").map((s) => s.id);
+  const changed = steps.filter((s) => s.draft_state === "changed").map((s) => s.id);
+  const removed = view.draft.removed || [];
+  const plan = [added.length && `adds ${added.join(", ")}`, changed.length && `changes ${changed.join(", ")}`,
+                removed.length && `removes ${removed.join(", ")}`].filter(Boolean).join("; ");
+  const item = (x, k, cls) => (
+    <li key={k} className={cls}>
+      {x.node ? <button type="button" className="link" onClick={() => onFocus(x.node)}>{x.node === "output" ? "Output" : x.node}</button> : null}
+      {x.node ? " · " : ""}{x.text}
+    </li>
+  );
+  return (
+    <div className="pl-check">
+      <div className="pl-check-head">
+        <b>Check</b>
+        {c.ok ? <span className="tag ok">no errors</span> : <span className="tag gone">{c.errors.length} error{c.errors.length > 1 ? "s" : ""}</span>}
+        {c.warnings.length > 0 && <span className="tag edited">{c.warnings.length} warning{c.warnings.length > 1 ? "s" : ""}</span>}
+        <span className="assess">Apply {plan || "changes nothing"}. Unchanged steps keep their approval.</span>
+        <span className="spacer" />
+        <button className="link" onClick={onClose} aria-label="Hide check">✕</button>
+      </div>
+      {(c.errors.length > 0 || c.warnings.length > 0) && (
+        <ul className="pl-check-list">
+          {c.errors.map((x, k) => item(x, "e" + k, "err"))}
+          {c.warnings.map((x, k) => item(x, "w" + k, "warn"))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ── The canvas ───────────────────────────────────────────────────────────────
 
 function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAskAgent, onOpenSource }) {
   const d = view.definition;
+  const model = useMemo(() => stepsModel(view), [view]);
+  const inDraft = model.draft;
   const sources = useMemo(() => d.sources || [], [d.sources]);
-  const steps = useMemo(() => d.steps || [], [d.steps]);
-  const gaps = useMemo(() => (steps.length ? view.design_gaps || [] : []), [steps.length, view.design_gaps]);
+  const steps = model.steps;
+  const liveSteps = useMemo(() => Object.fromEntries((d.steps || []).map((s) => [s.id, s])), [d.steps]);
+  const gaps = useMemo(() => (!inDraft && steps.length ? view.design_gaps || [] : []), [inDraft, steps.length, view.design_gaps]);
   const busy = !!view.busy;
   const run = view.last_run;
-  const canAdd = d.schema?.status === "approved" && d.sources_status === "final";
-  const addWhy = d.schema?.status !== "approved" ? "Approve the target schema first" : "Mark the sources final first";
-  const editable = !disabled;
+  const canDesign = d.schema?.status === "approved" && d.sources_status === "final";
+  const designWhy = d.schema?.status !== "approved" ? "Approve the target schema first" : "Mark the sources final first";
+  const editable = inDraft && !disabled;
   const flow = useReactFlow();
   const wrap = useRef(null);
 
@@ -232,12 +309,22 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
   const [details, setDetails] = useState(null);
   const [notice, setNotice] = useState(null);
   const [tall, setTall] = useState(false);
+  const [showCheck, setShowCheck] = useState(false);
   const flash = useCallback((text) => setNotice({ text, at: Date.now() }), []);
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 6000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // Problems from the draft's check, by node id on the canvas.
+  const problems = useMemo(() => {
+    const errors = {}, warnings = {};
+    const key = (n) => (n === "output" ? "output" : n ? `step:${n}` : null);
+    for (const e of view.draft?.check?.errors || []) if (key(e.node)) (errors[key(e.node)] ||= []).push(e.text);
+    for (const w of view.draft?.check?.warnings || []) if (key(w.node)) (warnings[key(w.node)] ||= []).push(w.text);
+    return { errors, warnings };
+  }, [view.draft]);
 
   // Which step the server is on, from progress lines like "Running s2 (parse)".
   const [running, setRunning] = useState(null);
@@ -255,7 +342,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
     catch (e) { flash(e.message.replace(/^\d+ — /, "")); return null; }
   }, [act, flash]);
 
-  // ── layout: saved positions, else follow the chain ─────────────────────────
+  // ── layout: saved positions, else by depth in the graph ───────────────────
   const [local, setLocal] = useState(null);       // the layout as last changed here; null = the server's
   const layout = useMemo(() => local ?? d.layout ?? {}, [local, d.layout]);
   const queued = useRef(null);
@@ -277,14 +364,21 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
   const positions = useMemo(() => {
     const pos = {};
     const srcIds = nodeIds.filter((id) => id.startsWith("src:") || id === "sources");
-    srcIds.forEach((id, i) => { pos[id] = layout[id] || { x: 0, y: (i - (srcIds.length - 1) / 2) * ROW }; });
-    let prev = { x: 0, y: 0 };
-    for (const id of nodeIds.filter((x) => !srcIds.includes(x))) {
-      pos[id] = layout[id] || { x: prev.x + COL, y: prev.y };
-      prev = pos[id];
+    srcIds.forEach((id, i) => { pos[id] = layout[id] || { x: 0, y: (i - (srcIds.length - 1) / 2) * ROW * 0.85 }; });
+    const depth = {};
+    for (const sid of model.order) depth[sid] = Math.max(-1, ...(model.inputs[sid] || []).map((i) => depth[i] ?? -1)) + 1;
+    for (const s of steps) if (depth[s.id] == null) depth[s.id] = 0;
+    const cols = {};
+    for (const s of steps) (cols[depth[s.id]] ||= []).push(s.id);
+    for (const [c, ids] of Object.entries(cols)) {
+      ids.forEach((sid, i) => { pos[`step:${sid}`] = layout[`step:${sid}`] || { x: (Number(c) + 1) * COL, y: (i - (ids.length - 1) / 2) * ROW }; });
     }
+    const last = steps.length ? Math.max(...Object.values(depth)) + 1 : 1;
+    if (!steps.length) pos.steps = layout.steps || { x: COL, y: 0 };
+    if (gaps.length) pos.gaps = layout.gaps || { x: (last + 1) * COL, y: 0 };
+    pos.output = layout.output || { x: (last + 1 + (gaps.length ? 1 : 0)) * COL, y: 0 };
     return pos;
-  }, [nodeIds, layout]);
+  }, [nodeIds, layout, model, steps, gaps.length]);
 
   // ── what to draw ───────────────────────────────────────────────────────────
   const status = useMemo(() => {
@@ -292,12 +386,16 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
     const srcState = d.sources_status === "final" ? "ok" : sources.length ? "pending" : "idle";
     sources.forEach((s) => { st[`src:${s.id}`] = view.sources[s.id]?.error ? "bad" : srcState; });
     st.sources = srcState;
-    steps.forEach((s) => { st[`step:${s.id}`] = stepStatus(s, view.outputs[s.id]); });
+    steps.forEach((s) => {
+      const id = `step:${s.id}`;
+      if (inDraft) st[id] = problems.errors[id] ? "bad" : s.draft_state === "unchanged" ? stepStatus(liveSteps[s.id], view.outputs[s.id]) : "pending";
+      else st[id] = stepStatus(s, view.outputs[s.id]);
+    });
     st.steps = "idle";
     st.gaps = "bad";
-    st.output = run ? (run.upto ? "pending" : "ok") : "idle";
+    st.output = problems.errors.output ? "bad" : run ? (run.upto ? "pending" : "ok") : "idle";
     return st;
-  }, [d.sources_status, sources, steps, view.sources, view.outputs, run]);
+  }, [d.sources_status, sources, steps, view.sources, view.outputs, run, inDraft, problems, liveSteps]);
 
   const reads = useCallback((s) => (s.config?.source_ids?.length ? s.config.source_ids : sources.map((x) => x.id)), [sources]);
 
@@ -314,58 +412,68 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
         kind: s.id, title: cut(s.label, 24), connectable: editable, running: running === "sources",
         sub: s.kind === "grants_gov" ? "Grants.gov search" : cut(s.url, 30),
         meta: meta.error ? "unreadable" : meta.chars != null ? `${meta.chars.toLocaleString()} chars` : null,
-      }, { deletable: editable, connectable: editable });
+      }, { deletable: !disabled, connectable: editable });
     });
     if (!steps.length) add("steps", "marker", {
       kind: "Steps", ghost: true, title: busy && d.sources_status === "final" ? "Outlining…" : "No steps yet",
-      sub: canAdd ? "right-click to add, or ask the agent" : d.sources_status === "final" ? "the agent outlines them" : "after sources are final",
+      sub: canDesign ? (inDraft ? "add a step, or ask the agent" : "Edit pipeline to add steps") : designWhy.toLowerCase(),
     });
-    steps.forEach((s, i) => {
+    steps.forEach((s) => {
       const cat = view.catalog[s.type] || {};
-      const out = view.outputs[s.id];
-      const before = i > 0 ? view.outputs[steps[i - 1].id] : null;
-      const port = portText(view, s.id);
-      const count = out && !out.error ? `${before && !before.error && s.type !== "extract" ? `${before.count} → ` : ""}${out.count} record${out.count === 1 ? "" : "s"}` : null;
-      add(`step:${s.id}`, "step", {
-        kind: s.id, n: i + 1, title: cat.label || s.type, sub: stepSummary(s), model: cat.model,
-        running: running === s.id, connectable: editable,
-        meta: out?.error ? "error" : count || "not previewed",
-        inTip: `Input: ${port.input}`,
-        outTip: `Output: ${port.output}\n${port.writes.length ? `Writes: ${port.writes.join(", ")}` : "Writes no fields"}`,
+      const id = `step:${s.id}`;
+      const ins = model.inputs[s.id] || [];
+      let meta, inTip, outTip;
+      if (inDraft) {
+        const port = draftPortText(view, s.id);
+        meta = s.draft_state === "unchanged" ? "unchanged" : `${s.draft_state} in draft`;
+        inTip = `Input: ${port.input}`;
+        outTip = `Output: ${port.output}\n${port.writes.length ? `Writes: ${port.writes.join(", ")}` : "Writes no fields"}`;
+      } else {
+        const out = view.outputs[s.id];
+        const before = ins.map((i) => view.outputs[i]);
+        const inCount = before.length && before.every((o) => o && !o.error) && s.type !== "extract" ? before.reduce((a, o) => a + o.count, 0) : null;
+        meta = out?.error ? "error" : out && !out.error ? `${inCount != null ? `${inCount} → ` : ""}${out.count} record${out.count === 1 ? "" : "s"}` : "not previewed";
+        const port = portText(view, s.id);
+        inTip = `Input: ${port.input}`;
+        outTip = `Output: ${port.output}\n${port.writes.length ? `Writes: ${port.writes.join(", ")}` : "Writes no fields"}`;
+      }
+      add(id, "step", {
+        kind: s.id, n: model.order.indexOf(s.id) + 1, title: cat.label || s.type, sub: stepSummary(s), model: cat.model,
+        running: running === s.id, connectable: editable, meta, inTip, outTip,
+        draft: inDraft ? s.draft_state : null, errs: problems.errors[id],
       }, { deletable: editable, connectable: editable });
     });
     if (gaps.length) add("gaps", "marker", { kind: "Missing", title: "No step fills", sub: cut(gaps.join(", "), 40), meta: "right-click for help", ghost: true });
     add("output", "output", {
-      kind: "Output", title: run && !run.upto ? "Final output" : "Output", connectable: editable,
-      sub: run ? `${run.coverage?.records ?? 0} records` : "no run yet",
-      meta: run?.upto ? `preview to ${run.upto}` : run ? (run.at || "").slice(5, 16).replace("T", " ") : null,
+      kind: "Output", title: run && !run.upto && !inDraft ? "Final output" : "Output", connectable: editable,
+      sub: inDraft ? (model.outputFrom.length ? `takes ${model.outputFrom.join(" + ")}` : "nothing wired in") : run ? `${run.coverage?.records ?? 0} records` : "no run yet",
+      meta: inDraft ? null : run?.upto ? `preview to ${run.upto}` : run ? (run.at || "").slice(5, 16).replace("T", " ") : null,
+      errs: problems.errors.output,
     }, { connectable: editable });
     return ns;
-  }, [positions, status, sel, sources, steps, view, editable, running, busy, d.sources_status, canAdd, gaps, run]);
+  }, [positions, status, sel, sources, steps, view, editable, disabled, running, busy, d.sources_status, canDesign, designWhy, gaps, run, model, inDraft, problems]);
 
   const edges = useMemo(() => {
     const es = [];
     const edge = (source, target, kind, extra = {}) => {
-      const done = status[source] === "ok" && status[target] !== "bad";
+      const done = !inDraft && status[source] === "ok" && status[target] !== "bad";
       es.push({
         id: `${kind}:${source}>${target}`, source, target, data: { kind }, animated: busy,
         className: `pl-wire ${kind}${done ? " done" : ""}`, deletable: false, reconnectable: false,
         markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: done ? TEAL : FAINT }, ...extra,
       });
     };
-    const srcNode = (id) => `src:${id}`;
-    steps.forEach((s, i) => {
-      if (i > 0) edge(`step:${steps[i - 1].id}`, `step:${s.id}`, "chain", { reconnectable: editable });
-      if (s.type === "extract") reads(s).forEach((sid) => edge(srcNode(sid), `step:${s.id}`, "source", { deletable: editable, reconnectable: editable }));
-    });
-    const firstIn = sources.length ? sources.map((s) => srcNode(s.id)) : ["sources"];
-    if (!steps.length) firstIn.forEach((n) => edge(n, "steps", "chain"));
-    else if (!steps.some((s) => s.type === "extract")) firstIn.forEach((n) => edge(n, `step:${steps[0].id}`, "implicit"));
-    const last = steps.length ? `step:${steps[steps.length - 1].id}` : "steps";
-    if (gaps.length) { edge(last, "gaps", "chain"); edge("gaps", "output", "chain"); }
-    else edge(last, "output", "chain", { reconnectable: editable && steps.length > 0 });
+    const wired = { deletable: editable, reconnectable: editable };
+    for (const s of steps) {
+      for (const i of model.inputs[s.id] || []) edge(`step:${i}`, `step:${s.id}`, "chain", wired);
+      if (s.type === "extract") reads(s).forEach((sid) => edge(`src:${sid}`, `step:${s.id}`, "source", wired));
+    }
+    if (!steps.length) (sources.length ? sources.map((s) => `src:${s.id}`) : ["sources"]).forEach((n) => edge(n, "steps", "chain"));
+    const ends = model.outputFrom.filter((i) => steps.some((s) => s.id === i)).map((i) => `step:${i}`);
+    if (gaps.length) { ends.forEach((e) => edge(e, "gaps", "chain")); edge("gaps", "output", "chain"); }
+    else ends.forEach((e) => edge(e, "output", "out", wired));
     return es;
-  }, [steps, sources, gaps.length, status, busy, editable, reads]);
+  }, [steps, sources, gaps.length, status, busy, editable, reads, model, inDraft]);
 
   // React Flow keeps measurements and selection on the node objects; refresh the rest.
   const [nodes, setNodes, onNodesChange] = useNodesState(base);
@@ -395,50 +503,48 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
   const stepOf = (nodeId) => steps.find((s) => `step:${s.id}` === nodeId);
   const sourceOf = (nodeId) => sources.find((s) => `src:${s.id}` === nodeId);
   const label = (s) => `${s.id} (${view.catalog[s.type]?.label || s.type})`;
+  const nodeOf = (id) => (id === "output" ? "output" : id.slice(5));
 
-  const placeAt = (s, index) => {
-    if (steps.indexOf(s) === index) return null;
-    return send("POST", `/steps/${s.id}/move`, { position: index });
+  const openDraft = () => send("POST", "/draft");
+  const discard = () => {
+    if (window.confirm("Discard the draft? Your changes to the steps are lost; the applied steps stay as they are.")) send("DELETE", "/draft");
   };
-  // Run `s` right after `after` (null = first).
-  const placeAfter = (s, after) => {
-    const order = steps.filter((x) => x !== s);
-    return placeAt(s, after ? order.indexOf(after) + 1 : 0);
+  const apply = async () => {
+    const r = await send("POST", "/draft/apply");
+    if (r) flash(`Applied${r.reset?.length ? `: ${r.reset.join(", ")} need approving again` : ""}.`);
+    else setShowCheck(true);
   };
+  const link = (a, b) => send("POST", "/draft/links", { source: a, target: b });
+  const unlink = (a, b) => send("POST", "/draft/unlink", { source: a, target: b });
   const wire = (src, s) => {
     if (s.type !== "extract") {
       const ex = steps.filter((x) => x.type === "extract").map((x) => x.id);
-      flash(`Sources feed Extract steps only; ${s.id} works on the records before it.${ex.length ? ` Wire ${src.id} to ${ex.join(" or ")}.` : " Add an Extract step first."}`);
+      flash(`Sources feed Extract steps only.${ex.length ? ` Wire ${src.id} to ${ex.join(" or ")}.` : " Add an Extract step first."}`);
       return null;
     }
     if (reads(s).includes(src.id)) { flash(`${s.id} already reads ${src.id}.`); return null; }
-    return send("PATCH", `/steps/${s.id}`, { config: { ...s.config, source_ids: [...reads(s), src.id] } });
+    return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, source_ids: [...reads(s), src.id] } });
   };
   const unwire = (src, s) => {
     const rest = reads(s).filter((x) => x !== src.id);
     if (!rest.length) { flash(`${s.id} must read at least one source. Wire another source to it first, or remove the step.`); return null; }
-    return send("PATCH", `/steps/${s.id}`, { config: { ...s.config, source_ids: rest } });
+    return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, source_ids: rest } });
   };
-  const removeStep = (s) => {
-    const later = steps.slice(steps.indexOf(s) + 1).filter((x) => x.status === "approved").length;
-    if (!window.confirm(`Remove step ${label(s)}?${later ? ` ${later} later approved step(s) go back for approval.` : ""}`)) return null;
-    return send("DELETE", `/steps/${s.id}`);
-  };
+  const removeStep = (s) => send("DELETE", `/draft/steps/${s.id}`);
   const removeSource = (src) => {
     const msg = d.sources_status === "final" ? " The sources are reopened and every step goes back for approval." : "";
     if (!window.confirm(`Remove source ${src.id} (${src.label})?${msg}`)) return null;
     return send("DELETE", `/sources/${src.id}`);
   };
-  const preview = (s) => send("POST", "/run", s === steps[steps.length - 1] ? {} : { upto: s.id });
+  const preview = (s) => send("POST", "/run", model.outputFrom.length === 1 && model.outputFrom[0] === s.id ? {} : { upto: s.id });
   const approve = (s) => send("POST", `/steps/${s.id}/approve`);
 
   const connect = ({ source, target }) => {
     if (!editable || !source || !target || source === target) return;
     const src = sourceOf(source), from = stepOf(source), to = stepOf(target);
     if (src && to) return wire(src, to);
-    if (from && to) return placeAfter(to, from);
-    if (from && target === "output") return placeAt(from, steps.length - 1);
-    flash("That wire has no meaning here: wire sources into Extract steps, and steps into the steps that should follow them.");
+    if (from && (to || target === "output")) return link(from.id, to ? to.id : "output");
+    flash("Wire sources into Extract steps, and steps into the steps (or Output) that take their records.");
   };
   const isValidConnection = ({ source, target }) => {
     if (!source || !target || source === target) return false;
@@ -456,7 +562,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
       if (to === oldStep) {   // same step, different source: swap it
         const ids = reads(to).filter((x) => x !== oldSrc.id);
         if (!ids.includes(src.id)) ids.push(src.id);
-        send("PATCH", `/steps/${to.id}`, { config: { ...to.config, source_ids: ids } });
+        send("PATCH", `/draft/steps/${to.id}`, { config: { ...to.config, source_ids: ids } });
         return;
       }
       if (await wire(src, to)) {
@@ -465,31 +571,38 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
       }
       return;
     }
-    connect(next);
+    if (!isValidConnection(next)) return;
+    if (await unlink(nodeOf(old.source), nodeOf(old.target))) connect(next);
   };
   const onBeforeDelete = async ({ nodes: ns, edges: es }) => {
-    if (!editable) return false;
-    const doomedSteps = ns.map((n) => stepOf(n.id)).filter(Boolean);
+    if (disabled) return false;
+    const doomed = editable ? ns.map((n) => stepOf(n.id)).filter(Boolean) : [];
     const doomedSources = ns.map((n) => sourceOf(n.id)).filter(Boolean);
-    if (doomedSteps.length + doomedSources.length > 1) {
-      flash("Remove one node at a time: each removal can send steps back for approval.");
-    } else if (doomedSteps[0]) removeStep(doomedSteps[0]);
-    else if (doomedSources[0]) removeSource(doomedSources[0]);
-    else {
-      const e = es.find((x) => x.data?.kind === "source");
-      if (e) unwire(sourceOf(e.source), stepOf(e.target));
+    if (doomedSources.length > 1) flash("Remove one source at a time: each removal reopens the sources.");
+    else if (doomedSources[0] && !doomed.length) removeSource(doomedSources[0]);
+    for (const s of doomed) if (!(await removeStep(s))) break;
+    if (!ns.length && editable) {
+      for (const e of es) {
+        if (e.data?.kind === "source") { if (!(await unwire(sourceOf(e.source), stepOf(e.target)))) break; }
+        else if (!(await unlink(nodeOf(e.source), nodeOf(e.target)))) break;
+      }
     }
     return false;   // the server's answer redraws the canvas
   };
 
   const onNodeDragStop = (_e, _n, dragged) => {
     const moved = Object.fromEntries((dragged || []).map((n) => [n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) }]));
-    const keep = Object.fromEntries(Object.entries(layout).filter(([k]) => nodeIds.includes(k)));
+    const keep = Object.fromEntries(Object.entries(layout).filter(([k]) => nodeIds.includes(k) || k.startsWith("step:")));
     saveLayout({ ...keep, ...moved });
   };
   const tidy = () => { saveLayout({}); setTimeout(() => flow.fitView({ padding: 0.18, maxZoom: 1, duration: 200 }), 60); };
+  const focus = (node) => {
+    const id = node === "output" ? "output" : `step:${node}`;
+    onSelect(id);
+    flow.fitView({ nodes: [{ id }], padding: 0.8, maxZoom: 1.1, duration: 250 });
+  };
 
-  // A step added on the canvas lands where the planner right-clicked.
+  // A step added from the background lands where the planner right-clicked.
   const addAt = (opts) => onAddStep({ ...opts, onAdded: (id, at) => at && saveLayout({ ...layout, [`step:${id}`]: at }) });
 
   // ── menus ──────────────────────────────────────────────────────────────────
@@ -500,15 +613,17 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
   const openMenu = (e, m) => { e.preventDefault(); setMenu({ ...at(e), ...m }); };
   const off = (why) => ({ disabled: true, why });
   const lock = disabled ? off(busy ? "Wait for the agent or the run to finish" : "Working…") : {};
+  const design = canDesign ? {} : off(designWhy);
 
-  function stepItems(s) {
-    const i = steps.indexOf(s);
+  function liveStepItems(s) {
     const out = view.outputs[s.id];
-    const blocked = steps.slice(0, i).filter((x) => x.status !== "approved").map((x) => x.id);
+    const ancestors = [...(model.inputs[s.id] || [])];
+    const seen = new Set();
+    while (ancestors.length) { const a = ancestors.pop(); if (!seen.has(a)) { seen.add(a); ancestors.push(...(model.inputs[a] || [])); } }
+    const blocked = steps.filter((x) => seen.has(x.id) && x.status !== "approved").map((x) => x.id);
     return [
       { label: "Open in editor", run: () => onSelect(`step:${s.id}`) },
       { label: "Details", run: () => setDetails(`step:${s.id}`) },
-      { label: "Edit settings…", run: () => onEditStep(s.id), ...lock },
       "-",
       { label: out ? "Preview again" : "Preview this step", run: () => preview(s), ...lock },
       s.status !== "approved" && {
@@ -516,19 +631,30 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
         ...(blocked.length ? off(`Approve ${blocked.join(", ")} first`) : !out ? off("Preview it first") : out.error ? off("Its last preview failed") : {}),
       },
       "-",
-      { label: "Insert step before…", run: () => addAt({ position: i }), ...lock, ...(canAdd ? {} : off(addWhy)) },
-      { label: "Insert step after…", run: () => addAt({ position: i + 1 }), ...lock, ...(canAdd ? {} : off(addWhy)) },
-      { label: "Move earlier", run: () => placeAt(s, i - 1), ...lock, ...(i === 0 ? off("Already first") : {}) },
-      { label: "Move later", run: () => placeAt(s, i + 1), ...lock, ...(i === steps.length - 1 ? off("Already last") : {}) },
+      { label: "Edit settings… (in a draft)", run: () => onEditStep(s.id), ...lock, ...design },
+      { label: "Edit pipeline", run: openDraft, ...lock, ...design },
       { label: "Ask the agent about it…", run: () => onAskAgent(`About step ${label(s)}: `), ...lock },
+    ];
+  }
+
+  function draftStepItems(s) {
+    return [
+      { label: "Details", run: () => setDetails(`step:${s.id}`) },
+      { label: "Edit settings…", run: () => onEditStep(s.id), ...lock },
       "-",
-      { label: "Remove step", key: "Del", danger: true, run: () => removeStep(s), ...lock },
+      { label: "Insert step before…", run: () => addAt({ before: s.id }), ...lock },
+      { label: "Insert step after…", run: () => addAt({ after: s.id }), ...lock },
+      { label: "Wire into Output", run: () => link(s.id, "output"), ...lock, ...(model.outputFrom.includes(s.id) ? off("Already wired into Output") : {}) },
+      { label: "Ask the agent about it…", run: () => onAskAgent(`About step ${label(s)} in the draft: `), ...lock },
+      "-",
+      { label: "Remove from draft", key: "Del", danger: true, run: () => removeStep(s), ...lock },
     ];
   }
 
   function menuItems(m) {
     if (m.kind === "pane") return [
-      { label: "Add step here…", run: () => addAt({ position: steps.length, at: m.flow }), ...lock, ...(canAdd ? {} : off(addWhy)) },
+      inDraft ? { label: "Add step here…", run: () => addAt({ at: m.flow }), ...lock }
+        : { label: "Edit pipeline", run: openDraft, ...lock, ...design },
       { label: "Ask the agent…", run: () => onAskAgent(""), ...lock },
       "-",
       { label: "Fit to view", run: () => flow.fitView({ padding: 0.18, maxZoom: 1, duration: 200 }) },
@@ -537,44 +663,45 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
     if (m.kind === "edge") {
       const e = edges.find((x) => x.id === m.id);
       if (!e) return [];
+      if (!inDraft) return [{ label: "Edit pipeline to rewire", run: openDraft, ...lock, ...design }];
       if (e.data.kind === "source") {
         const src = sourceOf(e.source), s = stepOf(e.target);
         return [
-          { label: `${src.id} → ${s.id}: ${s.id} reads ${src.id}`, run: () => setDetails(e.source), disabled: false },
+          { label: `${s.id} reads ${src.id}`, run: () => setDetails(e.source) },
           "-",
           { label: "Disconnect", key: "Del", danger: true, run: () => unwire(src, s), ...lock },
         ];
       }
-      const to = stepOf(e.target), from = stepOf(e.source);
-      const index = to ? steps.indexOf(to) : from ? steps.indexOf(from) + 1 : 0;
+      const from = stepOf(e.source);
       return [
-        { label: "Insert step here…", run: () => addAt({ position: index }), ...lock, ...(canAdd ? {} : off(addWhy)) },
-        { label: "Run order: drag either end of this wire to reorder", disabled: true },
+        from && { label: "Insert step here…", run: () => addAt({ after: from.id }), ...lock },
+        { label: "Remove wire", key: "Del", danger: true, run: () => unlink(nodeOf(e.source), nodeOf(e.target)), ...lock },
       ];
     }
     const id = m.id;
     const s = stepOf(id);
-    if (s) return stepItems(s);
+    if (s) return inDraft ? draftStepItems(s) : liveStepItems(s);
     const src = sourceOf(id);
     if (src) return [
       { label: "Details", run: () => setDetails(id) },
       { label: "Open in the source reader", run: () => onOpenSource(src.id) },
       "-",
-      { label: "Remove source", key: "Del", danger: true, run: () => removeSource(src), ...lock },
+      { label: "Remove source", danger: true, run: () => removeSource(src), ...lock },
     ];
     if (id === "output") return [
-      { label: "Open output", run: () => onSelect("output") },
+      !inDraft && { label: "Open output", run: () => onSelect("output") },
       { label: "Details", run: () => setDetails("output") },
-      { label: "Run the whole pipeline", run: () => send("POST", "/run", {}), ...lock, ...(steps.length ? {} : off("No steps yet")) },
+      !inDraft && { label: "Run the whole pipeline", run: () => send("POST", "/run", {}), ...lock, ...(steps.length ? {} : off("No steps yet")) },
     ];
     if (id === "gaps") return [
       { label: "Details", run: () => setDetails("gaps") },
-      { label: "Add a step to fill them…", run: () => addAt({ position: steps.length }), ...lock, ...(canAdd ? {} : off(addWhy)) },
+      { label: "Edit pipeline to add them", run: openDraft, ...lock, ...design },
       { label: "Ask the agent to fill them…", run: () => onAskAgent(`No step produces ${gaps.join(", ")}. Add the steps that fill ${gaps.length > 1 ? "them" : "it"}.`), ...lock },
     ];
     if (id === "steps") return [
-      { label: "Add step…", run: () => addAt({ position: 0 }), ...lock, ...(canAdd ? {} : off(addWhy)) },
-      { label: "Ask the agent to outline the steps…", run: () => onAskAgent("Outline the steps for this pipeline."), ...lock },
+      inDraft ? { label: "Add step…", run: () => addAt({ connect: true }), ...lock }
+        : { label: "Edit pipeline", run: openDraft, ...lock, ...design },
+      { label: "Ask the agent to outline the steps…", run: () => onAskAgent("Outline the steps for this pipeline."), ...lock, ...design },
     ];
     if (id === "sources") return [{ label: "Add sources", run: () => onOpenSource(null) }];
     return [];
@@ -583,35 +710,55 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
   function detailActions(id) {
     const s = stepOf(id);
     if (s) {
-      const items = stepItems(s).filter((x) => x && x !== "-" && ["Open in editor", "Edit settings…", "Preview this step", "Preview again"].includes(x.label));
+      if (inDraft) return [{ label: "Edit settings…", run: () => onEditStep(s.id), primary: true, ...lock }];
+      const items = liveStepItems(s).filter((x) => x && x !== "-" && ["Open in editor", "Preview this step", "Preview again"].includes(x.label));
       return items.map((x, k) => ({ ...x, primary: k === 0 }));
     }
     const src = sourceOf(id);
     if (src) return [{ label: "Open in the source reader", run: () => onOpenSource(src.id) }];
-    if (id === "output") return [{ label: "Open output", run: () => onSelect("output"), primary: true }];
+    if (id === "output" && !inDraft) return [{ label: "Open output", run: () => onSelect("output"), primary: true }];
     return [];
   }
 
+  const check = view.draft?.check;
   const approved = steps.filter((s) => s.status === "approved").length;
   return (
-    <div className={"pl-canvas" + (busy ? " busy" : "") + (tall ? " tall" : "")}>
+    <div className={"pl-canvas" + (busy ? " busy" : "") + (tall ? " tall" : "") + (inDraft ? " drafting" : "")}>
       <div className="pl-canvas-bar">
         <b>Pipeline</b>
-        <span className="assess">{steps.length ? `${approved}/${steps.length} steps approved` : "no steps yet"}</span>
+        {inDraft ? (
+          <>
+            <span className="tag edited">draft</span>
+            <span className="assess">{check ? (check.ok ? `ready to apply${check.warnings.length ? `, ${check.warnings.length} warning(s)` : ""}` : `${check.errors.length} error(s) to fix`) : ""}</span>
+          </>
+        ) : <span className="assess">{steps.length ? `${approved}/${steps.length} steps approved` : "no steps yet"}</span>}
         <span className="spacer" />
-        <button className="pl-bar-btn" disabled={disabled || !canAdd} title={canAdd ? "Add a step at the end" : addWhy}
-                onClick={() => addAt({ position: steps.length })}>+ Add step</button>
+        {inDraft ? (
+          <>
+            <button className="pl-bar-btn" disabled={disabled} onClick={() => addAt({ connect: true })} title="Add a step at the end, feeding Output">+ Add step</button>
+            <button className={"pl-bar-btn" + (showCheck ? " on" : "")} onClick={() => setShowCheck(!showCheck)}>
+              Check{check && !check.ok ? ` (${check.errors.length})` : ""}
+            </button>
+            <button className="pl-bar-btn primary" disabled={disabled || !check?.ok} onClick={apply}
+                    title={check?.ok ? "Replace the steps with the draft" : "Fix the errors Check reports first"}>Apply</button>
+            <button className="pl-bar-btn" disabled={disabled} onClick={discard}>Discard</button>
+          </>
+        ) : (
+          <button className="pl-bar-btn primary" disabled={disabled || !canDesign} title={canDesign ? "Change the steps in a draft" : designWhy}
+                  onClick={openDraft}>Edit pipeline</button>
+        )}
         <button className="pl-bar-btn" disabled={disabled} onClick={() => onAskAgent("")}>Ask the agent</button>
-        <button className="pl-bar-btn" title="Put every node back in run order" disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
+        <button className="pl-bar-btn" title="Put every node back in its default place" disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
         <button className="pl-bar-btn" title={tall ? "Shrink the canvas" : "Make the canvas taller"} onClick={() => setTall(!tall)}>{tall ? "Shrink" : "Expand"}</button>
       </div>
+      {inDraft && showCheck && <CheckPanel view={view} onFocus={focus} onClose={() => setShowCheck(false)} />}
       <div className="pl-flow" ref={wrap}>
         <ReactFlow
           nodes={nodes} edges={shownEdges} nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
           onNodeClick={(_e, n) => { setMenu(null); onSelect(n.id); }}
           onNodeDoubleClick={(_e, n) => {
-            if (stepOf(n.id) && editable) onEditStep(n.id.slice(5));
+            if (stepOf(n.id) && !disabled && canDesign) onEditStep(n.id.slice(5));
             else if (sourceOf(n.id)) onOpenSource(n.id.slice(4));
             else setDetails(n.id);
           }}
@@ -622,7 +769,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
           onMoveStart={() => setMenu(null)}
           onConnect={connect} isValidConnection={isValidConnection}
           onReconnect={reconnect} edgesReconnectable={editable}
-          onBeforeDelete={onBeforeDelete} deleteKeyCode={editable ? ["Delete", "Backspace"] : null}
+          onBeforeDelete={onBeforeDelete} deleteKeyCode={disabled ? null : ["Delete", "Backspace"]}
           onNodeDragStop={onNodeDragStop}
           nodesConnectable={editable} elementsSelectable
           zoomOnScroll={false} preventScrolling={false} zoomOnDoubleClick={false}
@@ -634,10 +781,13 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
           <MiniMap pannable zoomable position="bottom-right" className="pl-minimap"
                    nodeColor={(n) => ({ ok: TEAL, pending: "#6055C9", bad: "#D1495B" }[n.data?.status] || FAINT)} />
         </ReactFlow>
-        <div className="pl-flow-hint">Drag a node’s right-hand dot to rewire · right-click for more · Ctrl+scroll to zoom</div>
+        <div className="pl-flow-hint">
+          {inDraft ? "Draft: drag from a dot to wire · several wires into a step merge · right-click for more · nothing changes until Apply"
+            : "Edit pipeline to change the steps · right-click for more · Ctrl+scroll to zoom"}
+        </div>
         {notice && <div className="pl-toast" role="status" onClick={() => setNotice(null)}>{notice.text}</div>}
         {menu && <Menu menu={menu} items={menuItems(menu)} onClose={() => setMenu(null)} />}
-        {details && <DetailsPane id={details} view={view} onClose={() => setDetails(null)} actions={detailActions(details)} />}
+        {details && <DetailsPane id={details} view={view} model={model} problems={problems} onClose={() => setDetails(null)} actions={detailActions(details)} />}
       </div>
     </div>
   );

@@ -40,6 +40,7 @@ from typing import Any, Callable, Optional
 
 import duckdb
 
+from backend.pipelines import graph
 from backend.tools import grants_gov, source_store, web_source
 from backend.tools.llm_extractor import structured_call
 
@@ -1602,6 +1603,7 @@ def changes_since(prev: list[dict] | None, records: list[dict], fields: list[dic
 def definition_hash(definition: dict) -> str:
     """What a run's results depend on. Approval status and notes are excluded."""
     schema = definition.get("schema") or {}
+    g = graph.normalise(definition)
     return _hash({
         "goal": definition.get("goal"),
         "fields": [{k: f.get(k) for k in ("name", "type", "required", "enum_values", "extract")}
@@ -1609,6 +1611,8 @@ def definition_hash(definition: dict) -> str:
         "sources": [{k: s.get(k) for k in ("id", "kind", "url", "query")} for s in definition.get("sources", [])],
         "steps": [{k: s.get(k) for k in ("id", "type", "config")} for s in definition.get("steps", [])],
         **({"overrides": definition["overrides"]} if definition.get("overrides") else {}),
+        **({"graph": {"inputs": {s["id"]: s["inputs"] for s in g["steps"]}, "output_from": g["output_from"]}}
+           if not graph.is_chain(g) else {}),   # a plain chain hashes as it always did
     })
 
 
@@ -1690,23 +1694,27 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
 
 # ── Runner ───────────────────────────────────────────────────────────────────
 
-def step_signatures(definition: dict, context: str = "") -> list[str]:
+def step_signatures(definition: dict, context: str = "") -> dict[str, str]:
     """
     One fingerprint per step of everything its output depends on: the fields,
-    the sources, the context, and this step and every step before it. A stored
-    output whose fingerprint still matches can be reused instead of recomputed.
+    the sources, the context, this step, and the fingerprints of its inputs. A
+    stored output whose fingerprint still matches can be reused instead of
+    recomputed. A plain chain gets the same fingerprints it always had.
     """
     schema = definition.get("schema") or {}
-    sig = _hash({
+    base = _hash({
         "context": context,
         "fields": [{k: f.get(k) for k in ("name", "type", "required", "enum_values", "extract", "description")}
                    for f in schema.get("fields", [])],
         "sources": [{k: s.get(k) for k in ("id", "kind", "url", "query")} for s in definition.get("sources", [])],
     })
-    sigs = []
-    for s in definition.get("steps") or []:
-        sig = _hash({"after": sig, "step": {k: s.get(k) for k in ("id", "type", "config")}})
-        sigs.append(sig)
+    g = graph.normalise(definition)
+    by_id = {s["id"]: s for s in g["steps"]}
+    sigs: dict[str, str] = {}
+    for sid in graph.order(g):
+        s, ins = by_id[sid], by_id[sid]["inputs"]
+        after = base if not ins else sigs[ins[0]] if len(ins) == 1 else [sigs[i] for i in ins]
+        sigs[sid] = _hash({"after": after, "step": {k: s.get(k) for k in ("id", "type", "config")}})
     return sigs
 
 
@@ -1714,7 +1722,9 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
         context: str = "", progress: Callable[[str], None] | None = None,
         refs: Callable[[str], list[dict]] | None = None) -> dict:
     """
-    Run the pipeline (up to and including step `upto`, or all of it).
+    Run the pipeline (up to and including step `upto` and the steps that feed
+    it, or all of it), following the step graph: a step receives the records
+    of its inputs, merged in order.
 
     Mutates and returns `state`: source metadata, each step's output (records
     capped at PREVIEW_RECORDS), warnings and errors, coverage, and the model
@@ -1722,14 +1732,14 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
     fresh refetches sources and ignores the model cache, for a real re-run.
     refs(table) returns a reference table's rows for SQL steps.
 
-    Unless fresh, the run resumes where the last one left off: the leading
-    steps whose stored output still matches their fingerprint (and holds every
-    record) are reused as they are, and computing starts at the first step
-    that changed. Sources are read only if a step that runs needs them.
+    Unless fresh, a step whose stored output still matches its fingerprint
+    (and holds every record) is reused as it is, so a run recomputes only the
+    steps that changed and those after them. Outputs of steps this run does not
+    reach are kept while they still match. Sources are read only if a step that
+    runs needs them.
     """
     fields = (definition.get("schema") or {}).get("fields") or []
     sources = definition.get("sources") or []
-    steps = definition.get("steps") or []
     cache = {} if fresh else dict(state.get("cache") or {})
     lock = threading.Lock()
 
@@ -1738,19 +1748,34 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             with lock:
                 progress(msg)
 
-    sigs = step_signatures(definition, context)
-    last = next((i for i, s in enumerate(steps) if s["id"] == upto), len(steps) - 1) if upto else len(steps) - 1
+    g = graph.normalise(definition)
+    by_step = {s["id"]: s for s in g["steps"]}
+    errors: list[str] = []
+    try:
+        order = graph.order(g)
+        sigs = step_signatures(definition, context)
+    except graph.GraphError as e:
+        order, sigs = [], {}
+        errors.append(f"The steps cannot run: {e}")
+    if upto and upto not in by_step:
+        errors.append(f"No step {upto}.")
+    need = (graph.ancestors(g, upto) | {upto}) if upto else set(order)
+    todo = [sid for sid in order if sid in need] if not errors else []
     prior = state.get("outputs") or {}
-    reused = []
-    if not fresh and fields:
-        for i, step in enumerate(steps[:last + 1]):
-            out = prior.get(step["id"])
-            if not out or out.get("error") or out.get("sig") != sigs[i] or len(out.get("records") or []) != out.get("count"):
-                break
-            reused.append(step["id"])
+
+    def whole(sid: str) -> bool:
+        o = prior.get(sid)
+        return bool(o) and not o.get("error") and o.get("sig") == sigs.get(sid) and len(o.get("records") or []) == o.get("count")
+
+    reused: list[str] = []
+    for sid in todo if not fresh and fields else []:
+        if whole(sid) and all(i in reused for i in by_step[sid]["inputs"]):   # only on top of reused inputs
+            reused.append(sid)
+    # Outputs of steps this run does not reach stay while they still match their step.
+    outputs = {sid: o for sid, o in prior.items() if sid in sigs and sid not in need and o.get("sig") == sigs[sid]}
 
     fetched, src_state = {}, dict(state.get("sources") or {})
-    if fresh or any(s["type"] == "extract" for s in steps[len(reused):last + 1]):
+    if fresh or any(by_step[sid]["type"] == "extract" for sid in todo if sid not in reused):
         say(f"Reading {len(sources)} source(s)")
         src_state = {}
         for s, got in zip(sources, _parallel(lambda s: fetch_source(s, fresh=fresh), sources)):
@@ -1771,19 +1796,23 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
 
     dead = {} if fresh else dict(state.get("dead_links") or {})
 
-    records: list[dict] = []
-    outputs, errors = {}, []
+    full: dict[str, list[dict]] = {}     # every record each step produced, for the steps after it
     if reused:
-        outputs = {sid: prior[sid] for sid in reused}
-        records = json.loads(json.dumps(prior[reused[-1]]["records"]))
-        say(f"Starting after {reused[-1]}: reusing the saved output of {', '.join(reused)}")
+        say(f"Reusing the saved output of {', '.join(reused)}")
     if not fields:
         errors.append("No target schema yet.")
-    for i, step in enumerate(steps if fields else []):
-        if i < len(reused):
+    for sid in todo if fields else []:
+        if sid in reused:
+            outputs[sid] = prior[sid]
+            full[sid] = prior[sid]["records"]
             continue
-        say(f"Running {step['id']} ({step['type']})")
+        step = by_step[sid]
+        records: list[dict] = json.loads(json.dumps([r for i in step["inputs"] for r in full.get(i, [])], default=str))
+        say(f"Running {sid} ({step['type']})")
         try:
+            seen_ids = [r["id"] for r in records]
+            if len(seen_ids) != len(set(seen_ids)):
+                raise PipelineError("Its inputs share record ids, so their records cannot be merged.")
             cfg = validate_step(kind, step["type"], step["config"], fields)
             step = {**step, "config": cfg}
             if step["type"] == "extract":
@@ -1800,15 +1829,23 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             else:
                 records, warnings = _apply(step, records, fields)
         except Exception as e:  # noqa: BLE001 — reported on the step, run stops here
-            log.warning("pipeline step %s failed: %s", step["id"], e)
-            errors.append(f"{step['id']} ({step['type']}): {e}")
-            outputs[step["id"]] = {"error": str(e), "count": len(records)}
+            log.warning("pipeline step %s failed: %s", sid, e)
+            errors.append(f"{sid} ({step['type']}): {e}")
+            outputs[sid] = {"error": str(e), "count": len(records)}
             break
         records = json.loads(json.dumps(records, default=str))  # snapshot, so later steps don't rewrite this one
-        outputs[step["id"]] = {"count": len(records), "warnings": warnings, "sig": sigs[i],
-                               "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields)}
-        if upto and step["id"] == upto:
-            break
+        full[sid] = records
+        if len(step["inputs"]) > 1:
+            warnings = [f"merged {' + '.join(f'{len(full.get(i, []))} from {i}' for i in step['inputs'])}"] + warnings
+        outputs[sid] = {"count": len(records), "warnings": warnings, "sig": sigs[sid],
+                        "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields)}
+
+    if upto:
+        records = full.get(upto, [])
+    elif errors:
+        records = []
+    else:
+        records = [r for i in g["output_from"] for r in full.get(i, [])]
 
     # The planner's overrides apply to the final output of a full run.
     removed, override_notes = [], []
@@ -1825,7 +1862,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
         "at": datetime.now(timezone.utc).isoformat(),
         "upto": upto,
         "reused": reused,
-        "complete": upto is None and not errors and len(outputs) == len(steps),
+        "complete": upto is None and not errors and all(sid in outputs for sid in order),
         "definition_hash": definition_hash(definition) if upto is None else None,
         "records": records,
         "removed": removed,

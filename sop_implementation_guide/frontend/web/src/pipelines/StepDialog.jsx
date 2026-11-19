@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { call } from "../api.js";
+import { stepsModel } from "./ports.js";
 
 // Add a step, or change one, two ways side by side: set it up yourself from the
 // catalog (the server checks it against the schema, the same as the agent's
 // steps), or describe it and let the agent propose it in the chat.
 //
-// mode: { kind: "add", position?, after?, type?, at? } | { kind: "edit", stepId }
+// Steps change in a draft: adding and editing here open one if needed.
+//
+// mode: { kind: "add", after?, before?, connect?, type?, at? } | { kind: "edit", stepId }
 //     | { kind: "ask", text } (the agent half only)
 
 const OPS = ["equals", "not_equals", "contains", "not_contains", "is_blank", "not_blank", "before", "after", "gte", "lte"];
@@ -361,23 +364,29 @@ function cleanConfig(type, c, fields) {
 }
 
 export default function StepDialog({ view, mode, act, onClose, onAdded }) {
-  const steps = view.definition.steps || [];
+  const model = stepsModel(view);          // the draft if one is open, else the applied steps
+  const steps = model.steps;
   const fields = view.definition.schema?.fields || [];
   const sources = view.definition.sources || [];
   const catalog = view.catalog || {};
   const editing = mode.kind === "edit" ? steps.find((s) => s.id === mode.stepId) : null;
 
-  const startIndex = mode.position ?? (mode.after ? steps.findIndex((s) => s.id === mode.after) + 1 : steps.length);
   const [type, setType] = useState(editing?.type || mode.type || "");
   const [config, setConfig] = useState(() => (editing ? { ...editing.config } : mode.type ? initial(mode.type, fields) : {}));
-  const [position, setPosition] = useState(startIndex);
+  // Where a new step is wired: "none" (wire it on the canvas), "end" (feeds Output), "after:ID", "before:ID".
+  const [wiring, setWiring] = useState(mode.after ? `after:${mode.after}` : mode.before ? `before:${mode.before}` : mode.connect ? "end" : "none");
   const [note, setNote] = useState(editing?.note || "");
   const [ask, setAsk] = useState(() => {
     if (mode.kind === "ask") return mode.text || "";
     if (editing) return `Change step ${editing.id} (${catalog[editing.type]?.label || editing.type}): `;
-    const where = startIndex === 0 ? "as the first step" : steps[startIndex - 1] ? `after ${steps[startIndex - 1].id}` : "at the end";
+    const where = mode.after ? `right after ${mode.after}` : mode.before ? `right before ${mode.before}` : "at the end";
     return `Add a step ${where} that `;
   });
+  // A SQL draft is tested on the records it would receive: its first input's last preview.
+  const testOn = editing ? (model.inputs[editing.id] || [])[0]
+    : wiring.startsWith("after:") ? wiring.slice(6)
+    : wiring.startsWith("before:") ? (model.inputs[wiring.slice(7)] || [])[0]
+    : wiring === "end" ? model.outputFrom[0] : undefined;
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -394,12 +403,15 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
     setError(null);
     try {
       const cfg = cleanConfig(type, config, fields);
+      if (!view.draft) await act("POST", "/draft", undefined, { throwErrors: true });
       if (editing) {
-        await act("PATCH", `/steps/${editing.id}`, { config: cfg, ...(note !== (editing.note || "") ? { note } : {}) }, { throwErrors: true });
+        await act("PATCH", `/draft/steps/${editing.id}`, { config: cfg, ...(note !== (editing.note || "") ? { note } : {}) }, { throwErrors: true });
       } else {
-        const before = new Set(steps.map((s) => s.id));
-        const r = await act("POST", "/steps", { type, config: cfg, note: note || null, position }, { throwErrors: true });
-        const added = (r?.definition?.steps || []).find((s) => !before.has(s.id));
+        const known = new Set([...steps.map((x) => x.id), ...(view.definition.steps || []).map((x) => x.id)]);
+        const where = wiring.startsWith("after:") ? { after: wiring.slice(6) } : wiring.startsWith("before:") ? { before: wiring.slice(7) }
+          : { connect: wiring === "end" };
+        const r = await act("POST", "/draft/steps", { type, config: cfg, note: note || null, ...where }, { throwErrors: true });
+        const added = (r?.draft?.steps || []).find((x) => !known.has(x.id));
         if (added) onAdded?.(added.id, mode.at);
       }
       onClose();
@@ -452,13 +464,14 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
             {type && (
               <div className="pl-form">
                 <ConfigForm type={type} c={config} set={setConfig} fields={fields} sources={sources}
-                            refTables={view.ref_tables} sqlTypes={view.sql_types} pipelineId={view.id}
-                            testOn={(editing ? steps[steps.indexOf(editing) - 1] : steps[position - 1])?.id} />
+                            refTables={view.ref_tables} sqlTypes={view.sql_types} pipelineId={view.id} testOn={testOn} />
                 {!editing && (
-                  <Row label="Runs">
-                    <select value={position} onChange={(e) => setPosition(Number(e.target.value))}>
-                      <option value={0}>first</option>
-                      {steps.map((s, i) => <option key={s.id} value={i + 1}>after {s.id} ({catalog[s.type]?.label || s.type})</option>)}
+                  <Row label="Wiring" hint="Several wires into one step merge their records. You can rewire on the canvas.">
+                    <select value={wiring} onChange={(e) => setWiring(e.target.value)}>
+                      <option value="none">not wired yet: I'll wire it on the canvas</option>
+                      <option value="end">at the end, feeding Output</option>
+                      {steps.map((x) => <option key={x.id} value={`after:${x.id}`}>right after {x.id} ({catalog[x.type]?.label || x.type})</option>)}
+                      {mode.before && <option value={`before:${mode.before}`}>right before {mode.before}</option>}
                     </select>
                   </Row>
                 )}
@@ -468,9 +481,9 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
               </div>
             )}
             <div className="btn-row">
-              <button className="primary" disabled={!type || saving} onClick={save}>{editing ? "Save settings" : "Add step"}</button>
+              <button className="primary" disabled={!type || saving} onClick={save}>{editing ? "Save to draft" : "Add to draft"}</button>
               <span className="assess" style={{ alignSelf: "center" }}>
-                {editing ? "Changing it sends this step and every later one back for approval." : "It starts as needing approval: preview it, then approve."}
+                {editing ? "The change goes into the draft; it applies when you press Apply." : "It goes into the draft. Check, then Apply to use it."}
               </span>
             </div>
           </section>}
