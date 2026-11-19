@@ -192,6 +192,26 @@ def _fallback(programs: list[dict], recommendation: dict, reason: str) -> list[d
     ]
 
 
+DETAIL_FIELDS = 8           # a pipeline's own fields shown per programme
+DETAIL_CHARS = 300          # per value
+
+
+def _details(p: dict) -> dict:
+    """
+    The fields a pipeline loaded that map to no catalogue column (its own
+    schema, e.g. `description`), so a programme with thin catalogue columns is
+    still judged on what its pipeline collected.
+    """
+    extra = ((p.get("raw_data") or {}).get("fields") or {}) if isinstance(p.get("raw_data"), dict) else {}
+    out = {}
+    for k, v in list(extra.items())[:DETAIL_FIELDS]:
+        if v in (None, "", [], {}):
+            continue
+        text = v if isinstance(v, str) else json.dumps(v, default=str)
+        out[k] = text[:DETAIL_CHARS]
+    return out
+
+
 def _program_digest(programs: list[dict]) -> list[dict]:
     """Only the fields the model needs to judge fit — not award amounts or URLs."""
     return [
@@ -202,6 +222,7 @@ def _program_digest(programs: list[dict]) -> list[dict]:
             "application_deadline": str(p.get("deadline")) if p.get("deadline") else None,
             "geo_scope": p.get("geo_scope"),
             "eligibility_notes": (p.get("eligibility_notes") or "")[:700],
+            **({"other_details": d} if (d := _details(p)) else {}),
         }
         for p in programs
     ]
@@ -283,6 +304,8 @@ Rules:
   example a Great Lakes initiative) cannot fund work in Maryland however well the
   topic fits. Treat geo_scope as a hint, not as proof — reason from the notes too.
 - The applicant is a city or county government, not an individual or a nonprofit.
+- `other_details` are fields the planner's own pipeline collected (named as they
+  chose); read them as evidence like the notes.
 - Where the notes are too thin to tell, say so in the narrative and score in the
   middle. Do not invent eligibility criteria that are not stated.
 - In each narrative, name the specific connection or the specific mismatch. The

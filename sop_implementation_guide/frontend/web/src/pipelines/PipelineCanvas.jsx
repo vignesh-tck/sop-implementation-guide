@@ -5,6 +5,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { STATE_TEXT, draftPortText, portText, stepsModel } from "./ports.js";
+import LoadMap from "./LoadMap.jsx";
 
 // The pipeline as a node map: sources → steps → output.
 //
@@ -146,7 +147,7 @@ function Settings({ s }) {
   ) : <Detail label="Settings"><ConfigTable config={s.config} /></Detail>;
 }
 
-function DetailsPane({ id, view, model, problems, onClose, actions }) {
+function DetailsPane({ id, view, model, problems, onClose, actions, act, disabled }) {
   const d = view.definition;
   const sources = model.sources;
   const fields = d.schema?.fields || [];
@@ -203,7 +204,9 @@ function DetailsPane({ id, view, model, problems, onClose, actions }) {
     const s = sources.find((x) => `src:${x.id}` === id);
     if (!s) return null;
     const meta = view.sources[s.id] || {};
-    const readers = model.steps.filter((x) => x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)));
+    const readers = model.steps.filter((x) => (x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)))
+                                             || (x.type === "sql" && (x.config?.tables || []).includes(s.id)));
+    const table = view.source_tables?.[s.id];
     title = `${s.id} · source`;
     body = (
       <>
@@ -212,7 +215,9 @@ function DetailsPane({ id, view, model, problems, onClose, actions }) {
           {s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> : s.query}</Detail>
         <Detail label="Fetched">{meta.error ? <span className="pl-bad">{meta.error}</span>
           : meta.chars != null ? `${meta.chars.toLocaleString()} characters${meta.truncated ? " (truncated)" : ""}` : "—"}</Detail>
-        <Detail label="Read by">{readers.length ? readers.map((x) => x.id).join(", ") : "no Extract step"}</Detail>
+        <Detail label="Read by">{readers.length ? readers.map((x) => `${x.id}${x.type === "sql" ? " (as a table)" : ""}`).join(", ") : "no Extract step"}</Detail>
+        {table && <Detail label="As a table">{Object.keys(table.columns).map((c) => <code key={c} style={{ marginRight: ".3rem" }}>{c}</code>)}
+          <div className="assess">A CSV: a SQL step can join it by its id ({s.id}), read exactly, with no Extract step.</div></Detail>}
         <Detail label="Sources">{s.draft_state === "new" ? "new in the draft: applies with it" : d.sources_status === "final" ? "final" : "open"}</Detail>
         {meta.preview && <Detail label="Preview"><span className="pl-pre">{cut(meta.preview, 400)}</span></Detail>}
       </>
@@ -234,6 +239,7 @@ function DetailsPane({ id, view, model, problems, onClose, actions }) {
             <Detail label="Publish">{view.gate?.length ? <ul className="pl-warn-list">{view.gate.map((g, k) => <li key={k}>{g}</li>)}</ul> : "ready for review"}</Detail>
           </>
         ) : <div className="assess">No run yet.</div>}
+        {view.load_map && <Detail label="Catalogue"><LoadMap view={view} act={act} disabled={disabled} /></Detail>}
       </>
     );
   } else if (id === "gaps") {
@@ -473,6 +479,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     for (const s of steps) {
       for (const i of model.inputs[s.id] || []) edge(`step:${i}`, `step:${s.id}`, "chain", wired);
       if (s.type === "extract") reads(s).forEach((sid) => edge(`src:${sid}`, `step:${s.id}`, "source", wired));
+      if (s.type === "sql") (s.config?.tables || []).filter((t) => sources.some((x) => x.id === t))
+        .forEach((sid) => edge(`src:${sid}`, `step:${s.id}`, "table", { deletable: editable }));
     }
     if (!steps.length) (sources.length ? sources.map((s) => `src:${s.id}`) : ["sources"]).forEach((n) => edge(n, "steps", "chain"));
     const ends = model.outputFrom.filter((i) => steps.some((s) => s.id === i)).map((i) => `step:${i}`);
@@ -523,9 +531,15 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   const link = (a, b) => send("POST", "/draft/links", { source: a, target: b });
   const unlink = (a, b) => send("POST", "/draft/unlink", { source: a, target: b });
   const wire = (src, s) => {
+    if (s.type === "sql") {   // a CSV source joins a SQL step as a table
+      if (!view.source_tables?.[src.id]) { flash(`${src.id} is not a CSV, so it cannot be a table: wire it to an Extract step.`); return null; }
+      const tables = s.config?.tables || [];
+      if (tables.includes(src.id)) { flash(`${s.id} already joins ${src.id}.`); return null; }
+      return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, tables: [...tables, src.id] } });
+    }
     if (s.type !== "extract") {
       const ex = steps.filter((x) => x.type === "extract").map((x) => x.id);
-      flash(`Sources feed Extract steps only.${ex.length ? ` Wire ${src.id} to ${ex.join(" or ")}.` : " Add an Extract step first."}`);
+      flash(`Sources feed Extract steps (or, for a CSV, a SQL step as a table).${ex.length ? ` Wire ${src.id} to ${ex.join(" or ")}.` : " Add an Extract step first."}`);
       return null;
     }
     if (reads(s).includes(src.id)) { flash(`${s.id} already reads ${src.id}.`); return null; }
@@ -535,6 +549,10 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     const rest = reads(s).filter((x) => x !== src.id);
     if (!rest.length) { flash(`${s.id} must read at least one source. Wire another source to it first, or remove the step.`); return null; }
     return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, source_ids: rest } });
+  };
+  const unjoin = (src, s) => {
+    const rest = (s.config?.tables || []).filter((t) => t !== src.id);
+    return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, tables: rest.length ? rest : null } });
   };
   const removeStep = (s) => send("DELETE", `/draft/steps/${s.id}`);
   // Once sources are final this removes it in the draft (opening one); before, straight away.
@@ -587,6 +605,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     if (!ns.length && editable) {
       for (const e of es) {
         if (e.data?.kind === "source") { if (!(await unwire(sourceOf(e.source), stepOf(e.target)))) break; }
+        else if (e.data?.kind === "table") { if (!(await unjoin(sourceOf(e.source), stepOf(e.target)))) break; }
         else if (!(await unlink(nodeOf(e.source), nodeOf(e.target)))) break;
       }
     }
@@ -674,6 +693,14 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
           { label: `${s.id} reads ${src.id}`, run: () => setDetails(e.source) },
           "-",
           { label: "Disconnect", key: "Del", danger: true, run: () => unwire(src, s), ...lock },
+        ];
+      }
+      if (e.data.kind === "table") {
+        const src = sourceOf(e.source), s = stepOf(e.target);
+        return [
+          { label: `${s.id} joins ${src.id} as a table`, run: () => setDetails(e.source) },
+          "-",
+          { label: "Stop joining it", key: "Del", danger: true, run: () => unjoin(src, s), ...lock },
         ];
       }
       const from = stepOf(e.source);
@@ -796,7 +823,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         </div>
         {notice && <div className="pl-toast" role="status" onClick={() => setNotice(null)}>{notice.text}</div>}
         {menu && <Menu menu={menu} items={menuItems(menu)} onClose={() => setMenu(null)} />}
-        {details && <DetailsPane id={details} view={view} model={model} problems={problems} onClose={() => setDetails(null)} actions={detailActions(details)} />}
+        {details && <DetailsPane id={details} view={view} model={model} problems={problems} onClose={() => setDetails(null)}
+                                 actions={detailActions(details)} act={send} disabled={disabled} />}
       </div>
     </div>
   );

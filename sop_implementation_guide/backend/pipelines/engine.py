@@ -27,7 +27,9 @@ previewing a pipeline again does not pay for the same extraction twice.
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import logging
 import re
@@ -177,11 +179,15 @@ CATALOG: dict[str, dict] = {
                        "`id` plus every schema field, typed: money/number/percent DOUBLE, date DATE, boolean "
                        "BOOLEAN, others VARCHAR. Text that does not fit its type reads as NULL there; "
                        "`records_text` has the same columns all as text. Optionally join read-only reference "
-                       "tables, listed in config.tables. The result must include `id`, at most one row per "
+                       "tables, or a CSV source by its id (e.g. s3: read exactly as a table, every column text, "
+                       "no model, so a lookup CSV needs no Extract step), listed in config.tables. With several "
+                       "inputs, `records` holds them all and each input is also its own table named by its step "
+                       "id (e.g. t2, t5), so the SQL can JOIN one branch's records to another's. The result must "
+                       "include `id`, at most one row per "
                        "record; every other column must be a schema field, and only values that change are "
                        "written (marked derived). Records left out of the result are dropped. Use it for computed "
                        "fields, multi-condition filters, CASE rules and lookups, never to guess a value.",
-        "config": {"query": "str: one SELECT ... FROM records", "tables": "optional list of reference tables to join"},
+        "config": {"query": "str: one SELECT ... FROM records", "tables": "optional list of reference tables or CSV source ids to join"},
     },
 }
 
@@ -241,8 +247,13 @@ def _field(fields: list[dict], name: Any) -> dict:
     return f
 
 
-def validate_step(kind: str, step_type: str, config: dict, fields: list[dict]) -> dict:
-    """Check a step's type and config against the catalog and schema. Returns the cleaned config."""
+def validate_step(kind: str, step_type: str, config: dict, fields: list[dict],
+                  inputs: list[str] | None = None, sources: list[dict] | None = None) -> dict:
+    """
+    Check a step's type and config against the catalog and schema. Returns the
+    cleaned config. A SQL step is dry-run, so it needs its inputs (several are
+    tables of their own) and the sources (a CSV source can be a table).
+    """
     cat = catalog_for(kind)
     if step_type not in cat:
         raise PipelineError(f"Unknown step type {step_type!r}; available: {', '.join(cat)}.")
@@ -292,10 +303,11 @@ def validate_step(kind: str, step_type: str, config: dict, fields: list[dict]) -
             raise PipelineError("sql needs a query: one SELECT … FROM records.")
         c["query"] = c["query"].strip().rstrip(";").strip()
         tables = c.get("tables") or []
-        if not isinstance(tables, list) or any(t not in REF_TABLES for t in tables):
-            raise PipelineError(f"sql.tables must list reference tables from: {', '.join(REF_TABLES)}.")
+        known = list(REF_TABLES) + [s["id"] for s in sources or []]
+        if not isinstance(tables, list) or any(t not in known for t in tables):
+            raise PipelineError(f"sql.tables must list reference tables ({', '.join(REF_TABLES)}) or CSV sources by id.")
         c["tables"] = list(dict.fromkeys(tables)) or None
-        sql_columns(c, fields)   # parses and dry-runs it on empty tables
+        sql_columns(c, fields, inputs, sources)   # parses and dry-runs it on empty tables
     return c
 
 
@@ -363,6 +375,78 @@ def source_meta(fetched: dict) -> dict:
     return {"chars": len(text), "truncated": bool(fetched.get("truncated")),
             "content_type": fetched.get("content_type"), "final_url": fetched.get("final_url"),
             "fetched_at": fetched.get("fetched_at"), "preview": text[:600], "error": None}
+
+
+# ── A CSV source as a table ──────────────────────────────────────────────────
+#
+# A lookup CSV (tract to designation, agency to level) needs no model to read
+# it: a SQL step lists it in config.tables and joins it as it is, every column
+# text. Its columns are its header row in lower_snake_case.
+
+TABLE_ROWS = 20_000          # rows read from one CSV source
+
+
+def is_csv(doc: dict, src: dict | None = None) -> bool:
+    url = ((src or {}).get("url") or doc.get("final_url") or "").lower().split("?")[0]
+    return "csv" in (doc.get("content_type") or "") or url.endswith(".csv")
+
+
+def _column_names(header: list[str]) -> list[str]:
+    out: list[str] = []
+    for i, h in enumerate(header):
+        n = re.sub(r"[^a-z0-9]+", "_", (h or "").strip().lower()).strip("_") or f"col{i + 1}"
+        n = f"c_{n}" if n[0].isdigit() else n
+        base, k = n, 2
+        while n in out:
+            n, k = f"{base}_{k}", k + 1
+        out.append(n)
+    return out
+
+
+def source_table(doc: dict) -> tuple[dict[str, str], list[tuple], list[str]]:
+    """A fetched CSV as (columns, rows, notes); every column VARCHAR, empty cells NULL."""
+    text = doc.get("text") or ""
+    notes = []
+    if doc.get("truncated"):
+        text = text[:text.rfind("\n")] if "\n" in text else ""   # the last row may be cut off
+        notes.append(f"only its first {FETCH_CHARS:,} characters were fetched, so later rows are missing")
+    try:
+        rows = [r for r in csv.reader(io.StringIO(text)) if any(c.strip() for c in r)]
+    except csv.Error as e:
+        raise PipelineError(f"It does not read as CSV: {e}")
+    if not rows:
+        raise PipelineError("The CSV is empty.")
+    names = _column_names(rows[0])
+    body = [tuple(c if c != "" else None for c in (r + [""] * len(names))[:len(names)]) for r in rows[1:TABLE_ROWS + 1]]
+    if len(rows) - 1 > TABLE_ROWS:
+        notes.append(f"only its first {TABLE_ROWS:,} rows are read")
+    wide = sum(1 for r in rows[1:] if len(r) > len(names))
+    if wide:
+        notes.append(f"{wide} row(s) have more cells than the header; the extra cells are dropped")
+    return {n: "VARCHAR" for n in names}, body, notes
+
+
+def source_tables(ids: list[str], sources: list[dict] | None,
+                  read: Callable[[dict], dict] = fetch_source) -> dict[str, tuple]:
+    """The CSV sources `ids` as tables. Raises PipelineError for one that is not a readable CSV."""
+    by_id = {s["id"]: s for s in sources or []}
+    out = {}
+    for t in ids:
+        if t not in by_id:
+            raise PipelineError(f"{t} is not a reference table or a source of this pipeline.")
+        doc = read(by_id[t])
+        if not is_csv(doc, by_id[t]):
+            raise PipelineError(f"{t} is not a CSV source, so it cannot be joined as a table: read it with an Extract step.")
+        out[t] = source_table(doc)
+    return out
+
+
+def source_columns(src: dict) -> dict[str, str] | None:
+    """A CSV source's columns, from its saved copy; None if it is not a CSV or cannot be read."""
+    try:
+        return source_tables([src["id"]], [src])[src["id"]][0]
+    except PipelineError:
+        return None
 
 
 # ── Typed parsing ────────────────────────────────────────────────────────────
@@ -1227,13 +1311,25 @@ def _sql_load(con, name: str, columns: dict[str, str], rows: list[tuple]) -> lis
     return notes
 
 
-def _sql_tables(con, fields: list[dict], records: list[dict], refs: dict[str, list[dict]]) -> list[str]:
+def _sql_tables(con, fields: list[dict], records: list[dict], refs: dict[str, list[dict]],
+                inputs: dict[str, list[dict]] | None = None, src_tables: dict[str, tuple] | None = None) -> list[str]:
+    """
+    Load `records`, and with several inputs each input as its own table named by
+    its step id; then the reference tables and the CSV sources asked for.
+    """
     cols = {"id": "VARCHAR", **{f["name"]: SQL_TYPES[f["type"]] for f in fields}}
-    notes = _sql_load(con, "records", cols, [(r["id"], *[r["values"].get(f["name"]) for f in fields]) for r in records])
+
+    def rows(recs: list[dict]) -> list[tuple]:
+        return [(r["id"], *[r["values"].get(f["name"]) for f in fields]) for r in recs]
+    notes = _sql_load(con, "records", cols, rows(records))
     con.execute('CREATE VIEW records_text AS SELECT * FROM "_records_text"')
-    for t, rows in refs.items():
+    for sid, recs in (inputs or {}).items():
+        _sql_load(con, sid, cols, rows(recs))   # the same values as in records, so no new notes
+    for t, ref in refs.items():
         spec = REF_TABLES[t]["columns"]
-        notes += _sql_load(con, t, spec, [tuple(row.get(c) for c in spec) for row in rows])
+        notes += _sql_load(con, t, spec, [tuple(row.get(c) for c in spec) for row in ref])
+    for t, (spec, body, extra) in (src_tables or {}).items():
+        notes += _sql_load(con, t, spec, body) + [f"{t}: {n}" for n in extra]
     con.execute("SET lock_configuration = true")
     return notes
 
@@ -1265,16 +1361,22 @@ def _sql_check_columns(names: list[str], fields: list[dict]) -> None:
 
 
 @lru_cache(maxsize=256)
-def _sql_describe(query: str, tables: tuple[str, ...], fields_json: str) -> tuple[tuple[str, str], ...]:
+def _sql_describe(query: str, tables: tuple[str, ...], fields_json: str, inputs: tuple[str, ...] = (),
+                  src_json: str = "{}") -> tuple[tuple[str, str], ...]:
     fields = json.loads(fields_json)
+    src = json.loads(src_json)
     con = _sql_connect()
     try:
-        _sql_tables(con, fields, [], {t: [] for t in tables})
+        _sql_tables(con, fields, [], {t: [] for t in tables}, {i: [] for i in inputs},
+                    {t: (cols, [], []) for t, cols in src.items()})
         q = _sql_select(con, query)
         try:
             cols = tuple((r[0], r[1]) for r in con.execute("DESCRIBE " + q).fetchall())
         except duckdb.Error as e:
-            hint = "" if tables else " Reference tables must be ticked (config.tables) before the SQL can join them."
+            hint = (" A reference table or CSV source must be ticked (config.tables) before the SQL can join it."
+                    if "Catalog Error" in str(e) else "")
+            if hint and not inputs:
+                hint += " A step's records are tables of their own only when the SQL step has several inputs."
             raise PipelineError(f"The SQL does not run: {_sql_err(e)}{hint}")
     finally:
         con.close()
@@ -1282,23 +1384,33 @@ def _sql_describe(query: str, tables: tuple[str, ...], fields_json: str) -> tupl
     return cols
 
 
-def sql_columns(config: dict, fields: list[dict]) -> list[tuple[str, str]]:
+def sql_inputs(inputs: list[str] | None) -> tuple[str, ...]:
+    """The input tables a SQL step sees: its inputs, when it has more than one."""
+    return tuple(inputs) if inputs and len(inputs) > 1 else ()
+
+
+def sql_columns(config: dict, fields: list[dict], inputs: list[str] | None = None,
+                sources: list[dict] | None = None) -> list[tuple[str, str]]:
     """The SQL step's result columns and their types, checked against the schema. Raises PipelineError."""
     slim = [{"name": f["name"], "type": f["type"]} for f in fields]
-    return list(_sql_describe(config.get("query") or "", tuple(config.get("tables") or ()), json.dumps(slim)))
+    tables = list(config.get("tables") or ())
+    src = {t: v[0] for t, v in source_tables([t for t in tables if t not in REF_TABLES], sources).items()}
+    return list(_sql_describe(config.get("query") or "", tuple(t for t in tables if t in REF_TABLES), json.dumps(slim),
+                              sql_inputs(inputs), json.dumps(src, sort_keys=True)))
 
 
-def _sql(step: dict, records: list[dict], fields: list[dict],
-         refs: Callable[[str], list[dict]] | None) -> tuple[list[dict], list[str]]:
+def _sql(step: dict, records: list[dict], fields: list[dict], refs: Callable[[str], list[dict]] | None,
+         inputs: dict[str, list[dict]] | None = None, src_tables: dict[str, tuple] | None = None) -> tuple[list[dict], list[str]]:
     c, sid = step["config"], step["id"]
     tables = c.get("tables") or []
-    if tables and refs is None:
+    ref_names = [t for t in tables if t in REF_TABLES]
+    if ref_names and refs is None:
         raise PipelineError("Reference tables cannot be read here.")
-    ref_rows = {t: refs(t) for t in tables}
+    ref_rows = {t: refs(t) for t in ref_names}
     con = _sql_connect()
     timer = threading.Timer(SQL_TIMEOUT, con.interrupt)
     try:
-        warnings = _sql_tables(con, fields, records, ref_rows)
+        warnings = _sql_tables(con, fields, records, ref_rows, inputs, src_tables)
         q = _sql_select(con, c["query"])
         before = {row[0]: row[1:] for row in con.execute("SELECT * FROM records").fetchall()}
         timer.start()
@@ -1321,7 +1433,8 @@ def _sql(step: dict, records: list[dict], fields: list[dict],
     for row in rows:
         rid = row[names.index("id")]
         if rid not in by_id:
-            raise PipelineError(f"The SQL returned id {rid!r}, which is not an input record: every row must come from `records`.")
+            raise PipelineError(f"The SQL returned id {rid!r}, which is not an input record: every row must be a record "
+                                "from `records` (or from an input's table).")
         if rid in seen:
             raise PipelineError(f"The SQL returned {rid} more than once. A join must match at most one row per record "
                                 "(pick one, e.g. with a subquery and LIMIT 1, or aggregate the joined table first).")
@@ -1341,7 +1454,10 @@ def _sql(step: dict, records: list[dict], fields: list[dict],
             was = rec["values"].get(name)
             _set(rec, name, v, "derived", sid, f"{where}; was {'blank' if _blank(was) else repr(_short_v(was, 60))}")
         out.append(rec)
-    if len(out) < len(records):
+    if inputs:   # a join: say what each input kept, since a joined branch's own records drop out
+        warnings.append("kept " + ", ".join(f"{sum(1 for r in recs if r['id'] in seen)} of {len(recs)} from {i}"
+                                            for i, recs in inputs.items()))
+    elif len(out) < len(records):
         warnings.append(f"removed {len(records) - len(out)} record(s)")
     return out, warnings
 
@@ -1351,7 +1467,8 @@ EXPLORE_SCAN = 5_000         # rows it counts before saying "more than"
 
 
 def explore_sql(query: str, tables: list[str] | None, records: list[dict], fields: list[dict],
-                refs: Callable[[str], list[dict]] | None, limit: int = EXPLORE_ROWS) -> dict:
+                refs: Callable[[str], list[dict]] | None, limit: int = EXPLORE_ROWS,
+                inputs: dict[str, list[dict]] | None = None, sources: list[dict] | None = None) -> dict:
     """
     Run a read-only SELECT for a look at the data: no rules about id or
     columns, aggregates welcome, and nothing is written back. Same sandbox
@@ -1359,17 +1476,20 @@ def explore_sql(query: str, tables: list[str] | None, records: list[dict], field
     "test on input" button.
     """
     tables = list(dict.fromkeys(tables or []))
-    bad = [t for t in tables if t not in REF_TABLES]
+    src_ids = {s["id"] for s in sources or []}
+    bad = [t for t in tables if t not in REF_TABLES and t not in src_ids]
     if bad:
-        raise PipelineError(f"No reference table {', '.join(bad)}; available: {', '.join(REF_TABLES)}.")
-    if tables and refs is None:
+        raise PipelineError(f"No reference table or source {', '.join(bad)}; reference tables: {', '.join(REF_TABLES)}.")
+    ref_names = [t for t in tables if t in REF_TABLES]
+    if ref_names and refs is None:
         raise PipelineError("Reference tables cannot be read here.")
-    ref_rows = {t: refs(t) for t in tables}
+    ref_rows = {t: refs(t) for t in ref_names}
+    src_tables = source_tables([t for t in tables if t not in REF_TABLES], sources)
     limit = max(1, min(int(limit or EXPLORE_ROWS), EXPLORE_ROWS))
     con = _sql_connect()
     timer = threading.Timer(SQL_TIMEOUT, con.interrupt)
     try:
-        notes = _sql_tables(con, fields, records, ref_rows)
+        notes = _sql_tables(con, fields, records, ref_rows, inputs if inputs and len(inputs) > 1 else None, src_tables)
         q = _sql_select(con, query)
         timer.start()
         cur = con.execute(q)
@@ -1378,7 +1498,7 @@ def explore_sql(query: str, tables: list[str] | None, records: list[dict], field
     except duckdb.InterruptException:
         raise PipelineError(f"The SQL ran longer than {SQL_TIMEOUT}s and was stopped.")
     except duckdb.Error as e:
-        hint = "" if tables else " (a reference table must be listed in tables before the query can use it)"
+        hint = "" if tables else " (a reference table or CSV source must be listed in tables before the query can use it)"
         raise PipelineError(f"The SQL failed: {_sql_err(e)}{hint if 'Catalog Error' in str(e) else ''}")
     finally:
         timer.cancel()
@@ -1390,7 +1510,7 @@ def explore_sql(query: str, tables: list[str] | None, records: list[dict], field
 
 # ── Ports: what each step reads and writes ───────────────────────────────────
 
-def step_io(step: dict, fields: list[dict]) -> dict:
+def step_io(step: dict, fields: list[dict], sources: list[dict] | None = None) -> dict:
     """
     A step's ports, for the canvas: what happens to the rows (creates, keeps,
     filters or merges them) and which fields it may write. The input schema is
@@ -1412,12 +1532,13 @@ def step_io(step: dict, fields: list[dict]) -> dict:
     if t == "research":
         return {"rows": "keeps", "writes": c.get("fields") or extractable}
     if t == "sql":
+        joins = list(sql_inputs(step.get("inputs")))
         try:
-            cols = sql_columns(c, fields)
+            cols = sql_columns(c, fields, step.get("inputs"), sources)
         except PipelineError as e:
-            return {"rows": "filters", "writes": [], "tables": c.get("tables") or [], "error": str(e)}
+            return {"rows": "filters", "writes": [], "tables": c.get("tables") or [], "joins": joins, "error": str(e)}
         return {"rows": "filters", "writes": [n for n, _ in cols if n != "id"], "tables": c.get("tables") or [],
-                "columns": [{"name": n, "type": ty} for n, ty in cols]}
+                "joins": joins, "columns": [{"name": n, "type": ty} for n, ty in cols]}
     return {"rows": "keeps", "writes": []}
 
 
@@ -1630,7 +1751,7 @@ def design_gaps(definition: dict) -> list[str]:
                    for s in steps if s["type"] in ("llm_fill", "geo_tie", "set_value")}
     for s in steps:
         if s["type"] == "sql":
-            set_by_step.update(step_io(s, fields).get("writes") or [])
+            set_by_step.update(step_io(s, fields, definition.get("sources")).get("writes") or [])
     gaps = []
     for f in fields:
         if f.get("accept_blank"):
@@ -1721,6 +1842,10 @@ def step_signatures(definition: dict, context: str = "") -> dict[str, str]:
             ids = (s.get("config") or {}).get("source_ids") or [x["id"] for x in sources]
             step["config"] = {**(s.get("config") or {}), "source_ids": ids}
             step["reads"] = [{k: x.get(k) for k in ("id", "kind", "url", "query")} for x in sources if x["id"] in ids]
+        elif s["type"] == "sql":
+            ids = [t for t in (s.get("config") or {}).get("tables") or [] if t not in REF_TABLES]
+            if ids:   # the CSV sources it joins
+                step["reads"] = [{k: x.get(k) for k in ("id", "kind", "url", "query")} for x in sources if x["id"] in ids]
         sigs[sid] = _hash({"after": after, "step": step})
     return sigs
 
@@ -1820,7 +1945,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             seen_ids = [r["id"] for r in records]
             if len(seen_ids) != len(set(seen_ids)):
                 raise PipelineError("Its inputs share record ids, so their records cannot be merged.")
-            cfg = validate_step(kind, step["type"], step["config"], fields)
+            cfg = validate_step(kind, step["type"], step["config"], fields, step["inputs"], sources)
             step = {**step, "config": cfg}
             if step["type"] == "extract":
                 new, warnings = _extract(step, sources, fetched, fields, context, cache, say)
@@ -1832,7 +1957,10 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             elif step["type"] == "geo_tie":
                 warnings = _model_fill(step, records, fields, cache, geo_instruction(step["config"]), "geo_tie")
             elif step["type"] == "sql":
-                records, warnings = _sql(step, records, fields, refs)
+                ins = {i: full.get(i, []) for i in step["inputs"]} if sql_inputs(step["inputs"]) else None
+                srcs = source_tables([t for t in cfg.get("tables") or [] if t not in REF_TABLES], sources,
+                                     lambda s: source_doc(s["id"]))
+                records, warnings = _sql(step, records, fields, refs, ins, srcs)
             else:
                 records, warnings = _apply(step, records, fields)
         except Exception as e:  # noqa: BLE001 — reported on the step, run stops here
@@ -1842,7 +1970,7 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             break
         records = json.loads(json.dumps(records, default=str))  # snapshot, so later steps don't rewrite this one
         full[sid] = records
-        if len(step["inputs"]) > 1:
+        if len(step["inputs"]) > 1 and step["type"] != "sql":   # a SQL step says what it kept from each
             warnings = [f"merged {' + '.join(f'{len(full.get(i, []))} from {i}' for i in step['inputs'])}"] + warnings
         outputs[sid] = {"count": len(records), "warnings": warnings, "sig": sigs[sid],
                         "records": records[:PREVIEW_RECORDS], "coverage": coverage(records, fields)}

@@ -68,7 +68,12 @@ The order is fixed, and the app enforces it: schema, then sources, then steps.
    are handled: one Extract step per group of sources, each with its own instructions, then one step
    (e.g. dedupe) taking all of them as inputs. Each source can be read by one Extract step only, a step's
    output goes to one place (no splitting), and every branch into a merge must hand on the same schema:
-   the same fields produced and parsed the same way. When the draft is done, call check_pipeline, fix
+   the same fields produced and parsed the same way. A merge STACKS records. To ADD fields from one
+   branch to another's records (a source that only supplies one field per programme, matched on a key),
+   JOIN instead: a sql step with both branches as inputs, whose query reads each input as its own table
+   named by its step id (SELECT a.id, b.x AS field FROM t2 a LEFT JOIN t5 b ON ...). Its rows keep the
+   ids of the records it returns, so the joined branch's own records drop out; branches into a join may
+   have different schemas. When the draft is done, call check_pipeline, fix
    every error it reports, then tell the planner to review the draft on the canvas and press Apply (you
    cannot apply). run_preview runs the applied steps, not the draft.
    Sources added or removed after they are final also go into the draft (add_source and remove_source do
@@ -101,14 +106,21 @@ SQL, for looking at the data and for transforms:
   it will follow (on_step_id), check as_step in the result says it works as a step, then add it with
   add_step type sql. In a sql step the result must return id (one row per record) and only schema fields;
   only values that change are written, marked derived, and records left out are dropped.
-- SQL computes from values already in the records or in reference tables. It is not a way to supply facts a
-  source should state, and it never replaces an extract or research step for reading sources.
+- A CSV source that is a lookup table (tract -> designation, agency -> level, a planner's own list) needs
+  no Extract step: list its id in a sql step's config.tables (and run_sql's tables) and join it as a table.
+  Its columns, all text, are in the state under source_tables. Its values are exactly the file's, so
+  they carry no quote; use this for lookups, and Extract for documents.
+- SQL computes from values already in the records, in reference tables or in CSV sources. It is not a way
+  to supply facts a source should state, and it never replaces an extract or research step for reading
+  documents.
 - Show the planner the query you chose in a short code block, and say in one line what it does.
 
 5. Publishing (Load) is the planner's action in the panel, once everything is approved and every required
    field is filled or explicitly accepted as blank. A full run never publishes: it ends "ready for review"
    with what changed since the last publish, and the planner approves it. Each publish becomes a new
-   numbered dataset version.
+   numbered dataset version. The state's load_map shows how the output's fields map onto the catalogue
+   (proposed from their names; the planner confirms it on the Output node). Use set_load_mapping when the
+   planner says how a field should map.
 
 The guardrail matters more than anything else:
 - Every value read from a source carries a verbatim quote that is checked against that source. A value
@@ -200,18 +212,28 @@ def _tools(kind: str) -> list[dict]:
          "description": "Run the pipeline (or up to a step) on the sources and report records, coverage and warnings.",
          "input_schema": {"type": "object", "properties": {"upto_step_id": {"type": "string"}}}},
         {"name": "run_sql",
-         "description": "Run a read-only SELECT (DuckDB SQL) over a step's previewed records and optional reference "
-                        "tables, to look at the data or test a transform before adding it as a sql step. Writes "
-                        "nothing. Returns columns, up to 50 rows, the row count, and as_step: whether the query "
-                        "would work as a sql step and which fields it would write.",
+         "description": "Run a read-only SELECT (DuckDB SQL) over a step's previewed records, optional reference "
+                        "tables and CSV sources, to look at the data or test a transform before adding it as a sql "
+                        "step. Writes nothing. Returns columns, up to 50 rows, the row count, and as_step: whether "
+                        "the query would work as a sql step and which fields it would write.",
          "input_schema": {"type": "object", "properties": {
              "query": {"type": "string", "description": "One SELECT; the table `records` is the step's output."},
-             "tables": {"type": "array", "items": {"type": "string", "enum": list(engine.REF_TABLES)},
-                        "description": "Reference tables the query joins."},
+             "tables": {"type": "array", "items": {"type": "string"},
+                        "description": "Reference tables (" + ", ".join(engine.REF_TABLES) + ") or CSV source ids the query joins."},
              "on_step_id": {"type": "string", "description": "Whose output is `records`: the step a new sql step "
                             "would follow. Default the last previewed step; \"output\" for the last run's final records."},
+             "input_step_ids": {"type": "array", "items": {"type": "string"},
+                                "description": "Instead of on_step_id, for a join: the steps a sql step with several "
+                                               "inputs would take. `records` holds all of them, and each is also its own "
+                                               "table named by its step id."},
              "limit": {"type": "integer", "description": "Rows to return, at most 50 (default 20)."}},
              "required": ["query"]}},
+        {"name": "set_load_mapping",
+         "description": "Set which output field Load writes to each catalogue column: {column: field, or null for "
+                        "none}. Columns left out keep their mapping. Resets no step.",
+         "input_schema": {"type": "object", "properties": {
+             "mapping": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}},
+             "required": ["mapping"]}},
         {"name": "set_goal", "description": "Record the planner's goal for this pipeline, in their words.",
          "input_schema": {"type": "object", "properties": {"goal": {"type": "string"}}, "required": ["goal"]}},
         {"name": "rename_pipeline", "description": "Give the pipeline a short descriptive name.",
@@ -249,6 +271,9 @@ def state_snapshot(p: dict) -> dict:
                       if d["draft"].get("sources") is not None else {}),
                    "check": {k: [x["text"] for x in v] for k, v in service.check_draft(p).items() if k in ("errors", "warnings")}}
                   if d.get("draft") is not None else None),
+        "source_tables": {k: list(v["columns"]) for k, v in service._source_tables(p).items()},
+        "load_map": ({"columns": {c["column"]: c["field"] for c in lm["columns"]}, "unmapped_fields": lm["extras"],
+                      "notes": lm["notes"]} if (lm := service.view_load_map(p)) else None),
         "planner_overrides": d.get("overrides"),
         "design_gaps": engine.design_gaps(d),
         "last_run": ({"at": last.get("at"), "upto": last.get("upto"), "records": cov.get("records"),
@@ -336,9 +361,12 @@ def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
             return _preview_result(service.get(db, pipeline_id), summary), False
         if name == "run_sql":
             r = service.explore_sql(db, pipeline_id, args.get("query") or "", args.get("tables"),
-                                    args.get("on_step_id"), args.get("limit") or 20)
+                                    args.get("on_step_id"), args.get("limit") or 20, args.get("input_step_ids"))
             r["rows"] = [[_short(v) for v in row] for row in r["rows"]]
             return r, False
+        if name == "set_load_mapping":
+            m = service.set_load_map(db, pipeline_id, args.get("mapping") or {})
+            return {"columns": {c["column"]: c["field"] for c in m["columns"]}, "unmapped_fields": m["extras"]}, False
         if name == "set_goal":
             return {"goal": service.set_goal(db, pipeline_id, args.get("goal") or "")}, False
         if name == "rename_pipeline":
@@ -450,7 +478,8 @@ TOOL_LABELS = {"set_schema": "proposed the schema", "add_source": "added a sourc
                "read_source": "read a source", "add_step": "drafted a step", "update_step": "changed a step",
                "remove_step": "removed a step", "run_preview": "ran a preview", "rename_pipeline": "renamed the pipeline",
                "set_goal": "recorded the goal", "run_sql": "ran SQL", "connect_steps": "wired steps",
-               "disconnect_steps": "unwired steps", "check_pipeline": "checked the draft"}
+               "disconnect_steps": "unwired steps", "check_pipeline": "checked the draft",
+               "set_load_mapping": "mapped fields for Load"}
 
 
 def _chip(block: dict) -> dict:
@@ -469,6 +498,7 @@ def _chip(block: dict) -> dict:
         "run_sql": lambda: " ".join((a.get("query") or "").split()),
         "connect_steps": lambda: f"{a.get('from_step')} → {a.get('to_step')}",
         "disconnect_steps": lambda: f"{a.get('from_step')} ✕ {a.get('to_step')}",
+        "set_load_mapping": lambda: ", ".join(f"{v or 'nothing'} → {k}" for k, v in (a.get("mapping") or {}).items()),
     }.get(block.get("name"), lambda: "")()
     return {"id": block.get("id"), "tool": block.get("name"), "label": TOOL_LABELS.get(block.get("name"), block.get("name")),
             "detail": _short(detail or "", 160)}

@@ -132,15 +132,19 @@ function Row({ label, hint, children }) {
   );
 }
 
-// SQL: the query, the reference tables it may join, and every column it can use.
+// SQL: the query, the tables it may join (reference tables, CSV sources, and
+// with several inputs each input on its own), and every column it can use.
 // Clicking a table or column name puts it at the cursor.
-function SqlForm({ c, set, fields, refTables, sqlTypes, pipelineId, testOn }) {
+function SqlForm({ c, set, fields, refTables, srcTables, sqlTypes, pipelineId, inputs }) {
   const box = useRef(null);
   const [test, setTest] = useState(null);      // { result } | { error } | { running: true }
+  const joins = inputs.length > 1 ? inputs : [];
+  const testOn = inputs.length === 1 ? inputs[0] : null;
   async function runTest() {
     setTest({ running: true });
     try {
-      const result = await call("POST", `/pipelines/${pipelineId}/sql`, { query: c.query || "", tables: c.tables || null, on: testOn, limit: 50 });
+      const result = await call("POST", `/pipelines/${pipelineId}/sql`, {
+        query: c.query || "", tables: c.tables || null, limit: 50, ...(joins.length ? { inputs: joins } : { on: testOn }) });
       setTest({ result });
     } catch (e) {
       setTest({ error: e.message.replace(/^\d+ — /, "") });
@@ -157,15 +161,19 @@ function SqlForm({ c, set, fields, refTables, sqlTypes, pipelineId, testOn }) {
   const cols = (list) => <div className="pl-cols">{list.map(([n, t]) => (
     <button type="button" key={n} className="pl-col-btn" onClick={() => insert(n)} title={`Insert ${n}`}><code>{n}</code> {t}</button>
   ))}</div>;
+  const choices = [...Object.entries(refTables || {}).map(([name, r]) => [name, r.description, r.columns]),
+                   ...Object.entries(srcTables || {}).map(([name, r]) => [name, `CSV source${r.label ? `: ${r.label}` : ""}, read as it is (all text)`, r.columns])];
+  const known = Object.fromEntries(choices.map(([name, desc, columns]) => [name, { desc, columns }]));
+  const recordCols = [["id", "VARCHAR"], ...fields.map((f) => [f.name, sqlTypes?.[f.type] || "VARCHAR"])];
   return (
     <>
-      <Row label="Reference tables" hint="Read only copies, joined like any table. Tick a table before the SQL uses it.">
+      <Row label="Tables to join" hint="Reference tables, and CSV sources by id (a lookup CSV needs no Extract step). Tick a table before the SQL uses it.">
         <div className="pl-checks">
-          {Object.entries(refTables || {}).map(([name, r]) => (
-            <label key={name} title={r.description}>
+          {choices.map(([name, desc]) => (
+            <label key={name} title={desc}>
               <input type="checkbox" checked={tables.includes(name)}
                      onChange={(e) => {
-                       const next = Object.keys(refTables).filter((t) => (t === name ? e.target.checked : tables.includes(t)));
+                       const next = choices.map(([t]) => t).filter((t) => (t === name ? e.target.checked : tables.includes(t)));
                        set({ ...c, tables: next.length ? next : null });
                      }} />
               <code>{name}</code>
@@ -183,26 +191,34 @@ function SqlForm({ c, set, fields, refTables, sqlTypes, pipelineId, testOn }) {
                   }} />
       </Row>
       <div className="btn-row" style={{ marginTop: 0 }}>
-        <button type="button" disabled={!testOn || !(c.query || "").trim() || test?.running} onClick={runTest}>
+        <button type="button" disabled={!inputs.length || !(c.query || "").trim() || test?.running} onClick={runTest}>
           {test?.running ? "Running…" : "Test on input"}
         </button>
         <span className="assess" style={{ alignSelf: "center" }}>
-          {testOn ? `Runs the query on ${testOn}'s last preview. Nothing is saved.` : "A SQL step works on the records of the step before it: put it after a step to test it."}
+          {joins.length ? `Runs the query on the last previews of ${joins.join(" and ")}. Nothing is saved.`
+            : testOn ? `Runs the query on ${testOn}'s last preview. Nothing is saved.`
+            : "A SQL step works on the records of the step before it: put it after a step to test it."}
         </span>
       </div>
       {test?.error && <div className="banner err" style={{ margin: 0 }}>{test.error}</div>}
       {test?.result && <SqlResult r={test.result} />}
       <div className="pl-sql-help">
         <div><button type="button" className="pl-col-btn tbl" onClick={() => insert("records")}><code>records</code></button>
-          <span className="assess">typed; values that don't fit their type are NULL here</span></div>
-        {cols([["id", "VARCHAR"], ...fields.map((f) => [f.name, sqlTypes?.[f.type] || "VARCHAR"])])}
+          <span className="assess">{joins.length ? `every input's records (${joins.join(" + ")}); ` : ""}typed; values that don't fit their type are NULL here</span></div>
+        {cols(recordCols)}
         <div><button type="button" className="pl-col-btn tbl" onClick={() => insert("records_text")}><code>records_text</code></button>
           <span className="assess">the same columns, all VARCHAR</span></div>
+        {joins.map((name) => (
+          <div key={name}>
+            <div><button type="button" className="pl-col-btn tbl" onClick={() => insert(name)}><code>{name}</code></button>
+              <span className="assess">only {name}'s records, to JOIN one input to another. Rows keep the ids they return.</span></div>
+          </div>
+        ))}
         {tables.map((name) => (
           <div key={name}>
             <div><button type="button" className="pl-col-btn tbl" onClick={() => insert(name)}><code>{name}</code></button>
-              <span className="assess">{refTables[name]?.description}</span></div>
-            {cols(Object.entries(refTables[name]?.columns || {}))}
+              <span className="assess">{known[name]?.desc}</span></div>
+            {cols(Object.entries(known[name]?.columns || {}))}
           </div>
         ))}
       </div>
@@ -236,7 +252,7 @@ function SqlResult({ r }) {
 }
 
 // The settings for one step type. Keys this form does not know are kept as they are.
-function ConfigForm({ type, c, set, fields, sources, refTables, sqlTypes, pipelineId, testOn }) {
+function ConfigForm({ type, c, set, fields, sources, refTables, srcTables, sqlTypes, pipelineId, inputs }) {
   const put = (k, v) => set({ ...c, [k]: v });
   const field = fields.find((f) => f.name === c.field);
   switch (type) {
@@ -340,7 +356,8 @@ function ConfigForm({ type, c, set, fields, sources, refTables, sqlTypes, pipeli
         </>
       );
     case "sql":
-      return <SqlForm c={c} set={set} fields={fields} refTables={refTables} sqlTypes={sqlTypes} pipelineId={pipelineId} testOn={testOn} />;
+      return <SqlForm c={c} set={set} fields={fields} refTables={refTables} srcTables={srcTables} sqlTypes={sqlTypes}
+                      pipelineId={pipelineId} inputs={inputs} />;
     default:
       return <div className="assess">No settings.</div>;
   }
@@ -383,10 +400,11 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
     return `Add a step ${where} that `;
   });
   // A SQL draft is tested on the records it would receive: its first input's last preview.
-  const testOn = editing ? (model.inputs[editing.id] || [])[0]
-    : wiring.startsWith("after:") ? wiring.slice(6)
-    : wiring.startsWith("before:") ? (model.inputs[wiring.slice(7)] || [])[0]
-    : wiring === "end" ? model.outputFrom[0] : undefined;
+  // The steps it takes, as wired (several: a SQL step sees each as a table of its own).
+  const inputs = editing ? model.inputs[editing.id] || []
+    : wiring.startsWith("after:") ? [wiring.slice(6)]
+    : wiring.startsWith("before:") ? model.inputs[wiring.slice(7)] || []
+    : wiring === "end" ? model.outputFrom : [];
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -464,7 +482,8 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
             {type && (
               <div className="pl-form">
                 <ConfigForm type={type} c={config} set={setConfig} fields={fields} sources={sources}
-                            refTables={view.ref_tables} sqlTypes={view.sql_types} pipelineId={view.id} testOn={testOn} />
+                            refTables={view.ref_tables} srcTables={view.source_tables} sqlTypes={view.sql_types}
+                            pipelineId={view.id} inputs={inputs} />
                 {!editing && (
                   <Row label="Wiring" hint="Several wires into one step merge their records. You can rewire on the canvas.">
                     <select value={wiring} onChange={(e) => setWiring(e.target.value)}>

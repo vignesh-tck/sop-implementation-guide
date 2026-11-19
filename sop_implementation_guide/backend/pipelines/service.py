@@ -104,13 +104,36 @@ def approve_schema(db: Client, pipeline_id: int) -> dict:
     p = get(db, pipeline_id)
     if not _fields(p):
         raise PipelineError("There is no schema to approve.")
-    for req in kinds.spec(p["kind"])["required_fields"]:
-        if req not in {f["name"] for f in _fields(p)}:
-            raise PipelineError(f"The schema must include `{req}` before it can be approved.")
     p["definition"]["schema"]["status"] = "approved"
     _save(db, p)
-    event(db, pipeline_id, "You approved the target schema.")
+    unmapped = kinds.load_problems(p["kind"], p["definition"])
+    event(db, pipeline_id, "You approved the target schema."
+          + (f" Before publishing: {' '.join(unmapped)}" if unmapped else ""))
     return p["definition"]["schema"]
+
+
+def view_load_map(p: dict) -> dict | None:
+    cat = kinds.spec(p["kind"])["catalogue"]
+    return kinds.load_map(p["definition"], cat) if cat else None
+
+
+def set_load_map(db: Client, pipeline_id: int, mapping: dict, by_user: bool = False) -> dict:
+    """
+    How the output's fields map onto the catalogue's columns, {column: field or
+    None}; columns left out keep their current choice. Read at Load only, so
+    changing it resets no step.
+    """
+    p = get(db, pipeline_id)
+    cat = kinds.spec(p["kind"])["catalogue"]
+    if not cat:
+        raise PipelineError(f"{kinds.spec(p['kind'])['label']} pipelines do not load into a catalogue yet.")
+    current = {c["column"]: c["field"] for c in kinds.load_map(p["definition"], cat)["columns"]}
+    clean = kinds.clean_load_map({**current, **(mapping or {})}, _fields(p), cat)
+    p["definition"]["load_map"] = {k: v for k, v in clean.items() if k in (mapping or {}) or k in (p["definition"].get("load_map") or {})}
+    _save(db, p)
+    shown = ", ".join(f"{v or 'nothing'} → {k}" for k, v in clean.items() if k in (mapping or {}))
+    event(db, pipeline_id, f"{_who(by_user)} mapped {shown} for Load.")
+    return kinds.load_map(p["definition"], cat)
 
 
 def set_goal(db: Client, pipeline_id: int, goal: str) -> str:
@@ -355,7 +378,9 @@ def update_step(db: Client, pipeline_id: int, step_id: str, config: dict | None 
         raise PipelineError(f"No step {step_id}.")
     reset, changed = [], False
     if config is not None:
-        clean = _check_sources(p, step["type"], engine.validate_step(p["kind"], step["type"], config, _fields(p)))
+        inputs = next(s["inputs"] for s in graph.normalise(p["definition"])["steps"] if s["id"] == step_id)
+        clean = _check_sources(p, step["type"], engine.validate_step(p["kind"], step["type"], config, _fields(p),
+                                                                     inputs, p["definition"]["sources"]))
         slot = engine.EDITABLE.get(step["type"])
         other = {k for k in set(clean) | set(step["config"]) if k != slot and clean.get(k) != step["config"].get(k)}
         if other:
@@ -513,10 +538,13 @@ def draft_add_step(db: Client, pipeline_id: int, step_type: str, config: dict, n
     """
     p = get(db, pipeline_id)
     d = _draft(p, open_=True)
-    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config or {}, _fields(p)), _draft_sources(p))
+    ids = {s["id"] for s in d["steps"]}
+    wired = ([after] if after else list(_draft_step(d, before)["inputs"]) if before
+             else [i for i in inputs if i in ids] if inputs is not None else list(d["output_from"]) if connect else [])
+    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config or {}, _fields(p), wired,
+                                                            _draft_sources(p)), _draft_sources(p))
     taken = d["steps"] + p["definition"]["steps"]
     step = {"id": _next_id(taken, "t"), "type": step_type, "config": cfg, "note": (note or "").strip(), "inputs": []}
-    ids = {s["id"] for s in d["steps"]}
     pos = len(d["steps"])
     if after:
         if after not in ids:
@@ -554,7 +582,8 @@ def draft_update_step(db: Client, pipeline_id: int, step_id: str, config: dict |
     d = _draft(p, open_=True)
     s = _draft_step(d, step_id)
     if config is not None:
-        s["config"] = _check_sources(p, s["type"], engine.validate_step(p["kind"], s["type"], config, _fields(p)), _draft_sources(p))
+        s["config"] = _check_sources(p, s["type"], engine.validate_step(p["kind"], s["type"], config, _fields(p), s["inputs"],
+                                                                        _draft_sources(p)), _draft_sources(p))
     if note is not None:
         s["note"] = note.strip()
     _save(db, p)
@@ -870,7 +899,9 @@ def summarise_run(last: dict | None) -> dict | None:
 
 
 def gate(p: dict) -> list[str]:
-    return engine.load_gate(p["definition"], p["state"], kinds.spec(p["kind"])["required_fields"])
+    last = p["state"].get("last_run") or {}
+    records = last.get("records") if last and not last.get("upto") else None
+    return engine.load_gate(p["definition"], p["state"], []) + kinds.load_problems(p["kind"], p["definition"], records)
 
 
 def preview_diff(db: Client, pipeline_id: int) -> dict:
@@ -932,11 +963,13 @@ def reference_rows(db: Client):
 
 
 def explore_sql(db: Client, pipeline_id: int, query: str, tables: list[str] | None = None,
-                on: str | None = None, limit: int = engine.EXPLORE_ROWS) -> dict:
+                on: str | None = None, limit: int = engine.EXPLORE_ROWS, inputs: list[str] | None = None) -> dict:
     """
     A read-only query over one step's last previewed output (`on`, default the
-    last step that has one; "output" for the last run's final records) and the
-    reference tables. Also says whether the query would work as a SQL step.
+    last step that has one; "output" for the last run's final records), or over
+    several steps' outputs (`inputs`, as a SQL step with those inputs sees them:
+    all in `records`, and each as its own table), plus the reference tables and
+    CSV sources. Also says whether the query would work as a SQL step.
     """
     p = get(db, pipeline_id)
     fields = _fields(p)
@@ -944,7 +977,20 @@ def explore_sql(db: Client, pipeline_id: int, query: str, tables: list[str] | No
         raise PipelineError("Set the target schema first: the records table's columns come from it.")
     outputs = p["state"].get("outputs") or {}
     steps = p["definition"]["steps"]
-    if on == "output":
+    sources = _draft_sources(p)
+    ins = None
+    if inputs and len(inputs) == 1 and on is None:
+        on = inputs[0]
+    if inputs and len(inputs) > 1:
+        ins, missing = {}, []
+        for i in inputs:
+            out = outputs.get(i)
+            if not out or out.get("error"):
+                missing.append(i)
+            ins[i] = (out or {}).get("records") or []
+        recs, count = [r for i in inputs for r in ins[i]], None
+        where = f"the outputs of {' + '.join(inputs)}" + (f" ({', '.join(missing)} not previewed, so empty)" if missing else "")
+    elif on == "output":
         recs, count = (p["state"].get("last_run") or {}).get("records") or [], None
         where = "the last run's final output"
     else:
@@ -957,11 +1003,11 @@ def explore_sql(db: Client, pipeline_id: int, query: str, tables: list[str] | No
         where = (f"the output of {on}" if out and not out.get("error")
                  else f"nothing: {on} has not been previewed with its current settings" if on
                  else "nothing: no step has been previewed yet")
-    result = engine.explore_sql(query, tables, recs, fields, reference_rows(db), limit)
+    result = engine.explore_sql(query, tables, recs, fields, reference_rows(db), limit, ins, sources)
     if count is not None and count > len(recs):
         result["notes"].append(f"records holds the first {len(recs)} of {count} records")
     try:
-        cols = engine.sql_columns({"query": query, "tables": tables or None}, fields)
+        cols = engine.sql_columns({"query": query, "tables": tables or None}, fields, inputs, sources)
         as_step = {"ok": True, "writes": [n for n, _ in cols if n != "id"]}
     except PipelineError as e:
         as_step = {"ok": False, "why": str(e)}
@@ -1023,7 +1069,20 @@ def _draft_view(p: dict) -> dict | None:
     return {"steps": steps, "output_from": d["output_from"], "check": check_draft(p), "sources": sources,
             "removed_sources": [i for i in live_src if i not in {x["id"] for x in sources}],
             "removed": [sid for sid in live if sid not in {s["id"] for s in d["steps"]}],
-            "ports": {s["id"]: engine.step_io(s, _fields(p)) for s in d["steps"]}}
+            "ports": {s["id"]: engine.step_io(s, _fields(p), _draft_sources(p)) for s in d["steps"]}}
+
+
+def _source_tables(p: dict) -> dict:
+    """The CSV sources (applied or in the draft) a SQL step can join, with their columns."""
+    out = {}
+    for s in p["definition"]["sources"] + ((p["definition"].get("draft") or {}).get("sources") or []):
+        meta = (p["state"].get("sources") or {}).get(s["id"]) or {}
+        maybe = "csv" in (meta.get("content_type") or "") or (s.get("url") or "").lower().split("?")[0].endswith(".csv")
+        if s["id"] not in out and s.get("kind") == "url" and maybe and not meta.get("error"):
+            cols = engine.source_columns(s)
+            if cols:
+                out[s["id"]] = {"columns": cols, "label": s.get("label")}
+    return out
 
 
 def view(db: Client, pipeline_id: int) -> dict[str, Any]:
@@ -1045,10 +1104,13 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
         "output_locked": output_locked(p),
         "design_gaps": engine.design_gaps(p["definition"]),
         "overrides": p["definition"].get("overrides"),
-        "ports": {st["id"]: engine.step_io(st, _fields(p)) for st in p["definition"]["steps"]},
+        "ports": {st["id"]: engine.step_io(st, _fields(p), p["definition"]["sources"])
+                  for st in graph.normalise(p["definition"])["steps"]},
         "graph": _graph_view(p["definition"]),
         "draft": _draft_view(p),
         "ref_tables": {k: {"description": v["description"], "columns": v["columns"]} for k, v in engine.REF_TABLES.items()},
+        "source_tables": _source_tables(p),
+        "load_map": view_load_map(p),
         "sql_types": engine.SQL_TYPES,
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"], "config": v["config"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},

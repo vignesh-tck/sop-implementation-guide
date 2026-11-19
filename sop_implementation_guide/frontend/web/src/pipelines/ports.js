@@ -63,10 +63,11 @@ export function portText(view, stepId) {
   const p = stepPorts(view, stepId);
   const inRecs = p.inputs.map(([i, o]) => (cnt(o) != null ? `${cnt(o)} from ${i}` : `${i} (not previewed)`)).join(" + ");
   return {
-    input: [inRecs && `${inRecs}${p.inputs.length > 1 ? " (merged)" : ""}`, p.reads && `sources: ${p.reads}`].filter(Boolean).join(" + ") || "nothing",
+    input: [inRecs && `${inRecs}${p.inputs.length > 1 ? (p.io.joins?.length ? " (each its own table)" : " (merged)") : ""}`, p.reads && `sources: ${p.reads}`].filter(Boolean).join(" + ") || "nothing",
     output: `${cnt(p.output) != null ? `${cnt(p.output)} record(s)` : "not previewed"} · ${ROWS_TEXT[p.rows] || ""}`,
     writes: p.io.writes || [],
     tables: p.io.tables || [],
+    joins: p.io.joins || [],
     error: p.io.error,
   };
 }
@@ -80,10 +81,11 @@ export function draftPortText(view, stepId) {
   const reads = step?.type === "extract" ? (step.config?.source_ids?.length ? step.config.source_ids.join(", ") : "every source") : null;
   const feeds = m.steps.filter((s) => (s.inputs || []).includes(stepId)).map((s) => s.id).concat(m.outputFrom.includes(stepId) ? ["Output"] : []);
   return {
-    input: [ins.length && `${ins.join(" + ")}${ins.length > 1 ? " (merged)" : ""}`, reads && `sources: ${reads}`].filter(Boolean).join(" + ") || "nothing wired in",
+    input: [ins.length && `${ins.join(" + ")}${ins.length > 1 ? (io.joins?.length ? " (each its own table)" : " (merged)") : ""}`, reads && `sources: ${reads}`].filter(Boolean).join(" + ") || "nothing wired in",
     output: feeds.length ? `to ${feeds.join(", ")}` : "not wired out",
     writes: io.writes || [],
     tables: io.tables || [],
+    joins: io.joins || [],
     error: io.error,
     schema: view.draft?.check?.ports?.[stepId] || null,
     inSchema: ins.length ? view.draft?.check?.ports?.[ins[0]] || null : null,

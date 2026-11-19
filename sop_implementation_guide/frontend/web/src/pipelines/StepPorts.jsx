@@ -17,18 +17,23 @@ function filled(outs, name) {
 const Count = ({ c }) => (c ? <span title={`${c.of - c.n} blank`}>{c.n}/{c.of}</span> : <span className="assess">—</span>);
 const State = ({ s }) => (s ? <span className={"pl-state " + s}>{STATE_TEXT[s]}</span> : <span className="assess">not produced</span>);
 
-function SqlTables({ view, tables }) {
+function SqlTables({ view, tables, joins = [] }) {
   return (
     <div className="pl-port-tables">
       <b>Tables the SQL can read</b>
       <ul>
-        <li><code>records</code>: <span className="assess">id and the fields above, typed as shown</span></li>
+        <li><code>records</code>: <span className="assess">id and the fields above, typed as shown{joins.length ? `, from every input (${joins.join(" + ")})` : ""}</span></li>
         <li><code>records_text</code>: <span className="assess">the same columns, all as text (for values not parsed yet)</span></li>
+        {joins.map((name) => (
+          <li key={name}><code>{name}</code> <span className="tag">input</span>
+            <div className="assess">only {name}'s records, the same columns, to join one input to another</div></li>
+        ))}
         {tables.map((name) => {
-          const ref = view.ref_tables?.[name];
+          const ref = view.ref_tables?.[name] || view.source_tables?.[name];
+          const csv = !view.ref_tables?.[name];
           return (
-            <li key={name}><code>{name}</code> <span className="tag">reference, read only</span>
-              <div className="assess">{ref?.description}</div>
+            <li key={name}><code>{name}</code> <span className="tag">{csv ? "CSV source, all text" : "reference, read only"}</span>
+              <div className="assess">{csv ? ref?.label || "" : ref?.description}</div>
               <div className="pl-cols">{Object.entries(ref?.columns || {}).map(([c, ty]) => <span key={c}><code>{c}</code> {ty}</span>)}</div>
             </li>
           );
@@ -81,7 +86,7 @@ export function DraftPorts({ view, stepId }) {
           </tbody>
         </table>
       </div>
-      {step.type === "sql" && <SqlTables view={view} tables={t.tables} />}
+      {step.type === "sql" && <SqlTables view={view} tables={t.tables} joins={t.joins} />}
     </details>
   );
 }
@@ -121,7 +126,7 @@ export default function StepPorts({ view, stepId }) {
           </tbody>
         </table>
       </div>
-      {p.step.type === "sql" && <SqlTables view={view} tables={t.tables} />}
+      {p.step.type === "sql" && <SqlTables view={view} tables={t.tables} joins={t.joins} />}
     </details>
   );
 }

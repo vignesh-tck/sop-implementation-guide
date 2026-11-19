@@ -3,6 +3,7 @@ import { call } from "../api.js";
 import SourceReader from "./SourceReader.jsx";
 import StepDialog from "./StepDialog.jsx";
 import SourceDialog from "./SourceDialog.jsx";
+import LoadMap from "./LoadMap.jsx";
 import StepPorts, { DraftPorts } from "./StepPorts.jsx";
 import { ancestorsOf, stepsModel } from "./ports.js";
 
@@ -40,7 +41,8 @@ function SchemaCard({ view, act, disabled }) {
     <div className="card">
       <h4>Target schema <StatusTag status={schema.status} /></h4>
       <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
-        What every record must contain. Required fields gate the load: the agent asks for more data when sources can't fill them.
+        What every record must contain, named as you like. Required fields gate the load: the agent asks for more data when sources
+        can't fill them. At Load the fields map onto the {view.kind_label.toLowerCase()} catalogue (shown on the Output node); only a name is needed.
       </div>
       {fields.length === 0 ? (
         <div className="btn-row" style={{ marginTop: 0 }}>
@@ -678,6 +680,12 @@ function PublishCard({ view, act, disabled }) {
           Last run {(view.last_run.at || "").slice(0, 16).replace("T", " ")}{view.last_run.upto ? ` (preview to ${view.last_run.upto})` : ""}
         </span>}
       </div>
+      {view.load_map && (
+        <details className="pl-loadmap-wrap" open={view.gate.some((g) => g.includes("on the Output node"))}>
+          <summary>How the output maps onto the {view.kind_label.toLowerCase()} catalogue</summary>
+          <LoadMap view={view} act={act} disabled={disabled} />
+        </details>
+      )}
       {published ? (
         <div className="banner ok" style={{ marginTop: ".75rem" }}>
           Approved and published as <b>{view.kind_label} v{published.dataset_version}</b>{published.name ? ` “${published.name}”` : ""}

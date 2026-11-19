@@ -875,6 +875,7 @@ main.view.pl-view {
 
 .pl-wire.chain path.react-flow__edge-path { stroke-dasharray: 4 4; }
 .pl-wire.source path.react-flow__edge-path { stroke-dasharray: 2 3; }
+.pl-wire.table path.react-flow__edge-path { stroke-dasharray: 8 3 2 3; }
 .pl-wire.implicit path.react-flow__edge-path { stroke-dasharray: 1 5; opacity: .7; }
 .pl-wire.done path.react-flow__edge-path { stroke: var(--teal); stroke-dasharray: none; }
 .react-flow__edge.selected .pl-wire path.react-flow__edge-path,
@@ -1117,3 +1118,16 @@ main.view.pl-view {
 .pl-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--border); margin-bottom: .3rem; }
 .pl-tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: .3rem .6rem; font-size: .82rem; color: var(--muted); }
 .pl-tab.on { color: var(--orange); border-bottom-color: var(--orange); }
+
+/* How the output maps onto the catalogue at Load */
+.pl-loadmap { display: flex; flex-direction: column; gap: .4rem; font-size: .82rem; }
+.pl-loadmap-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.pl-loadmap-table th { text-align: left; font-weight: 600; color: var(--muted); padding: .2rem .4rem; border-bottom: 1px solid var(--border); }
+.pl-loadmap-table td { padding: .2rem .4rem; border-bottom: 1px dashed var(--border); vertical-align: top; }
+.pl-loadmap-table select { max-width: 11rem; font-size: .8rem; }
+.pl-loadmap-table tr.pl-bad td:first-child code { color: var(--red); }
+.pl-req { color: var(--orange); font-size: .72rem; }
+.pl-loadmap-wrap { margin-top: .6rem; font-size: .85rem; }
+.pl-loadmap-wrap > summary { cursor: pointer; color: var(--muted); margin-bottom: .4rem; }
+.pl-details .pl-loadmap-table td:last-child { display: none; }
+.pl-details .pl-loadmap-table th:last-child { display: none; }

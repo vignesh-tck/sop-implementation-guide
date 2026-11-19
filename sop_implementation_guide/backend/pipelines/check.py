@@ -5,14 +5,20 @@ Errors stop Apply; warnings are shown but do not. Checked:
 - the wiring: every step takes an input (an Extract step may start a branch),
   sends its output to exactly one place, and reaches the output; no loops;
 - each step's settings, as the catalog and schema require (SQL is dry-run);
-- the sources: each read by one Extract step, since records are keyed by source;
+- the sources: each read by one Extract step, since records are keyed by source
+  (a CSV source may instead be joined as a table by SQL steps);
 - merges: every branch into a step (or into the output) must hand on the same
   schema. A step's port schema says, per field, whether the records carry it
   and whether it is already typed, so merging a branch that parsed a money
   field with one that did not is an error, not a quiet mix of numbers and text.
+  A SQL step whose query reads its inputs as tables is a join, not a merge:
+  the branches may differ, and fields it does not write keep its first input's
+  schema (its rows are records of the inputs, usually the first).
 """
 
 from __future__ import annotations
+
+import re
 
 from backend.pipelines import engine, graph
 from backend.pipelines.engine import PipelineError
@@ -30,12 +36,12 @@ def _fresh(fields: list[dict]) -> dict:
     return {f["name"]: ((TEXT if f["type"] in UNTYPED else SET) if f.get("extract", True) else None) for f in fields}
 
 
-def _after(step: dict, port: dict, fields: list[dict], warn) -> dict:
+def _after(step: dict, port: dict, fields: list[dict], warn, sources: list[dict]) -> dict:
     """The port schema after a step, from the one before it."""
     t, c = step["type"], step.get("config") or {}
     types = {f["name"]: f["type"] for f in fields}
     out = dict(port)
-    writes = engine.step_io(step, fields).get("writes") or []
+    writes = engine.step_io(step, fields, sources).get("writes") or []
     if t == "research":
         for w in writes:
             out[w] = TEXT if types.get(w) in UNTYPED else SET
@@ -65,7 +71,15 @@ def _merge(node: str, ports: dict[str, dict], fields: list[dict], err) -> None:
         more = f" (and {len(diff) - 3} more)" if len(diff) > 3 else ""
         where = "Output" if node == "output" else node
         err(node, f"{where} merges {base_name} and {other}, but their schemas differ: {shown}{more}. "
-                  "Give both branches the same steps for these fields, or merge before the step that changes them.")
+                  "Give both branches the same steps for these fields, merge before the step that changes them, "
+                  "or join them in a SQL step that reads each input as its own table.")
+
+
+def joins(step: dict) -> bool:
+    """A SQL step with several inputs whose query reads them as tables (by step id)."""
+    q = (step.get("config") or {}).get("query") or ""
+    return (step["type"] == "sql" and len(step.get("inputs") or []) > 1
+            and any(re.search(rf"\b{re.escape(i)}\b", q) for i in step["inputs"]))
 
 
 def check(kind: str, d: dict) -> dict:
@@ -89,7 +103,7 @@ def check(kind: str, d: dict) -> dict:
     # settings
     for s in steps:
         try:
-            cfg = engine.validate_step(kind, s["type"], s.get("config") or {}, fields)
+            cfg = engine.validate_step(kind, s["type"], s.get("config") or {}, fields, s["inputs"], sources)
             if s["type"] == "extract":
                 unknown = [i for i in cfg.get("source_ids") or [] if i not in {x["id"] for x in sources}]
                 if unknown:
@@ -130,9 +144,22 @@ def check(kind: str, d: dict) -> dict:
         if len(rs) > 1:
             err(rs[-1], f"{sid} is read by {' and '.join(rs)}. Each source can be read by one Extract step "
                         "(their records would share ids); give each Extract step its own sources.")
-    unread = [x["id"] for x in sources if x["id"] not in readers]
+    # A CSV source a SQL step joins as a table needs no Extract step.
+    joined: dict[str, list[str]] = {}
+    for s in steps:
+        if s["type"] == "sql":
+            for t in (s.get("config") or {}).get("tables") or []:
+                if t not in engine.REF_TABLES:
+                    joined.setdefault(t, []).append(s["id"])
+    for sid, js in joined.items():
+        if sid in readers:
+            everything = [r for r in readers[sid] if not (by_id[r].get("config") or {}).get("source_ids")]
+            warn(readers[sid][0], f"{sid} is joined as a table by {', '.join(js)} and also extracted by {', '.join(readers[sid])}"
+                 + (f" ({', '.join(everything)} read{'s' if len(everything) == 1 else ''} every source: set its sources if it should not read {sid})"
+                    if everything else "") + ".")
+    unread = [x["id"] for x in sources if x["id"] not in readers and x["id"] not in joined]
     if unread and any(s["type"] == "extract" for s in steps):
-        warn(None, f"No Extract step reads {', '.join(unread)}.")
+        warn(None, f"No Extract step reads {', '.join(unread)}, and no SQL step joins it.")
 
     # port schemas, in run order, and merges
     ports: dict[str, dict] = {}
@@ -145,10 +172,10 @@ def check(kind: str, d: dict) -> dict:
                 if ahead:
                     warn(sid, f"The records {sid} reads join after {', '.join(ahead)}, so those steps do not process them.")
             ins = {**ins, f"{sid}'s sources": _fresh(fields)}
-        if len(ins) > 1:
+        if len(ins) > 1 and not joins(s):
             _merge(sid, ins, fields, err)
         port = dict(next(iter(ins.values()))) if ins else {f["name"]: None for f in fields}
-        ports[sid] = _after(s, port, fields, warn)
+        ports[sid] = _after(s, port, fields, warn, sources)
     result["ports"] = ports
 
     outs = {i: ports[i] for i in g["output_from"] if i in ports}
