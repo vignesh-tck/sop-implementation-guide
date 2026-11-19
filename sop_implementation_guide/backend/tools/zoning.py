@@ -16,6 +16,10 @@ fronting zone, what that means for the plan, and only then what is still open.
 Every sentence carries the numbers of the references that back it, and the
 reference list is always returned, even when the lookup has not run.
 
+A recommendation type can also be read as not a land use at all (benches,
+crosswalks, signals: street and right-of-way items). The use tables do not
+decide those, so the finding says so, cites the reading, and asks nothing.
+
 Outcomes per zone:
   by_right           P in the use table
   special_exception  SE: needs its own application and approval (§27-3604)
@@ -61,9 +65,9 @@ def load_file_rules() -> dict:
 
 
 def load_rules() -> dict:
-    """The rules in force: a pinned dataset version's (see using()), else the committed file."""
+    """The rules in force: a pinned dataset version's (see using()), else the newest applied version's, else the file."""
     pinned = _PINNED.get()
-    return (pinned or {}).get("rules") or load_file_rules()
+    return (pinned or {}).get("rules") or _ACTIVE["rules"] or load_file_rules()
 
 
 @lru_cache(maxsize=1)
@@ -84,7 +88,9 @@ def load_file_use_table() -> dict:
 # full version only when a newer one has been applied.
 # ---------------------------------------------------------------------------
 
-_ACTIVE: dict = {"version": 0, "use_table": None, "settings": None, "applied_by": None,
+# rules: the recommendation readings and the rest of zoning_rules.json, when a
+# version carries its own (a zoning pipeline's publish does); else the file.
+_ACTIVE: dict = {"version": 0, "use_table": None, "settings": None, "rules": None, "applied_by": None,
                  "created_at": None, "note": None}
 
 
@@ -99,12 +105,13 @@ def refresh_active(db) -> dict:
         latest = 0
     if latest != _ACTIVE["version"]:
         if latest == 0:
-            _ACTIVE.update(version=0, use_table=None, settings=None, applied_by=None, created_at=None, note=None)
+            _ACTIVE.update(version=0, use_table=None, settings=None, rules=None, applied_by=None, created_at=None,
+                           note=None)
         else:
             row = repo.get_version(latest)
             _ACTIVE.update(version=latest, use_table=row["use_table"], settings=row["settings"],
-                           applied_by=row.get("applied_by"), created_at=row.get("created_at"),
-                           note=row.get("note"))
+                           rules=row.get("rules"), applied_by=row.get("applied_by"),
+                           created_at=row.get("created_at"), note=row.get("note"))
     return active_version()
 
 
@@ -192,8 +199,18 @@ def build_index(doc: dict) -> dict[str, dict]:
     return idx
 
 
-def mapping_for(rec_label: str | None) -> dict | None:
+NOT_A_LAND_USE = "not_a_land_use"
+
+
+def reading_for(rec_label: str | None) -> dict | None:
+    """How a recommendation type is read: as ordinance uses, or as not a land use. None = not read yet."""
     return load_rules()["rec_uses"].get((rec_label or "").strip())
+
+
+def mapping_for(rec_label: str | None) -> dict | None:
+    """The ordinance uses a recommendation type is read as. None when it is unread or not a land use."""
+    r = reading_for(rec_label)
+    return None if not r or r.get("governed_by") == NOT_A_LAND_USE else r
 
 
 def block_lookup(rows: list[dict]) -> dict | None:
@@ -375,6 +392,7 @@ def assess(rec: dict, rows: list[dict], block: dict | None = None) -> dict:
     label = (rec.get("rec_label") or "").strip()
     down = rec.get("direction") == "Decrease"
     mapping = mapping_for(label)
+    reading = reading_for(label)
     lookup = block_lookup(rows)
     where = f"Block {rec.get('block_id')}" + (f" ({block['street_name']})" if block and block.get("street_name") else "")
     # Name the thing in the ordinance's terms ("apartments above and ground-floor retail").
@@ -397,6 +415,19 @@ def assess(rec: dict, rows: list[dict], block: dict | None = None) -> dict:
             "best": best,
             "scorable": (not down) and mapping is not None and best is not None,
         }
+
+    if reading and reading.get("governed_by") == NOT_A_LAND_USE:
+        # Not a use of land (a bench, a crosswalk): the zone does not matter, so nothing is asked.
+        r_mapping = refs.add("Recommendation-to-use mapping", None,
+                             f"Zoning readings {rules['version']}: “{label}” read as not a land use")
+        text = (f"We read “{label}” as not a land use: it is a street or site feature, not a use the Principal "
+                "Use Tables list, so zoning does not decide whether it is allowed.")
+        if reading.get("note"):
+            text += " " + reading["note"]
+        say("reading", text, r_mapping)
+        say("meaning", "No zoning approval is needed for this recommendation; whoever owns the street or site "
+            "decides it.", r_mapping)
+        return result("attached", "Not a land use: zoning does not decide it", [], None)
 
     if lookup is None:
         r = refs.source("zoning_map", detail="Not looked up for this block yet")
@@ -424,7 +455,7 @@ def assess(rec: dict, rows: list[dict], block: dict | None = None) -> dict:
 
     # How we read the recommendation.
     r_mapping = refs.add("Recommendation-to-use mapping", None,
-                         f"backend/data/zoning_rules.json {rules['version']}: our reading, not yet confirmed by an SME")
+                         f"Recommendation readings {rules['version']}: our reading, not yet confirmed by an SME")
     if mapping:
         rows_q = _join([f"“{u['row']}”" for u in mapping["uses"]], "or" if mapping["mode"] == "any" else "and")
         text = f"We read “{label}” as the ordinance use {rows_q}."

@@ -9,8 +9,12 @@ Load maps its fields onto the catalogue's columns (proposed from the field
 names, confirmed by the planner, saved as definition["load_map"]). Only a
 programme name is needed, because Load recognises a programme it loaded before
 by its name and source. Fields mapped to no column travel with the programme
-and Block Funding reads them too. Zoning is not available yet: its catalog
-(use-table extraction, zone-layer lookups) is the next step.
+and Block Funding reads them too.
+
+Zoning has three targets (block zones, use permissions, recommendation
+readings), one output each, and publishes them together as one Zoning version
+(zoning_load.py). Its steps look things up rather than ask a model
+(zoning_steps.py, imported here so they are registered with the engine).
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from datetime import datetime, timezone
 
 from supabase import Client
 
-from backend.pipelines import engine
+from backend.pipelines import engine, zoning_load, zoning_steps  # noqa: F401 — zoning_steps registers its steps
 from backend.repositories.datasets import DatasetRecordRepository
 from backend.repositories.funding_programs import _jsonable
 from backend.tools import datasets
@@ -113,22 +117,60 @@ FUNDING_INTRO = (
     "when every required field is filled. Each load becomes a new Funding version."
 )
 
+ZONING_GUIDANCE = """This is a ZONING pipeline. A Zoning version is one bundle with three parts, and each part
+this pipeline refreshes is one OUTPUT with its own schema (add_output adds one; each target takes one output):
+  - block_zones: one record per study block: lookup_status (found / no_zone / failed), zones, prior_zones, cases,
+    overlays. Built with from_table (table blocks) then spatial_lookup steps on an arcgis source: zones from
+    layer 59 field CLASS with status_field lookup_status; prior zones from layer 65 CLASS; cases from layers 26,
+    46, 29, 31 field CASE_NUM; overlays from layers 14, 22, 68, 23, 19, 20, 21 field *. The default source is
+    https://gisdata.pgplanning.org/arcgis/rest/services/Applications/ZoningCertificationLetter/MapServer.
+    Do NOT use Map_Services/C_I_Z layer 6 ("Plan 2035 Zoning"): it is pre-2022 zoning clipped to centers.
+  - use_permissions: one record per ordinance use, with zone_<code> fields holding P (by right), SE (special
+    exception), X (prohibited) or A. Built with a use_table step on the enCodePlus url source
+    https://online.encodeplus.com/regs/princegeorgescounty-md/doc-view.aspx?secid=649 (the doc-viewer#secid
+    link also works). Do not extract the use table with a model: use_table reads it exactly and checks the
+    zone columns. An amendment not yet in enCodePlus (a CB bill PDF) can be extracted and joined in SQL.
+  - readings: one record per SoP recommendation type: governed_by (use_table, not_a_land_use, unknown),
+    ordinance_uses (use-table rows, ' | '-separated because use names contain semicolons, named exactly as the
+    use table does), mode, confidence,
+    note. Start from from_table zoning_readings (the readings in force) and recommendation_types (every
+    label on the blocks); join them in SQL. Street and right-of-way items (benches, crosswalks, signals,
+    sidewalks, lanes) are not_a_land_use: findings then say zoning does not decide them and ask no one.
+    Any other new reading is a judgement: fill it with llm_fill (marked inferred, confidence low unless the
+    planner says otherwise) and say which ones the SME should confirm.
+Publishing merges every output into the zoning data in force and snapshots it as the next Zoning version;
+parts without an output, and blocks, uses or readings an output does not list, are kept. Determine, don't
+infer: zones come from the map, permissions from the ordinance; only readings are judgement. A failed map
+lookup is left blank and marked failed, never treated as no zone."""
+
+ZONING_INTRO = (
+    "Let's build a zoning pipeline. A Zoning version has three parts, and this pipeline can refresh any of them, "
+    "each as its own output:\n"
+    "1. **Block zones**: which zones, prior zones, cases and overlays each block fronts, from the county map.\n"
+    "2. **Use permissions**: what each zone allows for each use, from the ordinance's use tables.\n"
+    "3. **Recommendation readings**: which ordinance use each SoP recommendation means, or that it is not a land use.\n\n"
+    "Tell me which parts you want to refresh and from what sources (the county GIS service and the enCodePlus use "
+    "table are the usual ones). I'll set up the outputs and propose the steps. Nothing is published until you "
+    "approve it, and each publish becomes a new Zoning version."
+)
+
 KINDS = {
     "funding": {
         "label": "Funding",
         "available": True,
-        "default_fields": FUNDING_FIELDS,
-        "catalogue": CATALOGUE,
         "guidance": FUNDING_GUIDANCE,
         "intro": FUNDING_INTRO,
+        # What an output can load into. A funding pipeline has one output, loading into the catalogue.
+        "targets": {
+            "programs": {"label": "Funding programmes", "default_fields": FUNDING_FIELDS, "catalogue": CATALOGUE},
+        },
     },
     "zoning": {
         "label": "Zoning",
-        "available": False,
-        "default_fields": [],
-        "catalogue": {},
-        "guidance": "",
-        "intro": "",
+        "available": True,
+        "guidance": ZONING_GUIDANCE,
+        "intro": ZONING_INTRO,
+        "targets": zoning_load.TARGETS,
     },
 }
 
@@ -138,6 +180,26 @@ def spec(kind: str) -> dict:
     if not s:
         raise ValueError(f"Unknown pipeline kind {kind!r}")
     return s
+
+
+def target_id(kind: str, definition: dict) -> str | None:
+    """What an output loads into: its saved target, else the kind's first. definition: an output's view (outputs.project)."""
+    targets = spec(kind)["targets"]
+    t = definition.get("target")
+    return t if t in targets else next(iter(targets), None)
+
+
+def target_spec(kind: str, definition: dict) -> dict:
+    """The target an output loads into: {label, default_fields, catalogue}. Empty parts when the kind has none yet."""
+    t = target_id(kind, definition)
+    return {"id": t, **spec(kind)["targets"][t]} if t else {"id": None, "label": spec(kind)["label"],
+                                                             "default_fields": [], "catalogue": {}}
+
+
+def default_fields(kind: str, definition: dict, db: Client | None = None) -> list[dict]:
+    """A target's default fields. Some depend on the data (the zones the study blocks front)."""
+    f = target_spec(kind, definition)["default_fields"]
+    return f(db) if callable(f) else f
 
 
 # ── Funding: diff and load ───────────────────────────────────────────────────
@@ -242,7 +304,7 @@ def clean_load_map(mapping: dict, fields: list[dict], cat: dict = CATALOGUE) -> 
 
 def load_problems(kind: str, definition: dict, records: list[dict] | None = None) -> list[str]:
     """Why Load cannot map this output (and the last run's records) onto the catalogue. Empty when it can."""
-    cat = spec(kind)["catalogue"]
+    cat = target_spec(kind, definition)["catalogue"]
     if not cat or not (definition.get("schema") or {}).get("fields"):
         return []
     m = load_map(definition, cat)
@@ -357,14 +419,36 @@ def load_funding(db: Client, pipeline: dict, records: list[dict], fields: list[d
     return {"written": len(unique), "dataset_version": version}
 
 
-def diff(kind: str, db: Client, pipeline: dict, records: list[dict], fields: list[dict]) -> dict:
+# ── Diff and load, per kind ──────────────────────────────────────────────────
+#
+# A publish hands over one part per output: {"output", "target", "definition"
+# (the output's view), "records", "fields"}. Funding has one part.
+
+def _with_columns(kind: str, parts: list[dict]) -> list[dict]:
+    """Each part with its {column: field} mapping in force."""
+    out = []
+    for part in parts:
+        cat = spec(kind)["targets"][part["target"]]["catalogue"]
+        cols = {c["column"]: c["field"] for c in load_map(part["definition"], cat)["columns"] if c["field"]}
+        out.append({**part, "columns": cols})
+    return out
+
+
+def diff(kind: str, db: Client, pipeline: dict, parts: list[dict]) -> dict:
     if kind == "funding":
-        return funding_diff(db, pipeline, records, fields)
+        part = parts[0]
+        return funding_diff(db, {**pipeline, "definition": part["definition"]}, part["records"], part["fields"])
+    if kind == "zoning":
+        return zoning_load.diff(db, pipeline, _with_columns(kind, parts))
     raise ValueError(f"{kind} pipelines cannot be loaded yet")
 
 
-def load(kind: str, db: Client, pipeline: dict, records: list[dict], fields: list[dict], name: str | None,
+def load(kind: str, db: Client, pipeline: dict, parts: list[dict], name: str | None,
          created_by: str | None, definition_version: int) -> dict:
     if kind == "funding":
-        return load_funding(db, pipeline, records, fields, name, created_by, definition_version)
+        part = parts[0]
+        return load_funding(db, {**pipeline, "definition": part["definition"]}, part["records"], part["fields"],
+                            name, created_by, definition_version)
+    if kind == "zoning":
+        return zoning_load.load(db, pipeline, _with_columns(kind, parts), name, created_by, definition_version)
     raise ValueError(f"{kind} pipelines cannot be loaded yet")

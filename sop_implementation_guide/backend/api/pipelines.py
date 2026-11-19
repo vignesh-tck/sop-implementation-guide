@@ -9,6 +9,10 @@ planner and the agent never edit the definition at the same time.
 
 Uploads go to POST /pipelines/uploads, which returns public URLs that are
 then added here as url sources.
+
+A pipeline can have several outputs (backend/pipelines/outputs.py). Actions on
+one output's schema, mapping, records or overrides take ?output=<id>; without
+it they act on the first output ("output"), as they always did.
 """
 
 import threading
@@ -156,23 +160,55 @@ class Fields(BaseModel):
 
 
 @router.put("/{pipeline_id}/schema")
-def set_schema(pipeline_id: int, body: Fields, db: Client = Depends(get_supabase)):
+def set_schema(pipeline_id: int, body: Fields, output: Optional[str] = None, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
-    _call(lambda: service.set_schema(db, pipeline_id, body.fields, by_user=True))
+    _call(lambda: service.set_schema(db, pipeline_id, body.fields, by_user=True, output=output))
     return _view(db, pipeline_id)
 
 
 @router.post("/{pipeline_id}/schema/default")
-def default_schema(pipeline_id: int, db: Client = Depends(get_supabase)):
+def default_schema(pipeline_id: int, output: Optional[str] = None, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
-    _call(lambda: service.use_default_schema(db, pipeline_id))
+    _call(lambda: service.use_default_schema(db, pipeline_id, output=output))
     return _view(db, pipeline_id)
 
 
 @router.post("/{pipeline_id}/schema/approve")
-def approve_schema(pipeline_id: int, db: Client = Depends(get_supabase)):
+def approve_schema(pipeline_id: int, output: Optional[str] = None, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
-    _call(lambda: service.approve_schema(db, pipeline_id))
+    _call(lambda: service.approve_schema(db, pipeline_id, output=output))
+    return _view(db, pipeline_id)
+
+
+class NewOutput(BaseModel):
+    target: str
+    name: Optional[str] = None
+
+
+@router.post("/{pipeline_id}/outputs")
+def add_output(pipeline_id: int, body: NewOutput, db: Client = Depends(get_supabase)):
+    """Add an output (an Output node with its own schema) loading into one of the kind's targets."""
+    _idle(db, pipeline_id)
+    _call(lambda: service.add_output(db, pipeline_id, body.target, body.name, by_user=True))
+    return _view(db, pipeline_id)
+
+
+class OutputEdit(BaseModel):
+    name: Optional[str] = None
+    target: Optional[str] = None
+
+
+@router.patch("/{pipeline_id}/outputs/{output_id}")
+def update_output(pipeline_id: int, output_id: str, body: OutputEdit, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.update_output(db, pipeline_id, output_id, body.name, body.target, by_user=True))
+    return _view(db, pipeline_id)
+
+
+@router.delete("/{pipeline_id}/outputs/{output_id}")
+def remove_output(pipeline_id: int, output_id: str, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.remove_output(db, pipeline_id, output_id, by_user=True))
     return _view(db, pipeline_id)
 
 
@@ -181,14 +217,15 @@ class AcceptBlank(BaseModel):
 
 
 @router.post("/{pipeline_id}/fields/{field}/accept-blank")
-def accept_blank(pipeline_id: int, field: str, body: AcceptBlank, db: Client = Depends(get_supabase)):
+def accept_blank(pipeline_id: int, field: str, body: AcceptBlank, output: Optional[str] = None,
+                 db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
-    _call(lambda: service.accept_blank(db, pipeline_id, field, body.accept))
+    _call(lambda: service.accept_blank(db, pipeline_id, field, body.accept, output=output))
     return _view(db, pipeline_id)
 
 
 class Source(BaseModel):
-    kind: Literal["url", "grants_gov"] = "url"
+    kind: Literal["url", "grants_gov", "arcgis"] = "url"
     url: Optional[str] = None
     query: Optional[str] = None
     label: Optional[str] = None
@@ -254,9 +291,9 @@ class RecordEdit(BaseModel):
 
 
 @router.post("/{pipeline_id}/output/records")
-def edit_output(pipeline_id: int, body: RecordEdit, db: Client = Depends(get_supabase)):
+def edit_output(pipeline_id: int, body: RecordEdit, output: Optional[str] = None, db: Client = Depends(get_supabase)):
     """The planner's overrides on the final output: correct a row, remove it, add one, or undo."""
-    _call(lambda: service.edit_output(db, pipeline_id, body.op, body.record_id, body.values))
+    _call(lambda: service.edit_output(db, pipeline_id, body.op, body.record_id, body.values, output=output))
     return _view(db, pipeline_id)
 
 
@@ -291,13 +328,14 @@ class DraftStep(BaseModel):
     after: Optional[str] = None         # take this step's place in the wiring, right after it
     before: Optional[str] = None        # or right before this step
     connect: bool = False               # or (true) at the end, feeding Output; default: not wired
+    output: Optional[str] = None        # which output it goes towards (its schema); default the first
 
 
 @router.post("/{pipeline_id}/draft/steps")
 def draft_add_step(pipeline_id: int, body: DraftStep, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
     _call(lambda: service.draft_add_step(db, pipeline_id, body.type, body.config, body.note, after=body.after,
-                                         before=body.before, connect=body.connect, by_user=True))
+                                         before=body.before, connect=body.connect, by_user=True, output=body.output))
     return _view(db, pipeline_id)
 
 
@@ -317,7 +355,7 @@ def draft_remove_step(pipeline_id: int, step_id: str, db: Client = Depends(get_s
 
 class Link(BaseModel):
     source: str                         # a step id
-    target: str                         # a step id, or "output"
+    target: str                         # a step id, or an output ("output", o2, ...)
 
 
 @router.post("/{pipeline_id}/draft/links")
@@ -341,13 +379,14 @@ class SqlQuery(BaseModel):
     on: Optional[str] = None            # step id whose output is `records`; "output" for the final run
     limit: Optional[int] = None
     inputs: Optional[list[str]] = None  # several steps' outputs, as a SQL step with those inputs sees them
+    output: Optional[str] = None        # with on="output": which output's final run
 
 
 @router.post("/{pipeline_id}/sql")
 def explore_sql(pipeline_id: int, body: SqlQuery, db: Client = Depends(get_supabase)):
     """A read-only query over a step's previewed records and the reference tables. Writes nothing."""
     return _call(lambda: service.explore_sql(db, pipeline_id, body.query, body.tables, body.on,
-                                             body.limit or 50, body.inputs))
+                                             body.limit or 50, body.inputs, output=body.output))
 
 
 @router.post("/{pipeline_id}/proposal/accept")
@@ -371,10 +410,11 @@ class Accept(BaseModel):
 
 
 @router.post("/{pipeline_id}/records/{record_id}/accept")
-def accept_record(pipeline_id: int, record_id: str, body: Accept, db: Client = Depends(get_supabase)):
+def accept_record(pipeline_id: int, record_id: str, body: Accept, output: Optional[str] = None,
+                  db: Client = Depends(get_supabase)):
     """Accept a record's values (or some fields) as they are now. Resets no step."""
     _idle(db, pipeline_id)
-    _call(lambda: service.accept_values(db, pipeline_id, record_id, body.fields, body.accept))
+    _call(lambda: service.accept_values(db, pipeline_id, record_id, body.fields, body.accept, output=output))
     return _view(db, pipeline_id)
 
 
@@ -384,9 +424,10 @@ class Flag(BaseModel):
 
 
 @router.post("/{pipeline_id}/records/{record_id}/flag")
-def flag_record(pipeline_id: int, record_id: str, body: Flag, db: Client = Depends(get_supabase)):
+def flag_record(pipeline_id: int, record_id: str, body: Flag, output: Optional[str] = None,
+                db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
-    _call(lambda: service.flag_record(db, pipeline_id, record_id, body.note, body.flag))
+    _call(lambda: service.flag_record(db, pipeline_id, record_id, body.note, body.flag, output=output))
     return _view(db, pipeline_id)
 
 
@@ -419,10 +460,10 @@ class LoadMap(BaseModel):
 
 
 @router.put("/{pipeline_id}/load-map")
-def set_load_map(pipeline_id: int, body: LoadMap, db: Client = Depends(get_supabase)):
+def set_load_map(pipeline_id: int, body: LoadMap, output: Optional[str] = None, db: Client = Depends(get_supabase)):
     """How the output's fields map onto the catalogue's columns at Load. Resets no step."""
     _idle(db, pipeline_id)
-    _call(lambda: service.set_load_map(db, pipeline_id, body.mapping, by_user=True))
+    _call(lambda: service.set_load_map(db, pipeline_id, body.mapping, by_user=True, output=output))
     return _view(db, pipeline_id)
 
 

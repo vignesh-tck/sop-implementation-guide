@@ -19,7 +19,7 @@ from typing import Any
 
 from supabase import Client
 
-from backend.pipelines import check, engine, graph, kinds
+from backend.pipelines import engine, graph, kinds, outputs, zoning_steps
 from backend.pipelines.engine import PipelineError
 from backend.repositories.pipelines import (
     PipelineMessageRepository,
@@ -44,7 +44,44 @@ def get(db: Client, pipeline_id: int) -> dict:
 
 
 def _save(db: Client, p: dict, **extra) -> None:
+    if "_scope" in p:   # one output's view (see _out): write its keys back into the whole pipeline
+        real, oid = p["_scope"]
+        outputs.sync(real["definition"], oid, p["definition"])
+        outputs.merge_state(real["state"], real["definition"], oid, p["state"])
+        if "state" in extra:
+            extra["state"] = real["state"]
+        p = real
     PipelineRepository(db).update(p["id"], {"definition": _stored(p), **extra})
+
+
+def _out(p: dict, output: str | None = None) -> dict:
+    """
+    The pipeline as one of its outputs sees it: that output's schema, load
+    mapping, overrides, record review and last run, and only the steps that
+    feed it (see outputs.py). _save writes changes back. For a one-output
+    pipeline this is p itself.
+    """
+    oid = output or outputs.MAIN
+    d = p["definition"]
+    if not outputs.multi(d):
+        if oid != outputs.MAIN:
+            raise PipelineError(f"No output {oid}.")
+        return p
+    return {**p, "definition": outputs.project(d, oid), "state": outputs.substate(p["state"], d, oid),
+            "_scope": (p, oid)}
+
+
+def _out_name(p: dict) -> str:
+    """ " in <output>" when the pipeline has several outputs, for event texts."""
+    if "_scope" not in p:
+        return ""
+    real, oid = p["_scope"]
+    return f" in {outputs.label(real['definition'], oid)}"
+
+
+def _all_schemas_approved(p: dict) -> bool:
+    d = p["definition"]
+    return all((outputs.entry(d, oid).get("schema") or {}).get("status") == "approved" for oid in outputs.ids(d))
 
 
 # ── The agent's proposal ─────────────────────────────────────────────────────
@@ -80,11 +117,25 @@ def _base_hash(definition: dict) -> str:
     if d is None:
         g = graph.normalise(definition)
         steps, out, srcs = g["steps"], g["output_from"], definition.get("sources") or []
+        more = {o["id"]: o.get("output_from") or [] for o in outputs.extras(definition)}
     else:
         steps, out = d["steps"], d["output_from"]
         srcs = d["sources"] if d.get("sources") is not None else definition.get("sources") or []
+        more = d.get("outputs_from") or {}
     return engine._hash({"steps": [{k: s.get(k) for k in ("id", "type", "config", "inputs")} for s in steps],
-                         "output_from": out, "sources": [s["id"] for s in srcs]})
+                         "output_from": out, "sources": [s["id"] for s in srcs],
+                         **({"outputs_from": more} if more else {})})
+
+
+def _wired(definition: dict, draft: dict, sources: list[dict]) -> dict:
+    """The definition with a draft's (or proposal's) steps, wiring and sources in place of the applied ones."""
+    out = {**{k: v for k, v in definition.items() if k not in ("draft", "proposal")},
+           "sources": sources, "steps": draft["steps"], "output_from": draft["output_from"]}
+    if outputs.multi(definition):
+        froms = draft.get("outputs_from") or {}
+        out["outputs"] = [{**o, "output_from": list(froms.get(o["id"], o.get("output_from") or []))}
+                          for o in outputs.extras(definition)]
+    return out
 
 
 def _as_proposal(p: dict) -> None:
@@ -125,9 +176,7 @@ def _proposal_parts(p: dict) -> tuple[dict, dict] | None:
         **{k: v for k, v in d.items() if k not in ("draft", "proposal")},
         "steps": graph.normalise(d)["steps"], "output_from": graph.normalise(d)["output_from"]}
     pd = prop["draft"]
-    mine = {**{k: v for k, v in d.items() if k not in ("draft", "proposal")},
-            "sources": pd["sources"] if pd.get("sources") is not None else base["sources"],
-            "steps": pd["steps"], "output_from": pd["output_from"]}
+    mine = _wired(d, pd, pd["sources"] if pd.get("sources") is not None else base["sources"])
     return base, mine
 
 
@@ -182,8 +231,9 @@ def proposal_changes(p: dict) -> list[dict]:
     for sid, o in old.items():
         if sid not in new:
             out.append({"op": "-", "node": f"step:{sid}", "text": f"{_label(o)} removed"})
-    if base["output_from"] != mine["output_from"]:
-        out.append({"op": "~", "node": "output", "text": f"Output now takes {', '.join(mine['output_from']) or 'nothing'}"})
+    for oid, froms in outputs.output_from(mine).items():
+        if outputs.output_from(base).get(oid) != froms:
+            out.append({"op": "~", "node": oid, "text": f"{outputs.label(mine, oid)} now takes {', '.join(froms) or 'nothing'}"})
     return out
 
 
@@ -196,7 +246,7 @@ def _proposal_view(p: dict) -> dict | None:
     old = {s["id"]: s for s in base["steps"]}
     changes = proposal_changes(p)
     changed = {c["node"][5:] for c in changes if c["op"] == "~" and c["node"].startswith("step:")}
-    result = check.check(p["kind"], mine)
+    result = outputs.check(p["kind"], mine)
     return {
         "at": prop.get("at"), "stale": prop.get("base") != _base_hash(p["definition"]), "changes": changes,
         "steps": [{**s, "prop_state": "new" if s["id"] not in old else "changed" if s["id"] in changed else "unchanged"}
@@ -206,6 +256,7 @@ def _proposal_view(p: dict) -> dict | None:
         "removed": [sid for sid in old if sid not in {s["id"] for s in mine["steps"]}],
         "removed_sources": [x["id"] for x in base["sources"] if x["id"] not in {y["id"] for y in mine["sources"]}],
         "output_from": mine["output_from"],
+        "outputs_from": {o["id"]: o["output_from"] for o in outputs.extras(mine)},
         "check": {"ok": result["ok"], "errors": result["errors"], "warnings": result["warnings"]},
     }
 
@@ -266,9 +317,9 @@ def _final_record(p: dict, record_id: str) -> dict:
 
 
 def accept_values(db: Client, pipeline_id: int, record_id: str, fields: list[str] | None = None,
-                  accept: bool = True) -> dict:
+                  accept: bool = True, output: str | None = None) -> dict:
     """Accept (or stop accepting) a record's values as they are now: the named fields, or all of them."""
-    p = get(db, pipeline_id)
+    p = _out(get(db, pipeline_id), output)
     rec = _final_record(p, record_id)
     names = [f["name"] for f in _fields(p)]
     for n in fields or []:
@@ -291,8 +342,9 @@ def accept_values(db: Client, pipeline_id: int, record_id: str, fields: list[str
     return review_marks(p).get(record_id) or {}
 
 
-def flag_record(db: Client, pipeline_id: int, record_id: str, note: str | None = None, flag: bool = True) -> dict:
-    p = get(db, pipeline_id)
+def flag_record(db: Client, pipeline_id: int, record_id: str, note: str | None = None, flag: bool = True,
+                output: str | None = None) -> dict:
+    p = _out(get(db, pipeline_id), output)
     rec = _final_record(p, record_id)
     rr = _review(p)
     name = rec["values"].get(_fields(p)[0]["name"]) if _fields(p) else None
@@ -334,17 +386,18 @@ def rerun_record(db: Client, pipeline_id: int, step_id: str, record_id: str) -> 
         p["state"]["progress"] = msg
         repo.update(pipeline_id, {"state": p["state"]})
 
-    state = engine.rerun_record(p["kind"], p["definition"], p["state"], step_id, record_id,
-                                context=p["definition"].get("goal") or p["name"], progress=progress,
-                                refs=reference_rows(db))
-    state.pop("progress", None)
-    last = state["last_run"]
+    outputs.rerun_record(p["kind"], p["definition"], p["state"], step_id, record_id,
+                         context=p["definition"].get("goal") or p["name"], progress=progress,
+                         refs=reference_rows(db))
+    p["state"].pop("progress", None)
+    po = _out(p, outputs.owner(p["definition"], step_id))
+    last = po["state"].get("last_run") or {}
     if last.get("upto") is None:
-        review(db, p)
-    repo.update(pipeline_id, {"state": state})
+        review(db, po)
+    repo.update(pipeline_id, {"state": p["state"]})
     rec = next((r for r in last.get("records") or [] if r["id"] == record_id), None)
     event(db, pipeline_id, f"You re-ran {step_id} for record {record_id}"
-          + (f" ({rec['values'].get(_fields(p)[0]['name'])})" if rec and _fields(p) else "")
+          + (f" ({rec['values'].get(_fields(po)[0]['name'])})" if rec and _fields(po) else "")
           + (f". Errors: {'; '.join(last['errors'])}" if last["errors"] else ": the steps after it were recomputed."),
           level="warn" if last["errors"] else "info")
     return summarise_run(last)
@@ -372,9 +425,13 @@ def create(db: Client, kind: str, name: str, created_by: str | None) -> dict:
     s = kinds.spec(kind)
     if not s["available"]:
         raise PipelineError(f"{s['label']} pipelines are not available yet.")
+    definition = {"schema": {"status": None, "fields": []}, "sources": [], "steps": []}
+    if len(s["targets"]) > 1:   # a kind with several outputs names the first after what it loads into
+        first = next(iter(s["targets"]))
+        definition.update(target=first, name=s["targets"][first]["label"])
     p = PipelineRepository(db).create({
         "kind": kind, "name": (name or "").strip() or f"New {s['label'].lower()} pipeline",
-        "definition": {"schema": {"status": None, "fields": []}, "sources": [], "steps": []},
+        "definition": definition,
         "state": {}, "created_by": (created_by or "").strip() or None,
     })
     # The opening message is shown, not sent: the model gets the same guidance in its system prompt.
@@ -384,8 +441,9 @@ def create(db: Client, kind: str, name: str, created_by: str | None) -> dict:
 
 # ── Schema ───────────────────────────────────────────────────────────────────
 
-def set_schema(db: Client, pipeline_id: int, fields: list[dict], by_user: bool = False) -> dict:
-    p = get(db, pipeline_id)
+def set_schema(db: Client, pipeline_id: int, fields: list[dict], by_user: bool = False,
+               output: str | None = None) -> dict:
+    p = _out(get(db, pipeline_id), output)
     prev = {f["name"]: f for f in _fields(p)}
     clean = engine.validate_fields(fields)
     for f in clean:
@@ -399,44 +457,45 @@ def set_schema(db: Client, pipeline_id: int, fields: list[dict], by_user: bool =
     reset = _invalidate_from(p, 0) if changed else []
     _save(db, p, state=p["state"])
     if reset and not by_user:
-        event(db, pipeline_id, "The target schema changed." + _reset_text(reset))
+        event(db, pipeline_id, f"The target schema{_out_name(p)} changed." + _reset_text(reset))
     if by_user:
-        event(db, pipeline_id, f"You set the target schema ({len(clean)} fields)." + _reset_text(reset))
+        event(db, pipeline_id, f"You set the target schema{_out_name(p)} ({len(clean)} fields)." + _reset_text(reset))
     return p["definition"]["schema"]
 
 
-def use_default_schema(db: Client, pipeline_id: int) -> dict:
-    p = get(db, pipeline_id)
-    schema = set_schema(db, pipeline_id, kinds.spec(p["kind"])["default_fields"])
-    event(db, pipeline_id, "You loaded the default fields. Review them, then approve.")
+def use_default_schema(db: Client, pipeline_id: int, output: str | None = None) -> dict:
+    p = _out(get(db, pipeline_id), output)
+    schema = set_schema(db, pipeline_id, kinds.default_fields(p["kind"], p["definition"], db), output=output)
+    event(db, pipeline_id, f"You loaded the default fields{_out_name(p)}. Review them, then approve.")
     return schema
 
 
-def approve_schema(db: Client, pipeline_id: int) -> dict:
-    p = get(db, pipeline_id)
+def approve_schema(db: Client, pipeline_id: int, output: str | None = None) -> dict:
+    p = _out(get(db, pipeline_id), output)
     if not _fields(p):
         raise PipelineError("There is no schema to approve.")
     p["definition"]["schema"]["status"] = "approved"
     _save(db, p)
     unmapped = kinds.load_problems(p["kind"], p["definition"])
-    event(db, pipeline_id, "You approved the target schema."
+    event(db, pipeline_id, f"You approved the target schema{_out_name(p)}."
           + (f" Before publishing: {' '.join(unmapped)}" if unmapped else ""))
     return p["definition"]["schema"]
 
 
 def view_load_map(p: dict) -> dict | None:
-    cat = kinds.spec(p["kind"])["catalogue"]
+    """p: the pipeline, or one output's view of it (_out)."""
+    cat = kinds.target_spec(p["kind"], p["definition"])["catalogue"]
     return kinds.load_map(p["definition"], cat) if cat else None
 
 
-def set_load_map(db: Client, pipeline_id: int, mapping: dict, by_user: bool = False) -> dict:
+def set_load_map(db: Client, pipeline_id: int, mapping: dict, by_user: bool = False, output: str | None = None) -> dict:
     """
     How the output's fields map onto the catalogue's columns, {column: field or
     None}; columns left out keep their current choice. Read at Load only, so
     changing it resets no step.
     """
-    p = get(db, pipeline_id)
-    cat = kinds.spec(p["kind"])["catalogue"]
+    p = _out(get(db, pipeline_id), output)
+    cat = kinds.target_spec(p["kind"], p["definition"])["catalogue"]
     if not cat:
         raise PipelineError(f"{kinds.spec(p['kind'])['label']} pipelines do not load into a catalogue yet.")
     current = {c["column"]: c["field"] for c in kinds.load_map(p["definition"], cat)["columns"]}
@@ -444,7 +503,7 @@ def set_load_map(db: Client, pipeline_id: int, mapping: dict, by_user: bool = Fa
     p["definition"]["load_map"] = {k: v for k, v in clean.items() if k in (mapping or {}) or k in (p["definition"].get("load_map") or {})}
     _save(db, p)
     shown = ", ".join(f"{v or 'nothing'} → {k}" for k, v in clean.items() if k in (mapping or {}))
-    event(db, pipeline_id, f"{_who(by_user)} mapped {shown} for Load.")
+    event(db, pipeline_id, f"{_who(by_user)} mapped {shown} for Load{_out_name(p)}.")
     return kinds.load_map(p["definition"], cat)
 
 
@@ -459,14 +518,14 @@ def set_goal(db: Client, pipeline_id: int, goal: str) -> str:
     return p["definition"]["goal"]
 
 
-def accept_blank(db: Client, pipeline_id: int, field: str, accept: bool) -> dict:
-    p = get(db, pipeline_id)
+def accept_blank(db: Client, pipeline_id: int, field: str, accept: bool, output: str | None = None) -> dict:
+    p = _out(get(db, pipeline_id), output)
     f = next((x for x in _fields(p) if x["name"] == field), None)
     if not f:
         raise PipelineError(f"No field named {field!r}.")
     f["accept_blank"] = bool(accept)
     _save(db, p)
-    event(db, pipeline_id, f"You {'accepted' if accept else 'stopped accepting'} blanks for `{field}`.")
+    event(db, pipeline_id, f"You {'accepted' if accept else 'stopped accepting'} blanks for `{field}`{_out_name(p)}.")
     return f
 
 
@@ -484,10 +543,14 @@ def _source(kind: str, url: str | None, query: str | None, label: str | None, ta
         query = (query or "").strip()
         if not query:
             raise PipelineError("A Grants.gov source needs a keyword query.")
+    elif kind == "arcgis":
+        url = zoning_steps.check_arcgis_url(url)
+        if any(s.get("url") == url for s in taken):
+            raise PipelineError("That source is already in the pipeline.")
     else:
-        raise PipelineError("Source kind must be url or grants_gov.")
-    return {"id": _next_id(taken, "s"), "kind": kind, **({"url": url} if kind == "url" else {"query": query}),
-            "label": (label or "").strip() or (url if kind == "url" else f"Grants.gov: {query}")}
+        raise PipelineError("Source kind must be url, grants_gov or arcgis.")
+    return {"id": _next_id(taken, "s"), "kind": kind, **({"query": query} if kind == "grants_gov" else {"url": url}),
+            "label": (label or "").strip() or (f"Grants.gov: {query}" if kind == "grants_gov" else url)}
 
 
 def _fetch_meta(src: dict) -> dict:
@@ -607,8 +670,9 @@ def finalize_sources(db: Client, pipeline_id: int) -> dict:
     after this, because what the steps should do depends on what the sources are.
     """
     p = get(db, pipeline_id)
-    if p["definition"]["schema"].get("status") != "approved":
-        raise PipelineError("Approve the target schema first: the fields decide what to look for in the sources.")
+    if not _all_schemas_approved(p):
+        raise PipelineError("Approve the target schema first: the fields decide what to look for in the sources."
+                            + (" Every output's schema needs approving." if outputs.multi(p["definition"]) else ""))
     sources = p["definition"]["sources"]
     if not sources:
         raise PipelineError("Add at least one source first.")
@@ -691,7 +755,8 @@ def update_step(db: Client, pipeline_id: int, step_id: str, config: dict | None 
     reset, changed = [], False
     if config is not None:
         inputs = next(s["inputs"] for s in graph.normalise(p["definition"])["steps"] if s["id"] == step_id)
-        clean = _check_sources(p, step["type"], engine.validate_step(p["kind"], step["type"], config, _fields(p),
+        clean = _check_sources(p, step["type"], engine.validate_step(p["kind"], step["type"], config,
+                                                                     outputs.step_fields(p["definition"], step_id),
                                                                      inputs, p["definition"]["sources"]))
         slot = engine.EDITABLE.get(step["type"])
         other = {k for k in set(clean) | set(step["config"]) if k != slot and clean.get(k) != step["config"].get(k)}
@@ -741,7 +806,7 @@ def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
         raise PipelineError(f"{step_id} failed in its last preview: {out['error']}")
     step["status"] = "approved"
     _save(db, p)
-    gaps = engine.design_gaps(p["definition"])
+    gaps = engine.design_gaps(outputs.project(p["definition"], outputs.owner(p["definition"], step_id)))
     done = all(s.get("status") == "approved" for s in steps)
     event(db, pipeline_id, f"You approved step {step_id} ({engine.CATALOG[step['type']]['label']})."
           + ("" if not done else
@@ -760,8 +825,9 @@ def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
 # preview) of every step whose inputs and settings did not change.
 
 def _require_design(p: dict) -> None:
-    if p["definition"]["schema"].get("status") != "approved":
-        raise PipelineError("Steps are designed after the target schema is approved.")
+    if not _all_schemas_approved(p):
+        raise PipelineError("Steps are designed after the target schema is approved"
+                            + (" (every output's)." if outputs.multi(p["definition"]) else "."))
     if p["definition"].get("sources_status") != "final":
         raise PipelineError("Steps are designed after the sources are marked final (the 'Sources are final' button).")
 
@@ -775,6 +841,8 @@ def _draft(p: dict, open_: bool = False) -> dict:
         g = graph.normalise(p["definition"])
         d = {"steps": [{k: s.get(k) for k in ("id", "type", "config", "note", "inputs")} for s in g["steps"]],
              "output_from": g["output_from"]}
+        if outputs.multi(p["definition"]):
+            d["outputs_from"] = {o["id"]: list(o.get("output_from") or []) for o in outputs.extras(p["definition"])}
         p["definition"]["draft"] = d
     return d
 
@@ -786,9 +854,22 @@ def _draft_sources(p: dict) -> list[dict]:
 
 
 def _draft_definition(p: dict) -> dict:
-    d = p["definition"]["draft"]
-    return {**{k: v for k, v in p["definition"].items() if k != "draft"},
-            "sources": _draft_sources(p), "steps": d["steps"], "output_from": d["output_from"]}
+    return {**_wired(p["definition"], p["definition"]["draft"], _draft_sources(p)),
+            **({"proposal": p["definition"]["proposal"]} if "proposal" in p["definition"] else {})}
+
+
+def _froms(d: dict) -> dict[str, list[str]]:
+    """A draft's wiring into each output: {output id: [step ids]}, the first output's list included."""
+    return {outputs.MAIN: d["output_from"], **(d.get("outputs_from") or {})}
+
+
+def _set_from(d: dict, oid: str, froms: list[str]) -> None:
+    if oid == outputs.MAIN:
+        d["output_from"] = froms
+    elif oid in (d.get("outputs_from") or {}):
+        d["outputs_from"][oid] = froms
+    else:
+        raise PipelineError(f"No output {oid}.")
 
 
 def _draft_step(d: dict, step_id: str) -> dict:
@@ -821,7 +902,7 @@ def discard_draft(db: Client, pipeline_id: int) -> None:
 
 
 def check_draft(p: dict) -> dict:
-    result = check.check(p["kind"], _draft_definition(p))
+    result = outputs.check(p["kind"], _draft_definition(p))
     # As when sources are marked final: a source that could not be fetched cannot go in.
     meta = p["state"].get("sources") or {}
     bad = [s["id"] for s in _draft_sources(p) if (meta.get(s["id"]) or {}).get("error")]
@@ -836,24 +917,32 @@ def _splice_after(d: dict, after: str, new_id: str) -> None:
     for s in d["steps"]:
         if s["id"] != new_id:
             s["inputs"] = [new_id if i == after else i for i in s["inputs"]]
-    d["output_from"] = [new_id if i == after else i for i in d["output_from"]]
+    for oid, froms in _froms(d).items():
+        _set_from(d, oid, [new_id if i == after else i for i in froms])
 
 
 def draft_add_step(db: Client, pipeline_id: int, step_type: str, config: dict, note: str | None = None,
                    after: str | None = None, before: str | None = None, inputs: list[str] | None = None,
-                   connect: bool = True, by_user: bool = False) -> dict:
+                   connect: bool = True, by_user: bool = False, output: str | None = None) -> dict:
     """
     Add a step to the draft. Placed after `after` (taking its place in the
-    wiring), before `before`, with explicit `inputs`, or (connect) at the end:
-    it then takes what fed Output and feeds Output itself. connect=False leaves
-    it unwired, for the planner to wire on the canvas.
+    wiring), before `before`, with explicit `inputs`, or (connect) at the end
+    of `output` (default the first): it then takes what fed that output and
+    feeds it itself. connect=False leaves it unwired, for the planner to wire
+    on the canvas. Its settings are checked against the schema of the output
+    it is placed towards.
     """
     p = get(db, pipeline_id)
     d = _draft(p, open_=True)
     ids = {s["id"] for s in d["steps"]}
+    oid = output or outputs.MAIN
+    if oid not in _froms(d):
+        raise PipelineError(f"No output {oid}.")
     wired = ([after] if after else list(_draft_step(d, before)["inputs"]) if before
-             else [i for i in inputs if i in ids] if inputs is not None else list(d["output_from"]) if connect else [])
-    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config or {}, _fields(p), wired,
+             else [i for i in inputs if i in ids] if inputs is not None else list(_froms(d)[oid]) if connect else [])
+    near = after or before or next(iter(wired), None)
+    fields = outputs.step_fields(_draft_definition(p), near, fallback=oid)
+    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config or {}, fields, wired,
                                                             _draft_sources(p)), _draft_sources(p))
     taken = d["steps"] + p["definition"]["steps"]
     step = {"id": _next_id(taken, "t"), "type": step_type, "config": cfg, "note": (note or "").strip(), "inputs": []}
@@ -877,8 +966,10 @@ def draft_add_step(db: Client, pipeline_id: int, step_type: str, config: dict, n
         step["inputs"] = list(dict.fromkeys(inputs))
         where = f" taking {', '.join(step['inputs'])}" if step["inputs"] else " (not wired yet)"
     elif connect:
-        step["inputs"], d["output_from"] = list(d["output_from"]), [step["id"]]
-        where = " at the end" if step["inputs"] else ""
+        step["inputs"] = list(_froms(d)[oid])
+        _set_from(d, oid, [step["id"]])
+        where = (" at the end" if step["inputs"] else "") + (f" of {outputs.label(p['definition'], oid)}"
+                                                              if outputs.multi(p["definition"]) else "")
     else:
         where = " (not wired yet)"
     d["steps"].insert(pos, step)
@@ -894,7 +985,8 @@ def draft_update_step(db: Client, pipeline_id: int, step_id: str, config: dict |
     d = _draft(p, open_=True)
     s = _draft_step(d, step_id)
     if config is not None:
-        s["config"] = _check_sources(p, s["type"], engine.validate_step(p["kind"], s["type"], config, _fields(p), s["inputs"],
+        fields = outputs.step_fields(_draft_definition(p), step_id)
+        s["config"] = _check_sources(p, s["type"], engine.validate_step(p["kind"], s["type"], config, fields, s["inputs"],
                                                                         _draft_sources(p)), _draft_sources(p))
     if note is not None:
         s["note"] = note.strip()
@@ -908,27 +1000,28 @@ def draft_remove_step(db: Client, pipeline_id: int, step_id: str, by_user: bool 
     d = _draft(p, open_=True)
     s = _draft_step(d, step_id)
     d["steps"].remove(s)
-    fed = [x for x in d["steps"] if step_id in x["inputs"]] + (["output"] if step_id in d["output_from"] else [])
+    fed = [x for x in d["steps"] if step_id in x["inputs"]] + [oid for oid, froms in _froms(d).items() if step_id in froms]
     heal = s["inputs"] if len(s["inputs"]) == 1 and len(fed) == 1 else []
     for x in d["steps"]:
         if step_id in x["inputs"]:
             x["inputs"] = list(dict.fromkeys(i for j in x["inputs"] for i in (heal if j == step_id else [j])))
-    d["output_from"] = list(dict.fromkeys(i for j in d["output_from"] for i in (heal if j == step_id else [j])))
+    for oid, froms in _froms(d).items():
+        _set_from(d, oid, list(dict.fromkeys(i for j in froms for i in (heal if j == step_id else [j]))))
     _save(db, p)
     if by_user:
         event(db, pipeline_id, f"You removed {step_id} from the draft.")
 
 
 def draft_link(db: Client, pipeline_id: int, source: str, target: str, by_user: bool = False) -> None:
-    """Wire `source`'s output into `target` (a step, or "output"). A step with several inputs merges them."""
+    """Wire `source`'s output into `target` (a step, or an output: "output" or o2, o3 ...). A step with several inputs merges them."""
     p = get(db, pipeline_id)
     d = _draft(p, open_=True)
     _draft_step(d, source)
     if source == target:
         raise PipelineError("A step cannot take its own output.")
-    if target == "output":
-        if source not in d["output_from"]:
-            d["output_from"].append(source)
+    if target in _froms(d):
+        if source not in _froms(d)[target]:
+            _set_from(d, target, _froms(d)[target] + [source])
     else:
         t = _draft_step(d, target)
         if source not in t["inputs"]:
@@ -939,8 +1032,8 @@ def draft_link(db: Client, pipeline_id: int, source: str, target: str, by_user: 
 def draft_unlink(db: Client, pipeline_id: int, source: str, target: str, by_user: bool = False) -> None:
     p = get(db, pipeline_id)
     d = _draft(p, open_=True)
-    if target == "output":
-        d["output_from"] = [i for i in d["output_from"] if i != source]
+    if target in _froms(d):
+        _set_from(d, target, [i for i in _froms(d)[target] if i != source])
     else:
         t = _draft_step(d, target)
         t["inputs"] = [i for i in t["inputs"] if i != source]
@@ -965,13 +1058,13 @@ def apply_draft(db: Client, pipeline_id: int) -> dict:
     old_steps = {s["id"]: s for s in p["definition"]["steps"]}
     old_g = {s["id"]: s for s in graph.normalise(p["definition"])["steps"]}
     try:
-        old_sigs = engine.step_signatures(p["definition"], context)
+        old_sigs = outputs.signatures(p["definition"], context)
     except graph.GraphError:
         old_sigs = {}
     by_id = {s["id"]: s for s in d["steps"]}
     g = {"steps": [dict(by_id[sid]) for sid in result["order"]], "output_from": list(d["output_from"])}
     new_def = {**_draft_definition(p), "steps": g["steps"], "output_from": g["output_from"]}
-    new_sigs = engine.step_signatures(new_def, context)
+    new_sigs = outputs.signatures(new_def, context)
 
     kept, reset = [], []
     for s in g["steps"]:
@@ -998,7 +1091,13 @@ def apply_draft(db: Client, pipeline_id: int) -> dict:
     for sid in src_removed:
         p["state"].get("sources", {}).pop(sid, None)
     p["definition"]["sources"] = new_sources
-    stored = graph.stored(g)
+    if outputs.multi(p["definition"]):
+        # Several outputs: always stored wired, with each output's inputs.
+        stored = {"steps": [dict(s) for s in g["steps"]], "output_from": g["output_from"]}
+        for o in outputs.extras(p["definition"]):
+            o["output_from"] = list((d.get("outputs_from") or {}).get(o["id"], o.get("output_from") or []))
+    else:
+        stored = graph.stored(g)
     p["definition"]["steps"] = stored["steps"]
     if "output_from" in stored:
         p["definition"]["output_from"] = stored["output_from"]
@@ -1016,6 +1115,94 @@ def apply_draft(db: Client, pipeline_id: int) -> dict:
           level="warn" if reset or result["warnings"] else "info")
     return {"added": added, "removed": removed, "changed": changed, "reset": reset, "warnings": result["warnings"],
             "sources_added": src_added, "sources_removed": src_removed}
+
+
+# ── Outputs ──────────────────────────────────────────────────────────────────
+#
+# A pipeline starts with one output. More are added when its data has several
+# shapes (see outputs.py): each loads into its own target and has its own schema.
+# Adding or renaming one resets nothing; wiring steps into it goes through the
+# draft like any other wiring.
+
+def _wire_explicitly(d: dict) -> None:
+    """Store a plain chain as explicit wiring, which several outputs need. The hash and fingerprints do not change."""
+    g = graph.normalise(d)
+    for s, gs in zip(d.get("steps") or [], g["steps"]):
+        s["inputs"] = list(gs["inputs"])
+    d["output_from"] = list(g["output_from"])
+    draft = d.get("draft")
+    if draft is not None:
+        draft.setdefault("outputs_from", {})
+
+
+def add_output(db: Client, pipeline_id: int, target: str, name: str | None = None, by_user: bool = False) -> dict:
+    """A new, empty output loading into `target`. Each target takes one output."""
+    p = get(db, pipeline_id)
+    d = p["definition"]
+    targets = kinds.spec(p["kind"])["targets"]
+    if target not in targets:
+        raise PipelineError(f"{target!r} is not something a {kinds.spec(p['kind'])['label'].lower()} output can load into; "
+                            f"the targets are {', '.join(targets)}.")
+    used = {kinds.target_id(p["kind"], outputs.project(d, oid)) for oid in outputs.ids(d)}
+    if target in used:
+        raise PipelineError(f"An output already loads into {targets[target]['label']}.")
+    _wire_explicitly(d)
+    oid = _next_id([{"id": "o1"}] + outputs.extras(d), "o")
+    entry = {"id": oid, "target": target, "name": (name or "").strip() or targets[target]["label"],
+             "schema": {"status": None, "fields": []}, "output_from": []}
+    d.setdefault("outputs", []).append(entry)
+    if d.get("draft") is not None:
+        d["draft"].setdefault("outputs_from", {})[oid] = []
+    if d.get("proposal") is not None:
+        d["proposal"]["draft"].setdefault("outputs_from", {})[oid] = []
+    _save(db, p)
+    event(db, pipeline_id, f"{_who(by_user)} added an output, {entry['name']} ({oid}), loading into "
+          f"{targets[target]['label']}. Set its schema, then wire steps into it in a draft.")
+    return entry
+
+
+def update_output(db: Client, pipeline_id: int, output: str, name: str | None = None, target: str | None = None,
+                  by_user: bool = False) -> dict:
+    """Rename an output, or change what it loads into while its schema is not approved yet."""
+    p = get(db, pipeline_id)
+    d = p["definition"]
+    e = outputs.entry(d, output)
+    targets = kinds.spec(p["kind"])["targets"]
+    if target is not None and target != kinds.target_id(p["kind"], outputs.project(d, output)):
+        if target not in targets:
+            raise PipelineError(f"{target!r} is not a target; they are {', '.join(targets)}.")
+        if (e.get("schema") or {}).get("status") == "approved":
+            raise PipelineError("Change what an output loads into before approving its schema.")
+        if any(kinds.target_id(p["kind"], outputs.project(d, o)) == target for o in outputs.ids(d) if o != output):
+            raise PipelineError(f"An output already loads into {targets[target]['label']}.")
+        e["target"] = target
+        e.pop("load_map", None)
+    if name is not None and name.strip():
+        e["name"] = name.strip()[:60]
+    _save(db, p)
+    return e
+
+
+def remove_output(db: Client, pipeline_id: int, output: str, by_user: bool = False) -> None:
+    """Remove an output that nothing is wired into (in the steps or the draft)."""
+    p = get(db, pipeline_id)
+    d = p["definition"]
+    if output == outputs.MAIN:
+        raise PipelineError("The first output cannot be removed.")
+    e = outputs.entry(d, output)
+    wired = e.get("output_from") or ((d.get("draft") or {}).get("outputs_from") or {}).get(output)
+    if wired:
+        raise PipelineError(f"{', '.join(wired)} feed{'s' if len(wired) == 1 else ''} {e['name']}: unwire "
+                            f"{'it' if len(wired) == 1 else 'them'} in a draft first.")
+    d["outputs"] = [o for o in outputs.extras(d) if o["id"] != output]
+    if not d["outputs"]:
+        d.pop("outputs")
+    for holder in (d.get("draft"), (d.get("proposal") or {}).get("draft")):
+        if holder and output in (holder.get("outputs_from") or {}):
+            holder["outputs_from"].pop(output)
+    outputs.set_last_run(p["state"], output, None)
+    _save(db, p, state=p["state"])
+    event(db, pipeline_id, f"{_who(by_user)} removed the output {e['name']} ({output}).")
 
 
 # Where the planner put each node on the canvas. Display only: not part of the
@@ -1041,7 +1228,7 @@ def set_layout(db: Client, pipeline_id: int, positions: dict) -> dict:
 # ── Overrides on the final output ────────────────────────────────────────────
 
 def output_locked(p: dict) -> str | None:
-    """Why the final output cannot be overridden right now, or None if it can."""
+    """Why the final output cannot be overridden right now, or None if it can. p: the pipeline or one output's view."""
     steps = p["definition"]["steps"]
     if not steps:
         return "There are no steps yet."
@@ -1061,13 +1248,13 @@ def output_locked(p: dict) -> str | None:
 
 
 def edit_output(db: Client, pipeline_id: int, op: str, record_id: str | None = None,
-                values: dict | None = None) -> dict:
+                values: dict | None = None, output: str | None = None) -> dict:
     """
     The planner's overrides on the final output: set values on a row, remove
     it, add one, or undo every override on a row. Saved on the definition and
     re-applied to every full run; applied to the current output now.
     """
-    p = get(db, pipeline_id)
+    p = _out(get(db, pipeline_id), output)
     if PipelineRepository.is_busy(p):   # checked here, on the row this reads anyway, to save a round trip
         raise PipelineError("The pipeline is busy (the agent or a run is working). Wait for it to finish.")
     locked = output_locked(p)
@@ -1136,7 +1323,7 @@ def edit_output(db: Client, pipeline_id: int, op: str, record_id: str | None = N
                  "definition_hash": engine.definition_hash(p["definition"])})
     review(db, p)   # the output changed, so it is ready for review again
     _save(db, p, state=p["state"])
-    event(db, pipeline_id, f"Final output: you {text}.")
+    event(db, pipeline_id, f"Final output{_out_name(p)}: you {text}.")
     return {"record_id": record_id, "overrides": edits}
 
 
@@ -1144,55 +1331,80 @@ def edit_output(db: Client, pipeline_id: int, op: str, record_id: str | None = N
 
 def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = False,
         announce: bool = True) -> dict:
-    """Run (or preview up to a step). Writes state; returns the last_run summary."""
+    """
+    Run (or preview up to a step). Writes state; returns the last_run summary
+    (of the output `upto` feeds, else of the first output). A full run runs
+    every output; previewing the step that feeds an output runs that output whole.
+    """
     p = get(db, pipeline_id)
     repo = PipelineRepository(db)
-    steps = p["definition"]["steps"]
-    if upto and steps and upto == steps[-1]["id"]:
-        upto = None   # previewing the last step runs the whole pipeline
+    d = p["definition"]
+    froms = outputs.output_from(d)
+    only = None
+    if upto and not outputs.multi(d):
+        if d["steps"] and upto == d["steps"][-1]["id"]:
+            upto = None   # previewing the last step runs the whole pipeline
+    elif upto and froms.get(outputs.owner(d, upto)) == [upto]:
+        upto, only = None, outputs.owner(d, upto)   # previewing the step that feeds an output runs that output whole
+    which = [only] if only else [outputs.owner(d, upto)] if upto else outputs.ids(d)
 
     def progress(msg: str) -> None:
         p["state"]["progress"] = msg
         repo.update(pipeline_id, {"state": p["state"]})
 
-    state = engine.run(p["kind"], p["definition"], p["state"], upto=upto, fresh=fresh,
-                       context=p["definition"].get("goal") or p["name"], progress=progress,
-                       refs=reference_rows(db))
-    state.pop("progress", None)
-    last = state["last_run"]
+    outputs.run(p["kind"], d, p["state"], upto=upto, fresh=fresh, context=d.get("goal") or p["name"],
+                progress=progress, refs=reference_rows(db), only=only)
+    p["state"].pop("progress", None)
     if upto is None:
-        review(db, p)
-    repo.update(pipeline_id, {"state": state})
+        for oid in which:
+            review(db, _out(p, oid))
+    repo.update(pipeline_id, {"state": p["state"]})
+    lasts = {oid: outputs.last_run(p["state"], oid) for oid in which}
     if announce:
-        cov = last["coverage"]
-        gaps = ", ".join(f"`{g}`" for g in cov["blocking_gaps"])
-        text = (f"{'Preview to ' + upto if upto else ('Fresh re-run' if fresh else 'Run')} finished: "
-                f"{cov['records']} record(s)."
-                + (f" Started after {last['reused'][-1]}, reusing its saved output." if last.get("reused") else "")
-                + (f" Required fields with blanks: {gaps}." if gaps else "")
-                + (f" Errors: {'; '.join(last['errors'])}" if last["errors"] else ""))
+        parts, warn = [], False
+        for oid, last in lasts.items():
+            cov = last["coverage"]
+            gaps = ", ".join(f"`{g}`" for g in cov["blocking_gaps"])
+            warn = warn or bool(last["errors"] or gaps)
+            parts.append((f"{outputs.label(d, oid)}: " if outputs.multi(d) else "")
+                         + f"{cov['records']} record(s)."
+                         + (f" Started after {last['reused'][-1]}, reusing its saved output." if last.get("reused") else "")
+                         + (f" Required fields with blanks: {gaps}." if gaps else "")
+                         + (f" Errors: {'; '.join(last['errors'])}" if last["errors"] else ""))
+        text = f"{'Preview to ' + upto if upto else ('Fresh re-run' if fresh else 'Run')} finished: " + " ".join(parts)
         if upto is None:
             reasons = gate(p)
-            text += (" Ready for review: " + review_text(last["review"], kinds.spec(p["kind"])["label"]) + " Nothing is published until you approve it."
+            ready = " ".join(review_text(last["review"], kinds.spec(p["kind"])["label"]) for last in lasts.values())
+            text += (" Ready for review: " + ready + " Nothing is published until you approve it."
                      if not reasons else " Not ready to publish yet: " + " ".join(reasons))
-        event(db, pipeline_id, text, level="warn" if last["errors"] or gaps else "info")
-    return summarise_run(last)
+        event(db, pipeline_id, text, level="warn" if warn else "info")
+    return summarise_run(next(iter(lasts.values())))
+
+
+def _published_records(prev: dict | None, oid: str) -> list[dict] | None:
+    """One output's records in a publish: a list for a one-output pipeline, {output id: list} for several."""
+    recs = (prev or {}).get("records")
+    if isinstance(recs, dict):
+        return recs.get(oid)
+    return recs if oid == outputs.MAIN else None
 
 
 def review(db: Client, p: dict) -> dict | None:
     """
     After a full run the output waits for review: what it changes since this
     pipeline last published. Stored on last_run; publishing stamps it.
+    p: the pipeline, or one output's view of it.
     """
     last = p["state"].get("last_run") or {}
     if not last or last.get("upto"):
         return None
+    oid = p["_scope"][1] if "_scope" in p else outputs.MAIN
     prev = PipelineRunRepository(db).latest_published(p["id"])
     last["review"] = {
         "status": "ready",
         "since": ({"dataset_version": prev["dataset_version"], "name": prev.get("name"), "at": prev["created_at"]}
                   if prev else None),
-        **engine.changes_since((prev or {}).get("records"), last.get("records") or [], _fields(p)),
+        **engine.changes_since(_published_records(prev, oid), last.get("records") or [], _fields(p)),
     }
     return last["review"]
 
@@ -1212,16 +1424,32 @@ def summarise_run(last: dict | None) -> dict | None:
                                      "override_notes")}
 
 
-def gate(p: dict) -> list[str]:
-    last = p["state"].get("last_run") or {}
+def gate(p: dict, output: str | None = None) -> list[str]:
+    """Every reason publishing is refused: for one output, or (default) for the whole pipeline."""
+    d = p["definition"]
+    if outputs.multi(d) and output is None and "_scope" not in p:
+        return [f"{outputs.label(d, oid)}: {r}" for oid in outputs.ids(d) for r in gate(p, oid)]
+    po = _out(p, output) if "_scope" not in p else p
+    last = po["state"].get("last_run") or {}
     records = last.get("records") if last and not last.get("upto") else None
-    return engine.load_gate(p["definition"], p["state"], []) + kinds.load_problems(p["kind"], p["definition"], records)
+    return (engine.load_gate(po["definition"], po["state"], [])
+            + kinds.load_problems(po["kind"], po["definition"], records))
+
+
+def _parts(p: dict) -> list[dict]:
+    """What a publish hands to kinds.diff / kinds.load: one part per output, with its last run's records."""
+    parts = []
+    for oid in outputs.ids(p["definition"]):
+        po = _out(p, oid)
+        last = po["state"].get("last_run") or {}
+        parts.append({"output": oid, "target": kinds.target_id(p["kind"], po["definition"]),
+                      "definition": po["definition"], "records": last.get("records") or [], "fields": _fields(po)})
+    return parts
 
 
 def preview_diff(db: Client, pipeline_id: int) -> dict:
     p = get(db, pipeline_id)
-    last = p["state"].get("last_run") or {}
-    return kinds.diff(p["kind"], db, p, last.get("records") or [], _fields(p))
+    return kinds.diff(p["kind"], db, p, _parts(p))
 
 
 def load(db: Client, pipeline_id: int, name: str | None, created_by: str | None) -> dict:
@@ -1234,23 +1462,29 @@ def load(db: Client, pipeline_id: int, name: str | None, created_by: str | None)
     reasons = gate(p)
     if reasons:
         raise PipelineError("Not ready to load: " + " ".join(reasons))
-    last = p["state"]["last_run"]
-    fields = _fields(p)
+    d = p["definition"]
     runs = PipelineRunRepository(db)
     prev = runs.latest(pipeline_id)
-    changed = not prev or engine.definition_hash(prev["definition"]) != engine.definition_hash(p["definition"])
+    changed = not prev or outputs.definition_hash(prev["definition"]) != outputs.definition_hash(d)
     def_version = (p.get("definition_version") or 0) + (1 if changed else 0)
-    diff = kinds.diff(p["kind"], db, p, last["records"], fields)
-    result = kinds.load(p["kind"], db, p, last["records"], fields, name, created_by, def_version)
+    parts = _parts(p)
+    diff = kinds.diff(p["kind"], db, p, parts)
+    result = kinds.load(p["kind"], db, p, parts, name, created_by, def_version)
     v = result["dataset_version"]
+    lasts = {oid: outputs.last_run(p["state"], oid) for oid in outputs.ids(d)}
+    several = outputs.multi(d)
     runs.create({
-        "pipeline_id": pipeline_id, "definition_version": def_version, "definition": p["definition"],
-        "name": (name or "").strip() or None, "records": last["records"], "coverage": last["coverage"],
+        "pipeline_id": pipeline_id, "definition_version": def_version, "definition": d,
+        "name": (name or "").strip() or None,
+        # A one-output pipeline keeps the shape it always had; several outputs are stored by output id.
+        "records": {oid: l["records"] for oid, l in lasts.items()} if several else lasts[outputs.MAIN]["records"],
+        "coverage": {oid: l["coverage"] for oid, l in lasts.items()} if several else lasts[outputs.MAIN]["coverage"],
         "diff": diff, "dataset_version_id": v["id"], "dataset_version": v["version"],
         "created_by": (created_by or "").strip() or None,
     })
-    last.setdefault("review", {})["published"] = {"dataset_version": v["version"], "name": v.get("name"),
-                                                  "at": v.get("created_at"), "by": (created_by or "").strip() or None}
+    for last in lasts.values():
+        last.setdefault("review", {})["published"] = {"dataset_version": v["version"], "name": v.get("name"),
+                                                      "at": v.get("created_at"), "by": (created_by or "").strip() or None}
     PipelineRepository(db).update(pipeline_id, {"state": p["state"],
                                                 **({"definition_version": def_version} if changed else {})})
     label = f"{kinds.spec(p['kind'])['label']} v{v['version']}" + (f" “{v['name']}”" if v.get("name") else "")
@@ -1267,9 +1501,13 @@ def reference_rows(db: Client):
 
     def rows(table: str) -> list[dict]:
         if table not in loaded:
-            cols = engine.REF_TABLES[table]["columns"]
+            ref = engine.REF_TABLES[table]
+            cols = ref["columns"]
             try:
-                loaded[table] = db.table(table).select(",".join(cols)).limit(engine.SQL_REF_ROWS).execute().data or []
+                if ref.get("rows"):   # data on file that is not a plain table (zoning_steps.ON_FILE)
+                    loaded[table] = ref["rows"](db)[:engine.SQL_REF_ROWS]
+                else:
+                    loaded[table] = db.table(table).select(",".join(cols)).limit(engine.SQL_REF_ROWS).execute().data or []
             except Exception as e:  # noqa: BLE001 — reported on the step
                 raise PipelineError(f"Reference table {table} could not be read: {e}")
         return loaded[table]
@@ -1277,7 +1515,8 @@ def reference_rows(db: Client):
 
 
 def explore_sql(db: Client, pipeline_id: int, query: str, tables: list[str] | None = None,
-                on: str | None = None, limit: int = engine.EXPLORE_ROWS, inputs: list[str] | None = None) -> dict:
+                on: str | None = None, limit: int = engine.EXPLORE_ROWS, inputs: list[str] | None = None,
+                output: str | None = None) -> dict:
     """
     A read-only query over one step's last previewed output (`on`, default the
     last step that has one; "output" for the last run's final records), or over
@@ -1286,10 +1525,12 @@ def explore_sql(db: Client, pipeline_id: int, query: str, tables: list[str] | No
     CSV sources. Also says whether the query would work as a SQL step.
     """
     p = get(db, pipeline_id)
-    fields = _fields(p)
+    d = p["definition"]
+    near = (inputs or [None])[0] or (on if on not in (None, "output") else None)
+    fields = outputs.step_fields(d, near) if near else _fields(_out(p, output))
     if not fields:
         raise PipelineError("Set the target schema first: the records table's columns come from it.")
-    outputs = p["state"].get("outputs") or {}
+    step_out = p["state"].get("outputs") or {}
     steps = p["definition"]["steps"]
     sources = _draft_sources(p)
     ins = None
@@ -1298,21 +1539,22 @@ def explore_sql(db: Client, pipeline_id: int, query: str, tables: list[str] | No
     if inputs and len(inputs) > 1:
         ins, missing = {}, []
         for i in inputs:
-            out = outputs.get(i)
+            out = step_out.get(i)
             if not out or out.get("error"):
                 missing.append(i)
             ins[i] = (out or {}).get("records") or []
         recs, count = [r for i in inputs for r in ins[i]], None
         where = f"the outputs of {' + '.join(inputs)}" + (f" ({', '.join(missing)} not previewed, so empty)" if missing else "")
     elif on == "output":
-        recs, count = (p["state"].get("last_run") or {}).get("records") or [], None
+        recs, count = outputs.last_run(p["state"], output or outputs.MAIN).get("records") or [], None
         where = "the last run's final output"
     else:
         if on is None:
-            on = next((s["id"] for s in reversed(steps) if outputs.get(s["id"]) and not outputs[s["id"]].get("error")), None)
+            on = next((s["id"] for s in reversed(steps) if step_out.get(s["id"]) and not step_out[s["id"]].get("error")), None)
+            fields = outputs.step_fields(d, on) if on else fields
         elif not any(s["id"] == on for s in steps):
             raise PipelineError(f"No step {on}.")
-        out = outputs.get(on) if on else None
+        out = step_out.get(on) if on else None
         recs, count = (out or {}).get("records") or [], (out or {}).get("count")
         where = (f"the output of {on}" if out and not out.get("error")
                  else f"nothing: {on} has not been previewed with its current settings" if on
@@ -1332,9 +1574,10 @@ def _prompts(p: dict) -> dict:
     """Each model step's prompt, as the planner reads and tunes it."""
     out = {}
     for st in p["definition"]["steps"]:
-        if st["type"] in engine.EDITABLE and _fields(p):
+        fields = outputs.step_fields(p["definition"], st["id"])
+        if st["type"] in engine.EDITABLE and fields:
             try:
-                out[st["id"]] = engine.prompt_view(st, _fields(p), p["definition"].get("goal") or p["name"])
+                out[st["id"]] = engine.prompt_view(st, fields, p["definition"].get("goal") or p["name"])
             except PipelineError as e:
                 out[st["id"]] = {"error": str(e)}
     return out
@@ -1346,7 +1589,9 @@ def _graph_view(definition: dict) -> dict:
         order = graph.order(g)
     except graph.GraphError:
         order = [s["id"] for s in g["steps"]]
-    return {"inputs": {s["id"]: s["inputs"] for s in g["steps"]}, "output_from": g["output_from"], "order": order}
+    return {"inputs": {s["id"]: s["inputs"] for s in g["steps"]}, "output_from": g["output_from"], "order": order,
+            "outputs_from": {o["id"]: o.get("output_from") or [] for o in outputs.extras(definition)},
+            "owner": outputs.owners(definition) if outputs.multi(definition) else None}
 
 
 def _draft_view(p: dict) -> dict | None:
@@ -1367,9 +1612,10 @@ def _draft_view(p: dict) -> dict | None:
 
     # Which applied steps Apply sends back for approval (their fingerprint changes).
     context = p["definition"].get("goal") or p["name"]
+    dd = _draft_definition(p)
     try:
-        old_sigs = engine.step_signatures(p["definition"], context)
-        new_sigs = engine.step_signatures(_draft_definition(p), context)
+        old_sigs = outputs.signatures(p["definition"], context)
+        new_sigs = outputs.signatures(dd, context)
     except graph.GraphError:
         old_sigs, new_sigs = {}, {}
     steps = []
@@ -1380,10 +1626,11 @@ def _draft_view(p: dict) -> dict | None:
         steps.append({**s, "draft_state": state, "resets": resets})
     live_src = {x["id"] for x in p["definition"]["sources"]}
     sources = [{**x, "draft_state": "unchanged" if x["id"] in live_src else "new"} for x in _draft_sources(p)]
-    return {"steps": steps, "output_from": d["output_from"], "check": check_draft(p), "sources": sources,
+    return {"steps": steps, "output_from": d["output_from"], "outputs_from": d.get("outputs_from") or {},
+            "check": check_draft(p), "sources": sources,
             "removed_sources": [i for i in live_src if i not in {x["id"] for x in sources}],
             "removed": [sid for sid in live if sid not in {s["id"] for s in d["steps"]}],
-            "ports": {s["id"]: engine.step_io(s, _fields(p), _draft_sources(p)) for s in d["steps"]}}
+            "ports": {s["id"]: engine.step_io(s, outputs.step_fields(dd, s["id"]), _draft_sources(p)) for s in d["steps"]}}
 
 
 def _source_tables(p: dict) -> dict:
@@ -1405,34 +1652,56 @@ def _next_version(db: Client, kind: str) -> int:
     return (latest["version"] if latest else 0) + 1
 
 
+def _output_view(p: dict, oid: str) -> dict:
+    """One output as the canvas and the Review & publish page show it."""
+    po = _out(p, oid)
+    t = kinds.target_spec(p["kind"], po["definition"])
+    last = po["state"].get("last_run")
+    return {
+        "id": oid, "name": outputs.label(p["definition"], oid), "target": t["id"], "target_label": t["label"],
+        "schema": po["definition"]["schema"], "output_from": outputs.output_from(p["definition"])[oid],
+        "last_run": summarise_run(last),
+        "last_records": (last or {}).get("records", [])[:engine.PREVIEW_RECORDS],
+        "gate": gate(po), "output_locked": output_locked(po), "design_gaps": engine.design_gaps(po["definition"]),
+        "overrides": po["definition"].get("overrides"), "review_marks": review_marks(po),
+        "load_map": view_load_map(po), "has_defaults": bool(t["default_fields"]),
+    }
+
+
 def view(db: Client, pipeline_id: int) -> dict[str, Any]:
     p = get(db, pipeline_id)
     s = kinds.spec(p["kind"])
     state = p["state"]
-    outputs = state.get("outputs") or {}
+    step_out = state.get("outputs") or {}
+    d = p["definition"]
+    main = _out(p, outputs.MAIN)
     return {
         "id": p["id"], "kind": p["kind"], "name": p["name"], "kind_label": s["label"],
         "definition": p["definition"], "definition_version": p.get("definition_version") or 0,
         "busy": p.get("busy") if PipelineRepository.is_busy(p) else None,
         "progress": state.get("progress") if PipelineRepository.is_busy(p) else None,
         "sources": state.get("sources") or {},
-        "outputs": outputs,
+        "outputs": step_out,
+        # The first output's run, schema and review, as before; output_list has every output.
         "last_run": summarise_run(state.get("last_run")),
         "last_records": (state.get("last_run") or {}).get("records", [])[:engine.PREVIEW_RECORDS],
         "gate": gate(p),
         "prompts": _prompts(p),
-        "output_locked": output_locked(p),
-        "design_gaps": engine.design_gaps(p["definition"]),
-        "overrides": p["definition"].get("overrides"),
-        "ports": {st["id"]: engine.step_io(st, _fields(p), p["definition"]["sources"])
-                  for st in graph.normalise(p["definition"])["steps"]},
+        "output_locked": output_locked(main),
+        "design_gaps": engine.design_gaps(main["definition"]),
+        "overrides": d.get("overrides"),
+        "ports": {st["id"]: engine.step_io(st, outputs.step_fields(d, st["id"]), d["sources"])
+                  for st in graph.normalise(d)["steps"]},
+        "output_list": [_output_view(p, oid) for oid in outputs.ids(d)],
+        "targets": [{"id": k, "label": v["label"]} for k, v in s["targets"].items()],
         "graph": _graph_view(p["definition"]),
         "draft": _draft_view(p),
         "proposal": _proposal_view(p),
-        "review_marks": review_marks(p),
-        "ref_tables": {k: {"description": v["description"], "columns": v["columns"]} for k, v in engine.REF_TABLES.items()},
+        "review_marks": review_marks(main),
+        "ref_tables": {k: {"description": v["description"], "columns": v["columns"]}
+                       for k, v in engine.ref_tables(p["kind"]).items()},
         "source_tables": _source_tables(p),
-        "load_map": view_load_map(p),
+        "load_map": view_load_map(main),
         "sql_types": engine.SQL_TYPES,
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"], "config": v["config"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},

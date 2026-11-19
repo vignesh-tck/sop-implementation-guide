@@ -23,7 +23,8 @@ class GraphError(ValueError):
 def normalise(definition: dict) -> dict:
     """{"steps": [step + "inputs"], "output_from": [...]} for any definition, old or new. Does not mutate."""
     steps = definition.get("steps") or []
-    explicit = "output_from" in definition or any("inputs" in s for s in steps)
+    # A pipeline with several outputs is always stored wired (see outputs.py).
+    explicit = "output_from" in definition or "outputs" in definition or any("inputs" in s for s in steps)
     out = []
     for i, s in enumerate(steps):
         ins = list(s.get("inputs") or []) if explicit else ([steps[i - 1]["id"]] if i else [])

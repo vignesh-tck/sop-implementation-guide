@@ -205,3 +205,13 @@ def bbox(geometries: list[dict]) -> tuple[float, float, float, float]:
     pts = [p for g in geometries for path in _paths(g) for p in path]
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
     return min(xs), min(ys), max(xs), max(ys)
+
+
+def near(layer_url: str, geometry: dict, buffer_m: float, out_fields: str) -> list[dict]:
+    """The attributes of a layer's features within buffer_m of a block centreline. Raises ZoningLookupError."""
+    return _near(layer_url, geometry, buffer_m, out_fields)
+
+
+def overlay_values(rows: list[dict]) -> list[str]:
+    """A readable name for each polygon, from whatever name field the layer has."""
+    return _overlay_values(rows)

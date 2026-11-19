@@ -52,7 +52,7 @@ def _after(step: dict, port: dict, fields: list[dict], warn, sources: list[dict]
     elif t == "map_values":
         if port.get(c.get("field")) is None:
             warn(step["id"], f"{step['id']} maps {c.get('field')}, which no step before it produces.")
-    elif t in ("set_value", "llm_fill", "geo_tie", "sql"):
+    elif t in ("set_value", "llm_fill", "geo_tie", "sql") or engine.CATALOG.get(t, {}).get("io"):
         for w in writes:
             out[w] = SET
     return out
@@ -120,8 +120,9 @@ def check(kind: str, d: dict) -> dict:
     result["order"] = order
     used = graph.consumers(g)
     for s in steps:
-        if not s["inputs"] and s["type"] != "extract":
-            err(s["id"], f"{s['id']} has no input: wire a step into it (only an Extract step can start a branch).")
+        if not s["inputs"] and not engine.starts(s["type"]):
+            err(s["id"], f"{s['id']} has no input: wire a step into it (only a step that creates records, such as "
+                         "Extract, can start a branch).")
         dest = used[s["id"]]
         if not dest:
             err(s["id"], f"{s['id']} is not connected to anything: wire its output into a step or Output, or remove it.")

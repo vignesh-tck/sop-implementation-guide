@@ -232,7 +232,7 @@ def _tools(kind: str) -> list[dict]:
          "input_schema": {"type": "object", "properties": {
              "query": {"type": "string", "description": "One SELECT; the table `records` is the step's output."},
              "tables": {"type": "array", "items": {"type": "string"},
-                        "description": "Reference tables (" + ", ".join(engine.REF_TABLES) + ") or CSV source ids the query joins."},
+                        "description": "Reference tables (" + ", ".join(engine.ref_tables(kind)) + ") or CSV source ids the query joins."},
              "on_step_id": {"type": "string", "description": "Whose output is `records`: the step a new sql step "
                             "would follow. Default the last previewed step; \"output\" for the last run's final records."},
              "input_step_ids": {"type": "array", "items": {"type": "string"},

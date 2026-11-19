@@ -192,8 +192,24 @@ CATALOG: dict[str, dict] = {
 }
 
 
+# A step type may bring its own code (zoning_steps.py registers some): "validate"
+# (config, fields, sources) -> config, "io" (step, fields) -> ports, and "run"
+# (step, records, fields, ctx) -> (records, warnings). "starts": it may start a
+# branch, creating records, as an Extract step does.
+
 def catalog_for(kind: str) -> dict[str, dict]:
     return {k: v for k, v in CATALOG.items() if kind in v.get("kinds", [kind])}
+
+
+def starts(step_type: str) -> bool:
+    """Whether a step of this type creates records, so it can start a branch."""
+    return step_type == "extract" or bool(CATALOG.get(step_type, {}).get("starts"))
+
+
+def ref_tables(kind: str | None = None) -> dict[str, dict]:
+    """The reference tables a SQL step of this kind may join."""
+    return {t: r for t, r in REF_TABLES.items()
+            if not r.get("hidden") and (kind is None or kind in r.get("kinds", [kind]))}
 
 
 def catalog_text(kind: str) -> str:
@@ -204,7 +220,7 @@ def catalog_text(kind: str) -> str:
         lines.append(f"- {name}{' (model call)' if spec['model'] else ''}: {spec['description']}\n  config: {cfg}")
         if name == "sql":
             lines += [f"  reference table {t}: {r['description']} Columns: "
-                      + ", ".join(f"{c} {ty}" for c, ty in r["columns"].items()) for t, r in REF_TABLES.items()]
+                      + ", ".join(f"{c} {ty}" for c, ty in r["columns"].items()) for t, r in ref_tables(kind).items()]
     return "\n".join(lines)
 
 
@@ -303,11 +319,14 @@ def validate_step(kind: str, step_type: str, config: dict, fields: list[dict],
             raise PipelineError("sql needs a query: one SELECT … FROM records.")
         c["query"] = c["query"].strip().rstrip(";").strip()
         tables = c.get("tables") or []
-        known = list(REF_TABLES) + [s["id"] for s in sources or []]
+        refs = ref_tables(kind)
+        known = list(refs) + [s["id"] for s in sources or []]
         if not isinstance(tables, list) or any(t not in known for t in tables):
-            raise PipelineError(f"sql.tables must list reference tables ({', '.join(REF_TABLES)}) or CSV sources by id.")
+            raise PipelineError(f"sql.tables must list reference tables ({', '.join(refs)}) or CSV sources by id.")
         c["tables"] = list(dict.fromkeys(tables)) or None
         sql_columns(c, fields, inputs, sources)   # parses and dry-runs it on empty tables
+    elif cat[step_type].get("validate"):
+        c = cat[step_type]["validate"](c, fields, sources)
     return c
 
 
@@ -327,7 +346,13 @@ def _check_condition(c: dict, fields: list[dict]) -> None:
 _SOURCE_CACHE: dict[str, dict] = {}
 
 
+# Source kinds besides url and grants_gov, with how to read one: {kind: fetch(src) -> fetched}.
+SOURCE_KINDS: dict[str, Callable[[dict], dict]] = {}
+
+
 def _source_key(src: dict) -> str:
+    if src["kind"] in SOURCE_KINDS:
+        return f"{src['kind']}:{src.get('url')}"
     return f"grants_gov:{src.get('query')}" if src["kind"] == "grants_gov" else f"url:{src.get('url')}"
 
 
@@ -350,6 +375,8 @@ def fetch_source(src: dict, fresh: bool = False) -> dict:
             fetched = {"url": "https://www.grants.gov/search-grants", "final_url": "https://www.grants.gov/search-grants",
                        "text": text, "truncated": False, "content_type": "grants.gov search",
                        "fetched_at": datetime.now(timezone.utc).isoformat(), "hits": len(hits)}
+        elif src["kind"] in SOURCE_KINDS:
+            fetched = SOURCE_KINDS[src["kind"]](src)
         else:
             fetched = web_source.fetch(src["url"], max_text=FETCH_CHARS)
     except Exception as e:  # noqa: BLE001 — every failure is reported to the user
@@ -1246,6 +1273,7 @@ SQL_REF_ROWS = 20_000        # rows read from one reference table
 # here (and its columns) to make it available; nothing else is reachable.
 REF_TABLES: dict[str, dict] = {
     "funding_programs": {
+        "kinds": ["funding"],
         "description": "The funding catalogue: Grants.gov programmes plus curated state and local ones.",
         "columns": {"program_key": "VARCHAR", "program_name": "VARCHAR", "program_type": "VARCHAR",
                     "source_agency": "VARCHAR", "award_amount_min": "DOUBLE", "award_amount_max": "DOUBLE",
@@ -1254,6 +1282,7 @@ REF_TABLES: dict[str, dict] = {
                     "is_curated": "BOOLEAN", "source_name": "VARCHAR", "source_url": "VARCHAR"},
     },
     "tract_eligibility": {
+        "kinds": ["funding"],
         "description": "Per census tract funding designations (e.g. NMTC). eligible NULL means undetermined, not ineligible.",
         "columns": {"tract_geoid": "VARCHAR", "program_key": "VARCHAR", "eligible": "BOOLEAN", "basis": "VARCHAR",
                     "source_name": "VARCHAR", "source_url": "VARCHAR", "source_vintage": "VARCHAR"},
@@ -1539,6 +1568,8 @@ def step_io(step: dict, fields: list[dict], sources: list[dict] | None = None) -
             return {"rows": "filters", "writes": [], "tables": c.get("tables") or [], "joins": joins, "error": str(e)}
         return {"rows": "filters", "writes": [n for n, _ in cols if n != "id"], "tables": c.get("tables") or [],
                 "joins": joins, "columns": [{"name": n, "type": ty} for n, ty in cols]}
+    if CATALOG.get(t, {}).get("io"):
+        return CATALOG[t]["io"](step, fields)
     return {"rows": "keeps", "writes": []}
 
 
@@ -1752,12 +1783,16 @@ def design_gaps(definition: dict) -> list[str]:
     for s in steps:
         if s["type"] == "sql":
             set_by_step.update(step_io(s, fields, definition.get("sources")).get("writes") or [])
+    # Steps that bring their own code (zoning's map lookups, use tables) fill the fields they write.
+    by_plugin = {w for s in steps if CATALOG.get(s["type"], {}).get("io")
+                 for w in step_io(s, fields, definition.get("sources")).get("writes") or []}
+    set_by_step |= by_plugin
     gaps = []
     for f in fields:
         if f.get("accept_blank"):
             continue
         if f.get("extract", True):
-            if f["required"] and not has_extract:
+            if f["required"] and not has_extract and f["name"] not in by_plugin:
                 gaps.append(f["name"])
         elif f["name"] not in set_by_step:
             gaps.append(f["name"])
@@ -1782,8 +1817,9 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
     elif definition.get("sources_status") != "final":
         reasons.append("The sources are not marked final.")
     steps = definition.get("steps") or []
-    if not any(s["type"] == "extract" for s in steps):
-        reasons.append("No extract step.")
+    if not any(starts(s["type"]) for s in steps):
+        reasons.append("No extract step." if not any(CATALOG.get(t, {}).get("starts") for t in CATALOG)
+                       else "No step creates records (an Extract step, or one that reads data on file).")
     gaps = design_gaps(definition)
     if gaps:
         reasons.append(f"No step produces {', '.join(f'`{g}`' for g in gaps)}: the pipeline needs more steps.")
@@ -1846,6 +1882,9 @@ def step_signatures(definition: dict, context: str = "") -> dict[str, str]:
             ids = [t for t in (s.get("config") or {}).get("tables") or [] if t not in REF_TABLES]
             if ids:   # the CSV sources it joins
                 step["reads"] = [{k: x.get(k) for k in ("id", "kind", "url", "query")} for x in sources if x["id"] in ids]
+        elif (s.get("config") or {}).get("source_id"):   # a step that reads one source itself
+            sid_ = s["config"]["source_id"]
+            step["reads"] = [{k: x.get(k) for k in ("id", "kind", "url", "query")} for x in sources if x["id"] == sid_]
         sigs[sid] = _hash({"after": after, "step": step})
     return sigs
 
@@ -2022,6 +2061,11 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
                 srcs = source_tables([t for t in cfg.get("tables") or [] if t not in REF_TABLES], sources,
                                      lambda s: source_doc(s["id"]))
                 records, warnings = _sql(step, records, fields, refs, ins, srcs)
+            elif CATALOG[step["type"]].get("run"):
+                if refs is None:
+                    raise PipelineError("This step reads data on file, which this run cannot reach.")
+                records, warnings = CATALOG[step["type"]]["run"](step, records, fields, {
+                    "refs": refs, "sources": sources, "source_doc": source_doc, "say": say, "fresh": fresh})
             else:
                 records, warnings = _apply(step, records, fields)
         except Exception as e:  # noqa: BLE001 — reported on the step, run stops here

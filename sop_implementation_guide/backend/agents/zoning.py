@@ -260,6 +260,8 @@ class ZoningAgent(SpecialistAgent):
                 rec_counts[r.get("rec_label")] = rec_counts.get(r.get("rec_label"), 0) + 1
         matrix_rows = []
         for label, mapping in rules["rec_uses"].items():
+            if mapping.get("governed_by") == zoning.NOT_A_LAND_USE:
+                continue   # not a land use: no row in the use-table matrix
             cells = {}
             for code in present:
                 f = zoning.zone_finding(code, mapping)

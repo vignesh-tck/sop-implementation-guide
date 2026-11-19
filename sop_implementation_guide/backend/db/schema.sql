@@ -470,6 +470,12 @@ CREATE TABLE IF NOT EXISTS zoning_refresh_runs (
 
 CREATE INDEX IF NOT EXISTS idx_zoning_refresh_runs_created ON zoning_refresh_runs(created_at DESC);
 
+-- Added Nov 19 2026: a zoning pipeline publishes the recommendation readings
+-- (and the rest of zoning_rules.json) with the use table, so the rules in
+-- force can come from a version rather than only the committed file. NULL =
+-- the version uses backend/data/zoning_rules.json.
+ALTER TABLE zoning_data_versions ADD COLUMN IF NOT EXISTS rules JSONB;
+
 
 -- =============================================================
 -- DATASET VERSIONS AND BLOCK ANALYSES  (added Nov 2026)
