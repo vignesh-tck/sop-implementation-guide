@@ -284,6 +284,20 @@ def move_step(pipeline_id: int, step_id: str, body: Move, db: Client = Depends(g
     return _view(db, pipeline_id)
 
 
+class SqlQuery(BaseModel):
+    query: str
+    tables: Optional[list[str]] = None
+    on: Optional[str] = None            # step id whose output is `records`; "output" for the final run
+    limit: Optional[int] = None
+
+
+@router.post("/{pipeline_id}/sql")
+def explore_sql(pipeline_id: int, body: SqlQuery, db: Client = Depends(get_supabase)):
+    """A read-only query over a step's previewed records and the reference tables. Writes nothing."""
+    return _call(lambda: service.explore_sql(db, pipeline_id, body.query, body.tables, body.on,
+                                             body.limit or 50))
+
+
 class Layout(BaseModel):
     positions: dict
 

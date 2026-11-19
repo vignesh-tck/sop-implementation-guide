@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { call } from "../api.js";
 
 // Add a step, or change one, two ways side by side: set it up yourself from the
 // catalog (the server checks it against the schema, the same as the agent's
@@ -130,8 +131,18 @@ function Row({ label, hint, children }) {
 
 // SQL: the query, the reference tables it may join, and every column it can use.
 // Clicking a table or column name puts it at the cursor.
-function SqlForm({ c, set, fields, refTables, sqlTypes }) {
+function SqlForm({ c, set, fields, refTables, sqlTypes, pipelineId, testOn }) {
   const box = useRef(null);
+  const [test, setTest] = useState(null);      // { result } | { error } | { running: true }
+  async function runTest() {
+    setTest({ running: true });
+    try {
+      const result = await call("POST", `/pipelines/${pipelineId}/sql`, { query: c.query || "", tables: c.tables || null, on: testOn, limit: 50 });
+      setTest({ result });
+    } catch (e) {
+      setTest({ error: e.message.replace(/^\d+ — /, "") });
+    }
+  }
   const tables = c.tables || [];
   const insert = (text) => {
     const el = box.current;
@@ -168,6 +179,16 @@ function SqlForm({ c, set, fields, refTables, sqlTypes }) {
                     insert("  ");
                   }} />
       </Row>
+      <div className="btn-row" style={{ marginTop: 0 }}>
+        <button type="button" disabled={!testOn || !(c.query || "").trim() || test?.running} onClick={runTest}>
+          {test?.running ? "Running…" : "Test on input"}
+        </button>
+        <span className="assess" style={{ alignSelf: "center" }}>
+          {testOn ? `Runs the query on ${testOn}'s last preview. Nothing is saved.` : "A SQL step works on the records of the step before it: put it after a step to test it."}
+        </span>
+      </div>
+      {test?.error && <div className="banner err" style={{ margin: 0 }}>{test.error}</div>}
+      {test?.result && <SqlResult r={test.result} />}
       <div className="pl-sql-help">
         <div><button type="button" className="pl-col-btn tbl" onClick={() => insert("records")}><code>records</code></button>
           <span className="assess">typed; values that don't fit their type are NULL here</span></div>
@@ -186,8 +207,33 @@ function SqlForm({ c, set, fields, refTables, sqlTypes }) {
   );
 }
 
+function SqlResult({ r }) {
+  const cell = (v) => (v == null ? <span className="assess">NULL</span> : typeof v === "object" ? JSON.stringify(v) : String(v));
+  return (
+    <div className="pl-sql-result">
+      <div className="assess">
+        On {r.records_from} ({r.records_count} record{r.records_count === 1 ? "" : "s"}): {r.more ? `more than ${r.row_count}` : r.row_count} row(s)
+        {r.shown < r.row_count ? `, first ${r.shown} shown` : ""}.
+      </div>
+      <div className={r.as_step.ok ? "pl-sql-ok" : "pl-warn"}>
+        {r.as_step.ok ? <>Works as a step: writes {r.as_step.writes.length ? r.as_step.writes.map((w) => <code key={w} style={{ marginRight: ".3rem" }}>{w}</code>) : "no fields (it only filters)"}</>
+          : <>As a step: {r.as_step.why}</>}
+      </div>
+      {r.notes?.length > 0 && <ul className="pl-warn-list">{r.notes.map((n, i) => <li key={i} className="assess">{n}</li>)}</ul>}
+      {r.columns.length > 0 && (
+        <div className="table-wrap">
+          <table className="pl-port-table">
+            <thead><tr>{r.columns.map((col) => <th key={col.name} title={col.type}>{col.name}</th>)}</tr></thead>
+            <tbody>{r.rows.map((row, i) => <tr key={i}>{row.map((v, j) => <td key={j}>{cell(v)}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // The settings for one step type. Keys this form does not know are kept as they are.
-function ConfigForm({ type, c, set, fields, sources, refTables, sqlTypes }) {
+function ConfigForm({ type, c, set, fields, sources, refTables, sqlTypes, pipelineId, testOn }) {
   const put = (k, v) => set({ ...c, [k]: v });
   const field = fields.find((f) => f.name === c.field);
   switch (type) {
@@ -291,7 +337,7 @@ function ConfigForm({ type, c, set, fields, sources, refTables, sqlTypes }) {
         </>
       );
     case "sql":
-      return <SqlForm c={c} set={set} fields={fields} refTables={refTables} sqlTypes={sqlTypes} />;
+      return <SqlForm c={c} set={set} fields={fields} refTables={refTables} sqlTypes={sqlTypes} pipelineId={pipelineId} testOn={testOn} />;
     default:
       return <div className="assess">No settings.</div>;
   }
@@ -406,7 +452,8 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
             {type && (
               <div className="pl-form">
                 <ConfigForm type={type} c={config} set={setConfig} fields={fields} sources={sources}
-                            refTables={view.ref_tables} sqlTypes={view.sql_types} />
+                            refTables={view.ref_tables} sqlTypes={view.sql_types} pipelineId={view.id}
+                            testOn={(editing ? steps[steps.indexOf(editing) - 1] : steps[position - 1])?.id} />
                 {!editing && (
                   <Row label="Runs">
                     <select value={position} onChange={(e) => setPosition(Number(e.target.value))}>

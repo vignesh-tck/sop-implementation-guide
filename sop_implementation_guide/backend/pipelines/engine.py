@@ -1345,6 +1345,48 @@ def _sql(step: dict, records: list[dict], fields: list[dict],
     return out, warnings
 
 
+EXPLORE_ROWS = 50            # rows an exploratory query hands back
+EXPLORE_SCAN = 5_000         # rows it counts before saying "more than"
+
+
+def explore_sql(query: str, tables: list[str] | None, records: list[dict], fields: list[dict],
+                refs: Callable[[str], list[dict]] | None, limit: int = EXPLORE_ROWS) -> dict:
+    """
+    Run a read-only SELECT for a look at the data: no rules about id or
+    columns, aggregates welcome, and nothing is written back. Same sandbox
+    and tables as a SQL step. For the agent's run_sql tool and the planner's
+    "test on input" button.
+    """
+    tables = list(dict.fromkeys(tables or []))
+    bad = [t for t in tables if t not in REF_TABLES]
+    if bad:
+        raise PipelineError(f"No reference table {', '.join(bad)}; available: {', '.join(REF_TABLES)}.")
+    if tables and refs is None:
+        raise PipelineError("Reference tables cannot be read here.")
+    ref_rows = {t: refs(t) for t in tables}
+    limit = max(1, min(int(limit or EXPLORE_ROWS), EXPLORE_ROWS))
+    con = _sql_connect()
+    timer = threading.Timer(SQL_TIMEOUT, con.interrupt)
+    try:
+        notes = _sql_tables(con, fields, records, ref_rows)
+        q = _sql_select(con, query)
+        timer.start()
+        cur = con.execute(q)
+        cols = [{"name": d[0], "type": str(d[1])} for d in cur.description]
+        rows = cur.fetchmany(EXPLORE_SCAN + 1)
+    except duckdb.InterruptException:
+        raise PipelineError(f"The SQL ran longer than {SQL_TIMEOUT}s and was stopped.")
+    except duckdb.Error as e:
+        hint = "" if tables else " (a reference table must be listed in tables before the query can use it)"
+        raise PipelineError(f"The SQL failed: {_sql_err(e)}{hint if 'Catalog Error' in str(e) else ''}")
+    finally:
+        timer.cancel()
+        con.close()
+    return {"columns": cols, "rows": [[_sql_py(v) for v in r] for r in rows[:limit]],
+            "row_count": min(len(rows), EXPLORE_SCAN), "more": len(rows) > EXPLORE_SCAN,
+            "shown": min(len(rows), limit), "notes": notes}
+
+
 # ── Ports: what each step reads and writes ───────────────────────────────────
 
 def step_io(step: dict, fields: list[dict]) -> dict:

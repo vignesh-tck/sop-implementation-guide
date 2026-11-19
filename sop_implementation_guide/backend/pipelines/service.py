@@ -668,6 +668,43 @@ def reference_rows(db: Client):
     return rows
 
 
+def explore_sql(db: Client, pipeline_id: int, query: str, tables: list[str] | None = None,
+                on: str | None = None, limit: int = engine.EXPLORE_ROWS) -> dict:
+    """
+    A read-only query over one step's last previewed output (`on`, default the
+    last step that has one; "output" for the last run's final records) and the
+    reference tables. Also says whether the query would work as a SQL step.
+    """
+    p = get(db, pipeline_id)
+    fields = _fields(p)
+    if not fields:
+        raise PipelineError("Set the target schema first: the records table's columns come from it.")
+    outputs = p["state"].get("outputs") or {}
+    steps = p["definition"]["steps"]
+    if on == "output":
+        recs, count = (p["state"].get("last_run") or {}).get("records") or [], None
+        where = "the last run's final output"
+    else:
+        if on is None:
+            on = next((s["id"] for s in reversed(steps) if outputs.get(s["id"]) and not outputs[s["id"]].get("error")), None)
+        elif not any(s["id"] == on for s in steps):
+            raise PipelineError(f"No step {on}.")
+        out = outputs.get(on) if on else None
+        recs, count = (out or {}).get("records") or [], (out or {}).get("count")
+        where = (f"the output of {on}" if out and not out.get("error")
+                 else f"nothing: {on} has not been previewed with its current settings" if on
+                 else "nothing: no step has been previewed yet")
+    result = engine.explore_sql(query, tables, recs, fields, reference_rows(db), limit)
+    if count is not None and count > len(recs):
+        result["notes"].append(f"records holds the first {len(recs)} of {count} records")
+    try:
+        cols = engine.sql_columns({"query": query, "tables": tables or None}, fields)
+        as_step = {"ok": True, "writes": [n for n, _ in cols if n != "id"]}
+    except PipelineError as e:
+        as_step = {"ok": False, "why": str(e)}
+    return {"records_from": where, "records_count": len(recs), **result, "as_step": as_step}
+
+
 def _prompts(p: dict) -> dict:
     """Each model step's prompt, as the planner reads and tunes it."""
     out = {}

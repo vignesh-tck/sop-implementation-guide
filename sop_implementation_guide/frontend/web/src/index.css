@@ -1085,3 +1085,6 @@ main.view.pl-view {
 .pl-col-btn code { color: var(--text); }
 .pl-col-btn:hover:not(:disabled) code { color: var(--orange); text-decoration: underline; }
 .pl-col-btn.tbl code { font-weight: 700; }
+.pl-sql-result { display: flex; flex-direction: column; gap: .3rem; padding: .45rem .55rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); font-size: .8rem; }
+.pl-sql-result .table-wrap { max-height: 14rem; overflow: auto; }
+.pl-sql-ok { color: var(--teal); }

@@ -73,6 +73,21 @@ The order is fixed, and the app enforces it: schema, then sources, then steps.
    be. Records carry leads (links or documents the source points to), and pages carry links. Propose a
    research step to follow them before asking the planner; turn on its web_search only when the sources
    link nothing useful. Ask the planner only for what research could not find.
+SQL, for looking at the data and for transforms:
+- run_sql runs a read-only SELECT (DuckDB SQL) over one step's previewed records (table `records`, plus
+  `records_text` with the same columns as text) and any reference tables you list. Aggregates and any
+  columns are fine; it writes nothing. Use it to answer the planner's questions about the data (counts,
+  distributions, what is blank, what a reference table holds) and to check a transform on real rows.
+- When a transform is plain logic (a computed field, a filter with several conditions, a CASE rule, a
+  lookup against a reference table), a sql step is usually simpler than a chain of parse/map/filter
+  steps. Write it on the fly for the data at hand: first test it with run_sql on the output of the step
+  it will follow (on_step_id), check as_step in the result says it works as a step, then add it with
+  add_step type sql. In a sql step the result must return id (one row per record) and only schema fields;
+  only values that change are written, marked derived, and records left out are dropped.
+- SQL computes from values already in the records or in reference tables. It is not a way to supply facts a
+  source should state, and it never replaces an extract or research step for reading sources.
+- Show the planner the query you chose in a short code block, and say in one line what it does.
+
 5. Publishing (Load) is the planner's action in the panel, once everything is approved and every required
    field is filled or explicitly accepted as blank. A full run never publishes: it ends "ready for review"
    with what changed since the last publish, and the planner approves it. Each publish becomes a new
@@ -151,6 +166,19 @@ def _tools(kind: str) -> list[dict]:
         {"name": "run_preview",
          "description": "Run the pipeline (or up to a step) on the sources and report records, coverage and warnings.",
          "input_schema": {"type": "object", "properties": {"upto_step_id": {"type": "string"}}}},
+        {"name": "run_sql",
+         "description": "Run a read-only SELECT (DuckDB SQL) over a step's previewed records and optional reference "
+                        "tables, to look at the data or test a transform before adding it as a sql step. Writes "
+                        "nothing. Returns columns, up to 50 rows, the row count, and as_step: whether the query "
+                        "would work as a sql step and which fields it would write.",
+         "input_schema": {"type": "object", "properties": {
+             "query": {"type": "string", "description": "One SELECT; the table `records` is the step's output."},
+             "tables": {"type": "array", "items": {"type": "string", "enum": list(engine.REF_TABLES)},
+                        "description": "Reference tables the query joins."},
+             "on_step_id": {"type": "string", "description": "Whose output is `records`: the step a new sql step "
+                            "would follow. Default the last previewed step; \"output\" for the last run's final records."},
+             "limit": {"type": "integer", "description": "Rows to return, at most 50 (default 20)."}},
+             "required": ["query"]}},
         {"name": "set_goal", "description": "Record the planner's goal for this pipeline, in their words.",
          "input_schema": {"type": "object", "properties": {"goal": {"type": "string"}}, "required": ["goal"]}},
         {"name": "rename_pipeline", "description": "Give the pipeline a short descriptive name.",
@@ -240,6 +268,11 @@ def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
         if name == "run_preview":
             summary = service.run(db, pipeline_id, upto=args.get("upto_step_id"), announce=False)
             return _preview_result(service.get(db, pipeline_id), summary), False
+        if name == "run_sql":
+            r = service.explore_sql(db, pipeline_id, args.get("query") or "", args.get("tables"),
+                                    args.get("on_step_id"), args.get("limit") or 20)
+            r["rows"] = [[_short(v) for v in row] for row in r["rows"]]
+            return r, False
         if name == "set_goal":
             return {"goal": service.set_goal(db, pipeline_id, args.get("goal") or "")}, False
         if name == "rename_pipeline":
@@ -350,7 +383,7 @@ def run_turn(pipeline_id: int, text: str) -> None:
 TOOL_LABELS = {"set_schema": "proposed the schema", "add_source": "added a source", "remove_source": "removed a source",
                "read_source": "read a source", "add_step": "proposed a step", "update_step": "changed a step",
                "remove_step": "removed a step", "run_preview": "ran a preview", "rename_pipeline": "renamed the pipeline",
-               "set_goal": "recorded the goal"}
+               "set_goal": "recorded the goal", "run_sql": "ran SQL"}
 
 
 def _chip(block: dict) -> dict:
@@ -366,6 +399,7 @@ def _chip(block: dict) -> dict:
         "set_schema": lambda: ", ".join(f.get("name", "") for f in a.get("fields") or []),
         "rename_pipeline": lambda: a.get("name"),
         "set_goal": lambda: a.get("goal"),
+        "run_sql": lambda: " ".join((a.get("query") or "").split()),
     }.get(block.get("name"), lambda: "")()
     return {"id": block.get("id"), "tool": block.get("name"), "label": TOOL_LABELS.get(block.get("name"), block.get("name")),
             "detail": _short(detail or "", 160)}
