@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { call } from "../api.js";
 import ChatPane from "./ChatPane.jsx";
 import PipelinePanel from "./PipelinePanel.jsx";
+import { usePageNav } from "./nav.js";
 
-// Chat on the left, the pipeline it builds on the right. Agent turns and runs
+// The node editor library is large; load the Pipeline page only when it opens.
+const PipelineWorkspace = lazy(() => import("./PipelineWorkspace.jsx"));
+
+// The Pipeline page is a full-width workspace led by the canvas, with the agent
+// in a drawer. The other pages keep the chat on the left. Agent turns and runs
 // happen in the background on the server; while the pipeline reports `busy`
 // this polls until it clears.
 export default function PipelineBuilder({ id, onBack }) {
@@ -11,7 +16,9 @@ export default function PipelineBuilder({ id, onBack }) {
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [pending, setPending] = useState(false);
+  const [sourcePick, setSourcePick] = useState(null);   // a source opened from the canvas
   const timer = useRef(null);
+  const nav = usePageNav(view);
 
   const load = useCallback(async () => {
     try {
@@ -65,6 +72,17 @@ export default function PipelineBuilder({ id, onBack }) {
   }
   if (!view) return <main className="view"><div className="empty">Loading pipeline…</div></main>;
 
+  if (nav.page === 2) {
+    return (
+      <main className="view pl-ws-view">
+        <Suspense fallback={<div className="empty">Loading the canvas…</div>}>
+          <PipelineWorkspace view={view} act={act} pending={pending} nav={nav} onBack={onBack}
+                             error={actionError} onClearError={() => setActionError(null)}
+                             onOpenSource={(id) => { setSourcePick(id || null); nav.go(1); }} />
+        </Suspense>
+      </main>
+    );
+  }
   return (
     <main className="view pl-view">
       <section className="pl-chat">
@@ -72,7 +90,7 @@ export default function PipelineBuilder({ id, onBack }) {
       </section>
       <section className="pl-panel">
         {actionError && <div className="banner err">{actionError}</div>}
-        <PipelinePanel view={view} act={act} pending={pending} />
+        <PipelinePanel view={view} act={act} pending={pending} nav={nav} sourcePick={sourcePick} />
       </section>
     </main>
   );

@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, ReactFlowProvider,
+  Background, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useNodesState, useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { STATE_TEXT, draftPortText, portText, stepsModel } from "./ports.js";
-import LoadMap from "./LoadMap.jsx";
+import { draftPortText, portText, stepsModel } from "./ports.js";
 
-// The pipeline as a node map: sources → steps → output.
+// The pipeline as a node map: sources → steps → output. It leads the page:
+// clicking a node opens it in the inspector beside it.
 //
 // Two modes. Outside a draft the canvas shows the applied steps: inspect,
 // preview and approve them, and drag nodes around. "Edit pipeline" opens a
 // draft, where steps are added, wired, merged and removed freely; nothing runs
-// or resets until Check passes and the planner presses Apply.
+// or resets until Check passes and the planner presses Apply. The agent's
+// proposal, when there is one, is drawn dashed on top: new nodes and wires,
+// and badges on the steps it would change or remove.
+//
+// Display only: the sources are listed in one box (each row still wires on its
+// own), and a run of Parse steps is drawn as one box with a row per field.
 //
 // Wires: step → step feeds the target (several wires into one step merge
 // their records); step → Output feeds the final output; source → Extract
@@ -21,6 +26,8 @@ import LoadMap from "./LoadMap.jsx";
 
 const COL = 230;    // auto-layout spacing for nodes with no saved position
 const ROW = 90;
+const ROW_H = 28;   // a row in the sources box or a Parse box
+const HEAD_H = 32;
 
 function cut(v, n = 28) {
   if (v == null) return "";
@@ -55,6 +62,7 @@ function stepStatus(s, out) {
 
 const STATUS_TEXT = { ok: "approved", pending: "needs approval", bad: "failed", idle: "not set" };
 const DRAFT_TEXT = { new: "new in the draft", changed: "changed in the draft", unchanged: "unchanged" };
+const PROP_TEXT = { new: "Proposed by agent", changed: "Proposed change", removed: "Proposed removal" };
 const TEAL = "#18B4A5", FAINT = "#8FA8BF";
 
 // ── Nodes ────────────────────────────────────────────────────────────────────
@@ -63,14 +71,16 @@ function Box({ data, children, inputs, outputs }) {
   const tip = data.errs?.length ? data.errs.join("\n")
     : data.draft ? `${data.title}: ${DRAFT_TEXT[data.draft]}` : STATUS_TEXT[data.status] ? `${data.title}: ${STATUS_TEXT[data.status]}` : data.title;
   return (
-    <div className={`pl-node ${data.status}${data.sel ? " sel" : ""}${data.running ? " running" : ""}${data.ghost ? " ghost" : ""}${data.draft ? " draft-" + data.draft : ""}`}
+    <div className={`pl-node ${data.status}${data.sel ? " sel" : ""}${data.running ? " running" : ""}${data.ghost ? " ghost" : ""}`
+                    + `${data.draft ? " draft-" + data.draft : ""}${data.trace ? " trace" : ""}${data.prop ? " prop-" + data.prop : ""}`}
          title={tip}>
       {inputs && <Handle type="target" position={Position.Left} className="pl-handle" isConnectable={!!data.connectable} title={data.inTip} />}
+      {data.prop && <span className="pl-node-prop">{PROP_TEXT[data.prop]}</span>}
       <span className="pl-node-kind">
         <span className="pl-node-dot" />{data.kind}
-        {data.n != null && <span className="pl-node-n">#{data.n}</span>}
+        {data.stepKind && <span className={"pl-node-badge " + data.stepKind} title={data.stepKind === "model" ? "Calls the model" : "A fixed rule: no model call"}>
+          {data.stepKind === "model" ? "Model" : "Rule"}</span>}
         {data.draft && data.draft !== "unchanged" && <span className={"pl-node-draft " + data.draft}>{data.draft}</span>}
-        {data.model && <span className="pl-node-model" title="Calls the model">model</span>}
       </span>
       <span className="pl-node-title">{data.title}</span>
       {data.sub && <span className="pl-node-sub">{data.sub}</span>}
@@ -82,11 +92,45 @@ function Box({ data, children, inputs, outputs }) {
   );
 }
 
+// A box holding rows: the sources, or a run of Parse steps.
+function GroupBox({ data }) {
+  return (
+    <div className={"pl-group" + (data.trace ? " trace" : "") + (data.sel ? " sel" : "")} style={{ width: data.w, height: data.h }}>
+      <div className="pl-group-head">
+        <b>{data.title}</b><span className="pl-group-n">{data.count}</span>
+        {data.sub && <span className="pl-node-sub">{data.sub}</span>}
+      </div>
+    </div>
+  );
+}
+
+// One row in a box: a source (wires out to the steps that read it) or a Parse step.
+function RowNode({ data }) {
+  return (
+    <div className={`pl-rownode ${data.status}${data.sel ? " sel" : ""}${data.trace ? " trace" : ""}${data.running ? " running" : ""}`
+                    + `${data.draft ? " draft-" + data.draft : ""}${data.prop ? " prop-" + data.prop : ""}`}
+         title={data.errs?.length ? data.errs.join("\n") : data.tip}>
+      {data.inputs && <Handle type="target" position={Position.Left} className={"pl-handle" + (data.inner === "in" || data.inner === "both" ? " inner" : "")}
+                              isConnectable={!!data.connectable} />}
+      <span className="pl-node-dot" />
+      <code className="pl-row-id">{data.kind}</code>
+      <span className="pl-row-title">{data.title}</span>
+      {data.draft && data.draft !== "unchanged" && <span className={"pl-node-draft " + data.draft}>{data.draft}</span>}
+      {data.prop && <span className="pl-node-draft prop">{data.prop === "removed" ? "remove?" : "change?"}</span>}
+      {data.errs?.length > 0 && <span className="pl-node-err">!</span>}
+      {data.outputs && <Handle type="source" position={Position.Right} className={"pl-handle" + (data.inner === "out" || data.inner === "both" ? " inner" : "")}
+                               isConnectable={!!data.connectable} />}
+    </div>
+  );
+}
+
 const NODE_TYPES = {
   source: (p) => <Box {...p} outputs />,
   step: (p) => <Box {...p} inputs outputs />,
   output: (p) => <Box {...p} inputs />,
   marker: (p) => <Box {...p} inputs outputs />,   // ghosts and the gaps node: wired, never connectable
+  group: GroupBox,
+  row: RowNode,
 };
 
 // ── Menus and details ────────────────────────────────────────────────────────
@@ -120,187 +164,37 @@ function Menu({ menu, items, onClose }) {
   );
 }
 
-function Detail({ label, children }) {
-  if (children == null || children === "" || children === false) return null;
-  return <div className="pl-dl"><span>{label}</span><div>{children}</div></div>;
-}
-
-function ConfigTable({ config }) {
-  const entries = Object.entries(config || {}).filter(([, v]) => v != null && v !== "");
-  if (!entries.length) return <span className="assess">defaults</span>;
-  return (
-    <table className="pl-kv"><tbody>
-      {entries.map(([k, v]) => (
-        <tr key={k}><td><code>{k}</code></td>
-          <td>{typeof v === "object" ? <pre>{JSON.stringify(v, null, 2)}</pre> : String(v)}</td></tr>
-      ))}
-    </tbody></table>
-  );
-}
-
-function Settings({ s }) {
-  return s.type === "sql" ? (
-    <>
-      <Detail label="Joins">{s.config?.tables?.join(", ") || "records only"}</Detail>
-      <Detail label="SQL"><pre className="pl-sql pl-sql-small">{s.config?.query}</pre></Detail>
-    </>
-  ) : <Detail label="Settings"><ConfigTable config={s.config} /></Detail>;
-}
-
-function DetailsPane({ id, view, model, problems, onClose, actions, act, disabled }) {
-  const d = view.definition;
-  const sources = model.sources;
-  const fields = d.schema?.fields || [];
-  let title, body;
-  if (id.startsWith("step:")) {
-    const sid = id.slice(5);
-    const s = model.steps.find((x) => x.id === sid);
-    if (!s) return null;
-    const cat = view.catalog[s.type] || {};
-    title = `${s.id} · ${cat.label || s.type}`;
-    const errs = problems.errors[id] || [], warns = problems.warnings[id] || [];
-    if (model.draft) {
-      const port = draftPortText(view, sid);
-      body = (
-        <>
-          {cat.description && <div className="muted-note" style={{ marginTop: 0 }}>{cat.description}</div>}
-          {errs.length > 0 && <Detail label="Errors"><ul className="pl-warn-list pl-bad">{errs.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
-          {warns.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{warns.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
-          <Detail label="Draft">{DRAFT_TEXT[s.draft_state]}</Detail>
-          <Detail label="Input">{port.input}</Detail>
-          <Detail label="Output">{port.output}</Detail>
-          <Detail label="Writes">{port.writes.length ? port.writes.map((w) => <code key={w} style={{ marginRight: ".3rem" }}>{w}</code>) : "no fields"}</Detail>
-          {port.schema && <Detail label="Out schema">{fields.map((f) => (
-            <div key={f.name}><code>{f.name}</code> <span className="assess">{STATE_TEXT[port.schema[f.name]] || "not produced"}</span></div>
-          ))}</Detail>}
-          <Detail label="Note">{s.note}</Detail>
-          <Settings s={s} />
-        </>
-      );
-    } else {
-      const order = model.order;
-      const out = view.outputs[s.id];
-      const prompt = view.prompts?.[s.id];
-      const port = portText(view, s.id);
-      body = (
-        <>
-          {cat.description && <div className="muted-note" style={{ marginTop: 0 }}>{cat.description}</div>}
-          <Detail label="Status">{STATUS_TEXT[stepStatus(s, out)]}</Detail>
-          <Detail label="Runs">{`#${order.indexOf(s.id) + 1} of ${order.length}`}</Detail>
-          <Detail label="Model call">{cat.model ? "yes, its prompt is in the editor below" : "no"}</Detail>
-          <Detail label="Note">{s.note}</Detail>
-          <Detail label="Input port">{port.input}</Detail>
-          <Detail label="Output port">{port.output}</Detail>
-          <Detail label="Writes">{port.writes.length ? port.writes.map((w) => <code key={w} style={{ marginRight: ".3rem" }}>{w}</code>) : "no fields"}</Detail>
-          {port.error && <Detail label="Problem"><span className="pl-bad">{port.error}</span></Detail>}
-          <Settings s={s} />
-          {prompt?.value && <Detail label="Instructions"><span className="pl-pre">{prompt.value}</span></Detail>}
-          <Detail label="Last preview">{out ? (out.error ? <span className="pl-bad">{out.error}</span> : `${out.count} record(s)`) : "not previewed with these settings"}</Detail>
-          {out?.warnings?.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{out.warnings.map((w, k) => <li key={k}>{w}</li>)}</ul></Detail>}
-        </>
-      );
-    }
-  } else if (id.startsWith("src:")) {
-    const s = sources.find((x) => `src:${x.id}` === id);
-    if (!s) return null;
-    const meta = view.sources[s.id] || {};
-    const readers = model.steps.filter((x) => (x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)))
-                                             || (x.type === "sql" && (x.config?.tables || []).includes(s.id)));
-    const table = view.source_tables?.[s.id];
-    title = `${s.id} · source`;
-    body = (
-      <>
-        <Detail label="Label">{s.label}</Detail>
-        <Detail label={s.kind === "grants_gov" ? "Search" : "URL"}>
-          {s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> : s.query}</Detail>
-        <Detail label="Fetched">{meta.error ? <span className="pl-bad">{meta.error}</span>
-          : meta.chars != null ? `${meta.chars.toLocaleString()} characters${meta.truncated ? " (truncated)" : ""}` : "—"}</Detail>
-        <Detail label="Read by">{readers.length ? readers.map((x) => `${x.id}${x.type === "sql" ? " (as a table)" : ""}`).join(", ") : "no Extract step"}</Detail>
-        {table && <Detail label="As a table">{Object.keys(table.columns).map((c) => <code key={c} style={{ marginRight: ".3rem" }}>{c}</code>)}
-          <div className="assess">A CSV: a SQL step can join it by its id ({s.id}), read exactly, with no Extract step.</div></Detail>}
-        <Detail label="Sources">{s.draft_state === "new" ? "new in the draft: applies with it" : d.sources_status === "final" ? "final" : "open"}</Detail>
-        {meta.preview && <Detail label="Preview"><span className="pl-pre">{cut(meta.preview, 400)}</span></Detail>}
-      </>
-    );
-  } else if (id === "output") {
-    const run = view.last_run;
-    title = "Output";
-    const errs = problems.errors.output || [], warns = problems.warnings.output || [];
-    body = (
-      <>
-        <Detail label="Takes">{model.outputFrom.join(" + ") || "nothing wired in"}</Detail>
-        {errs.length > 0 && <Detail label="Errors"><ul className="pl-warn-list pl-bad">{errs.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
-        {warns.length > 0 && <Detail label="Warnings"><ul className="pl-warn-list">{warns.map((t, k) => <li key={k}>{t}</li>)}</ul></Detail>}
-        {run ? (
-          <>
-            <Detail label="Last run">{(run.at || "").slice(0, 16).replace("T", " ")}{run.upto ? ` (preview to ${run.upto})` : " (full run)"}</Detail>
-            <Detail label="Records">{run.coverage?.records ?? 0}</Detail>
-            <Detail label="Required blanks">{(run.coverage?.required_gaps || []).join(", ") || "none"}</Detail>
-            <Detail label="Publish">{view.gate?.length ? <ul className="pl-warn-list">{view.gate.map((g, k) => <li key={k}>{g}</li>)}</ul> : "ready for review"}</Detail>
-          </>
-        ) : <div className="assess">No run yet.</div>}
-        {view.load_map && <Detail label="Catalogue"><LoadMap view={view} act={act} disabled={disabled} /></Detail>}
-      </>
-    );
-  } else if (id === "gaps") {
-    title = "Missing steps";
-    body = <div>No step produces {(view.design_gaps || []).map((g) => <code key={g} style={{ marginRight: ".3rem" }}>{g}</code>)}. Add a step that fills them in a draft, or ask the agent.</div>;
-  } else return null;
-  return (
-    <aside className="pl-details" onContextMenu={(e) => e.preventDefault()}>
-      <div className="pl-details-head"><b>{title}</b><span className="spacer" /><button className="link" onClick={onClose} aria-label="Close details">✕</button></div>
-      <div className="pl-details-body">{body}</div>
-      {actions?.length > 0 && <div className="pl-details-foot">{actions.map((a) => (
-        <button key={a.label} disabled={a.disabled} title={a.why || ""} className={a.primary ? "primary" : ""} onClick={a.run}>{a.label}</button>
-      ))}</div>}
-    </aside>
-  );
-}
-
-// What Check found, and what Apply would do.
-function CheckPanel({ view, onFocus, onClose }) {
-  const c = view.draft?.check;
-  if (!c) return null;
-  const steps = view.draft.steps || [];
-  const added = steps.filter((s) => s.draft_state === "new").map((s) => s.id);
-  const changed = steps.filter((s) => s.draft_state === "changed").map((s) => s.id);
-  const removed = view.draft.removed || [];
-  const srcAdded = (view.draft.sources || []).filter((s) => s.draft_state === "new").map((s) => s.id);
-  const srcRemoved = view.draft.removed_sources || [];
-  const resets = steps.filter((s) => s.resets).map((s) => s.id);
-  const plan = [added.length && `adds ${added.join(", ")}`, changed.length && `changes ${changed.join(", ")}`,
-                removed.length && `removes ${removed.join(", ")}`, srcAdded.length && `adds source ${srcAdded.join(", ")}`,
-                srcRemoved.length && `removes source ${srcRemoved.join(", ")}`].filter(Boolean).join("; ");
-  const item = (x, k, cls) => (
-    <li key={k} className={cls}>
-      {x.node ? <button type="button" className="link" onClick={() => onFocus(x.node)}>{x.node === "output" ? "Output" : x.node}</button> : null}
-      {x.node ? " · " : ""}{x.text}
-    </li>
-  );
-  return (
-    <div className="pl-check">
-      <div className="pl-check-head">
-        <b>Check</b>
-        {c.ok ? <span className="tag ok">no errors</span> : <span className="tag gone">{c.errors.length} error{c.errors.length > 1 ? "s" : ""}</span>}
-        {c.warnings.length > 0 && <span className="tag edited">{c.warnings.length} warning{c.warnings.length > 1 ? "s" : ""}</span>}
-        <span className="assess">Apply {plan || "changes nothing"}.{" "}
-          {resets.length ? `${resets.join(", ")} will need approving again; the other steps keep their approval.` : "Every applied step keeps its approval."}</span>
-        <span className="spacer" />
-        <button className="link" onClick={onClose} aria-label="Hide check">✕</button>
-      </div>
-      {(c.errors.length > 0 || c.warnings.length > 0) && (
-        <ul className="pl-check-list">
-          {c.errors.map((x, k) => item(x, "e" + k, "err"))}
-          {c.warnings.map((x, k) => item(x, "w" + k, "warn"))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 // ── The canvas ───────────────────────────────────────────────────────────────
 
-function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEditStep, onAskAgent, onOpenSource }) {
+// Runs of Parse steps drawn as one box: each step after the first takes only the
+// one before it, which feeds nothing else.
+function parseRuns(model) {
+  const used = {};
+  for (const s of model.steps) for (const i of model.inputs[s.id] || []) (used[i] ||= []).push(s.id);
+  for (const i of model.outputFrom) (used[i] ||= []).push("output");
+  const byId = Object.fromEntries(model.steps.map((s) => [s.id, s]));
+  const runs = [], seen = new Set();
+  for (const sid of model.order) {
+    const s = byId[sid];
+    if (!s || s.type !== "parse" || seen.has(sid)) continue;
+    const prev = (model.inputs[sid] || [])[0];
+    if ((model.inputs[sid] || []).length === 1 && byId[prev]?.type === "parse" && (used[prev] || []).length === 1) continue;
+    const run = [sid];
+    let cur = sid;
+    for (;;) {
+      const next = used[cur] || [];
+      if (next.length !== 1 || next[0] === "output" || byId[next[0]]?.type !== "parse" || (model.inputs[next[0]] || []).length !== 1) break;
+      cur = next[0];
+      run.push(cur);
+    }
+    run.forEach((x) => seen.add(x));
+    if (run.length > 1) runs.push(run);
+  }
+  return runs;
+}
+
+function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEditStep, onAskAgent, onOpenSource,
+                fill, highlight, focus, proposal, trace, onClearTrace, onShowCheck }) {
   const d = view.definition;
   const model = useMemo(() => stepsModel(view), [view]);
   const inDraft = model.draft;
@@ -317,10 +211,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   const wrap = useRef(null);
 
   const [menu, setMenu] = useState(null);
-  const [details, setDetails] = useState(null);
   const [notice, setNotice] = useState(null);
-  const [tall, setTall] = useState(false);
-  const [showCheck, setShowCheck] = useState(false);
   const flash = useCallback((text) => setNotice({ text, at: Date.now() }), []);
   useEffect(() => {
     if (!notice) return;
@@ -366,30 +257,76 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     send("PUT", "/layout", { positions: next });
   });
 
+  // Display grouping: sources in one box, runs of Parse steps in one box each.
+  const runs = useMemo(() => parseRuns(model), [model]);
+  const runOf = useMemo(() => Object.fromEntries(runs.flatMap((r) => r.map((sid, k) => [sid, { head: r[0], k, n: r.length }]))), [runs]);
+  const boxed = sources.length > 0;
+  const srcH = HEAD_H + sources.length * ROW_H + 6;
+
+  // The agent's proposal, over what is on the canvas now.
+  const prop = useMemo(() => {
+    if (!proposal) return null;
+    const have = new Set(steps.map((s) => s.id));
+    const haveSrc = new Set(sources.map((s) => s.id));
+    return {
+      steps: proposal.steps.filter((s) => s.prop_state === "new" && !have.has(s.id)),
+      changed: new Set(proposal.steps.filter((s) => s.prop_state === "changed").map((s) => s.id)),
+      removed: new Set(proposal.removed || []),
+      sources: proposal.sources.filter((x) => x.prop_state === "new" && !haveSrc.has(x.id)),
+      all: proposal.steps, outputFrom: proposal.output_from, allSources: proposal.sources,
+    };
+  }, [proposal, steps, sources]);
+
   const nodeIds = useMemo(() => [
-    ...(sources.length ? sources.map((s) => `src:${s.id}`) : ["sources"]),
+    ...(boxed ? ["srcbox", ...sources.map((s) => `src:${s.id}`)] : ["sources"]),
     ...(steps.length ? steps.map((s) => `step:${s.id}`) : ["steps"]),
+    ...runs.map((r) => `parse:${r[0]}`),
     ...(gaps.length ? ["gaps"] : []), "output",
-  ], [sources, steps, gaps.length]);
+  ], [boxed, sources, steps, runs, gaps.length]);
 
   const positions = useMemo(() => {
     const pos = {};
-    const srcIds = nodeIds.filter((id) => id.startsWith("src:") || id === "sources");
-    srcIds.forEach((id, i) => { pos[id] = layout[id] || { x: 0, y: (i - (srcIds.length - 1) / 2) * ROW * 0.85 }; });
+    if (boxed) {
+      pos.srcbox = layout.srcbox || { x: -30, y: -srcH / 2 };
+      sources.forEach((s, i) => { pos[`src:${s.id}`] = { x: 6, y: HEAD_H + i * ROW_H }; });   // inside the box
+    } else pos.sources = layout.sources || { x: 0, y: 0 };
+    // Depth in the graph, a run of Parse steps counting as one.
     const depth = {};
-    for (const sid of model.order) depth[sid] = Math.max(-1, ...(model.inputs[sid] || []).map((i) => depth[i] ?? -1)) + 1;
+    for (const sid of model.order) {
+      const r = runOf[sid];
+      depth[sid] = r && r.k > 0 ? depth[(model.inputs[sid] || [])[0]] : Math.max(-1, ...(model.inputs[sid] || []).map((i) => depth[i] ?? -1)) + 1;
+    }
     for (const s of steps) if (depth[s.id] == null) depth[s.id] = 0;
     const cols = {};
-    for (const s of steps) (cols[depth[s.id]] ||= []).push(s.id);
+    for (const s of steps) if (!runOf[s.id] || runOf[s.id].k === 0) (cols[depth[s.id]] ||= []).push(s.id);
     for (const [c, ids] of Object.entries(cols)) {
-      ids.forEach((sid, i) => { pos[`step:${sid}`] = layout[`step:${sid}`] || { x: (Number(c) + 1) * COL, y: (i - (ids.length - 1) / 2) * ROW }; });
+      ids.forEach((sid, i) => {
+        const key = runOf[sid] ? `parse:${sid}` : `step:${sid}`;
+        pos[key] = layout[key] || { x: (Number(c) + 1) * COL, y: (i - (ids.length - 1) / 2) * ROW * 1.3 - (runOf[sid] ? (HEAD_H + runOf[sid].n * ROW_H) / 2 - 30 : 0) };
+      });
     }
+    for (const r of runs) r.forEach((sid, k) => { pos[`step:${sid}`] = { x: 6, y: HEAD_H + k * ROW_H }; });
     const last = steps.length ? Math.max(...Object.values(depth)) + 1 : 1;
     if (!steps.length) pos.steps = layout.steps || { x: COL, y: 0 };
     if (gaps.length) pos.gaps = layout.gaps || { x: (last + 1) * COL, y: 0 };
     pos.output = layout.output || { x: (last + 1 + (gaps.length ? 1 : 0)) * COL, y: 0 };
+    // Proposed nodes: new sources under the sources box, new steps in a row below the graph.
+    if (prop) {
+      const bottom = Math.max(ROW, ...Object.entries(pos).filter(([k]) => !k.startsWith("src:") && !runOf[k.slice(5)]).map(([k, v]) => v.y + (k === "srcbox" ? srcH : 70)));
+      const base = boxed ? pos.srcbox : pos.sources;
+      prop.sources.forEach((x, i) => { pos[`prop:src:${x.id}`] = { x: base.x, y: (boxed ? base.y + srcH : base.y + 70) + 24 + i * 64 }; });
+      const pd = {};
+      const pIn = Object.fromEntries(prop.all.map((s) => [s.id, s.inputs || []]));
+      const depthOf = (sid, guard = 0) => {
+        if (pd[sid] != null) return pd[sid];
+        if (depth[sid] != null && !prop.steps.some((x) => x.id === sid)) return depth[sid];
+        pd[sid] = guard > 50 ? 0 : Math.max(-1, ...(pIn[sid] || []).map((i) => depthOf(i, guard + 1))) + 1;
+        return pd[sid];
+      };
+      prop.steps.forEach((x, i) => { pos[`prop:step:${x.id}`] = { x: (depthOf(x.id) + 1) * COL, y: bottom + 40 + (i % 2) * 10 }; });
+    }
     return pos;
-  }, [nodeIds, layout, model, steps, gaps.length]);
+  }, [boxed, srcH, sources, layout, model, steps, runs, runOf, gaps.length, prop]);
 
   // ── what to draw ───────────────────────────────────────────────────────────
   const status = useMemo(() => {
@@ -412,24 +349,32 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
 
   const base = useMemo(() => {
     const ns = [];
+    const lit = (id) => !!highlight?.has(id);
     const add = (id, type, data, extra = {}) => ns.push({
       id, type, position: positions[id], deletable: false, connectable: false, ...extra,
-      data: { status: status[id], sel: sel === id, connectable: false, ...data },
+      data: { status: status[id], sel: sel === id, connectable: false, trace: lit(id), ...data },
     });
     if (!sources.length) add("sources", "marker", { kind: "Sources", title: "No sources yet", sub: "add URLs or files", ghost: true });
+    else add("srcbox", "group", { title: "Sources", count: sources.length, w: 196, h: srcH, trace: sources.some((s) => lit(`src:${s.id}`)) },
+             { selectable: false, style: { width: 196, height: srcH } });
     sources.forEach((s) => {
       const meta = view.sources[s.id] || {};
-      add(`src:${s.id}`, "source", {
-        kind: s.id, title: cut(s.label, 24), connectable: editable, running: running === "sources",
+      add(`src:${s.id}`, "row", {
+        kind: s.id, title: cut(s.label, 26), outputs: true, connectable: editable, running: running === "sources",
         draft: inDraft && s.draft_state === "new" ? "new" : null,
-        sub: s.kind === "grants_gov" ? "Grants.gov search" : cut(s.url, 30),
-        meta: meta.error ? "unreadable" : meta.chars != null ? `${meta.chars.toLocaleString()} chars` : null,
-      }, { deletable: !disabled, connectable: editable });
+        prop: prop?.removed && (proposal?.removed_sources || []).includes(s.id) ? "removed" : null,
+        tip: `${s.label}\n${s.kind === "grants_gov" ? `Grants.gov: ${s.query}` : s.url}\n${meta.error ? "unreadable" : meta.chars != null ? `${meta.chars.toLocaleString()} characters` : ""}`,
+      }, { parentId: "srcbox", extent: "parent", draggable: false, deletable: !disabled, connectable: editable, style: { width: 184 } });
     });
     if (!steps.length) add("steps", "marker", {
       kind: "Steps", ghost: true, title: busy && d.sources_status === "final" ? "Outlining…" : "No steps yet",
       sub: canDesign ? (inDraft ? "add a step, or ask the agent" : "Edit pipeline to add steps") : designWhy.toLowerCase(),
     });
+    for (const r of runs) {
+      const h = HEAD_H + r.length * ROW_H + 6;
+      add(`parse:${r[0]}`, "group", { title: "Parse", count: `${r.length} fields`, w: 190, h, trace: r.some((x) => lit(`step:${x}`)) },
+          { selectable: false, style: { width: 190, height: h } });
+    }
     steps.forEach((s) => {
       const cat = view.catalog[s.type] || {};
       const id = `step:${s.id}`;
@@ -449,10 +394,21 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         inTip = `Input: ${port.input}`;
         outTip = `Output: ${port.output}\n${port.writes.length ? `Writes: ${port.writes.join(", ")}` : "Writes no fields"}`;
       }
+      const propState = prop?.removed.has(s.id) ? "removed" : prop?.changed.has(s.id) ? "changed" : null;
+      const r = runOf[s.id];
+      if (r) {
+        add(id, "row", {
+          kind: s.id, title: s.config?.as === "date" ? `${s.config?.field} → date` : s.config?.field || "", inputs: true, outputs: true,
+          inner: r.n === 1 ? null : r.k === 0 ? "out" : r.k === r.n - 1 ? "in" : "both",
+          running: running === s.id, connectable: editable, draft: inDraft ? s.draft_state : null, errs: problems.errors[id], prop: propState,
+          tip: `${s.id} Parse ${s.config?.field} as ${s.config?.as} · ${meta}\n${inTip}\n${outTip}`,
+        }, { parentId: `parse:${r.head}`, extent: "parent", draggable: false, deletable: editable, connectable: editable, style: { width: 178 } });
+        return;
+      }
       add(id, "step", {
-        kind: s.id, n: model.order.indexOf(s.id) + 1, title: cat.label || s.type, sub: stepSummary(s), model: cat.model,
+        kind: s.id, n: model.order.indexOf(s.id) + 1, title: cat.label || s.type, sub: stepSummary(s), stepKind: cat.model ? "model" : "rule",
         running: running === s.id, connectable: editable, meta, inTip, outTip,
-        draft: inDraft ? s.draft_state : null, errs: problems.errors[id],
+        draft: inDraft ? s.draft_state : null, errs: problems.errors[id], prop: propState,
       }, { deletable: editable, connectable: editable });
     });
     if (gaps.length) add("gaps", "marker", { kind: "Missing", title: "No step fills", sub: cut(gaps.join(", "), 40), meta: "right-click for help", ghost: true });
@@ -460,24 +416,39 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       kind: "Output", title: run && !run.upto && !inDraft ? "Final output" : "Output", connectable: editable,
       sub: inDraft ? (model.outputFrom.length ? `takes ${model.outputFrom.join(" + ")}` : "nothing wired in") : run ? `${run.coverage?.records ?? 0} records` : "no run yet",
       meta: inDraft ? null : run?.upto ? `preview to ${run.upto}` : run ? (run.at || "").slice(5, 16).replace("T", " ") : null,
-      errs: problems.errors.output,
+      errs: problems.errors.output, prop: prop && JSON.stringify(prop.outputFrom) !== JSON.stringify(model.outputFrom) ? "changed" : null,
     }, { connectable: editable });
+    // The agent's proposed nodes: dashed, not editable until added to the draft.
+    for (const x of prop?.sources || []) {
+      add(`prop:src:${x.id}`, "source", { kind: x.id, title: cut(x.label, 26), sub: x.kind === "grants_gov" ? "Grants.gov search" : cut(x.url, 30), prop: "new", status: "pending" },
+          { draggable: false });
+    }
+    for (const x of prop?.steps || []) {
+      const cat = view.catalog[x.type] || {};
+      add(`prop:step:${x.id}`, "step", { kind: x.id, title: cat.label || x.type, sub: stepSummary(x), stepKind: cat.model ? "model" : "rule", prop: "new", status: "pending" },
+          { draggable: false });
+    }
     return ns;
-  }, [positions, status, sel, sources, steps, view, editable, disabled, running, busy, d.sources_status, canDesign, designWhy, gaps, run, model, inDraft, problems]);
+  }, [positions, status, sel, sources, steps, view, editable, disabled, running, busy, d.sources_status, canDesign, designWhy, gaps, run, model, inDraft,
+      problems, runs, runOf, srcH, highlight, prop, proposal]);
 
   const edges = useMemo(() => {
     const es = [];
     const edge = (source, target, kind, extra = {}) => {
       const done = !inDraft && status[source] === "ok" && status[target] !== "bad";
+      const lit = highlight?.has(source) && highlight?.has(target);
       es.push({
         id: `${kind}:${source}>${target}`, source, target, data: { kind }, animated: busy,
-        className: `pl-wire ${kind}${done ? " done" : ""}`, deletable: false, reconnectable: false,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: done ? TEAL : FAINT }, ...extra,
+        className: `pl-wire ${kind}${done ? " done" : ""}${lit ? " lit" : ""}`, deletable: false, reconnectable: false,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: lit ? "#6055C9" : done ? TEAL : FAINT }, ...extra,
       });
     };
     const wired = { deletable: editable, reconnectable: editable };
     for (const s of steps) {
-      for (const i of model.inputs[s.id] || []) edge(`step:${i}`, `step:${s.id}`, "chain", wired);
+      for (const i of model.inputs[s.id] || []) {
+        if (runOf[s.id]?.k > 0 && runOf[i]?.head === runOf[s.id].head) continue;   // inside a Parse box
+        edge(`step:${i}`, `step:${s.id}`, "chain", wired);
+      }
       if (s.type === "extract") reads(s).forEach((sid) => edge(`src:${sid}`, `step:${s.id}`, "source", wired));
       if (s.type === "sql") (s.config?.tables || []).filter((t) => sources.some((x) => x.id === t))
         .forEach((sid) => edge(`src:${sid}`, `step:${s.id}`, "table", { deletable: editable }));
@@ -486,8 +457,29 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     const ends = model.outputFrom.filter((i) => steps.some((s) => s.id === i)).map((i) => `step:${i}`);
     if (gaps.length) { ends.forEach((e) => edge(e, "gaps", "chain")); edge("gaps", "output", "chain"); }
     else ends.forEach((e) => edge(e, "output", "out", wired));
+    // The proposal's new wires, dashed.
+    if (prop) {
+      const has = new Set(es.map((e) => `${e.source}>${e.target}`));
+      const isNew = new Set(prop.steps.map((x) => x.id));
+      const isNewSrc = new Set(prop.sources.map((x) => x.id));
+      const sNode = (sid) => (isNew.has(sid) ? `prop:step:${sid}` : `step:${sid}`);
+      const srcNode = (sid) => (isNewSrc.has(sid) ? `prop:src:${sid}` : `src:${sid}`);
+      const inBox = (a, b) => a.startsWith("step:") && b.startsWith("step:") && runOf[a.slice(5)] && runOf[a.slice(5)].head === runOf[b.slice(5)]?.head;
+      const ghost = (a, b) => {
+        if (has.has(`${a}>${b}`) || inBox(a, b)) return;
+        has.add(`${a}>${b}`);
+        es.push({ id: `prop:${a}>${b}`, source: a, target: b, data: { kind: "prop" }, className: "pl-wire prop", deletable: false,
+                  reconnectable: false, selectable: false, markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#6055C9" } });
+      };
+      const allSrc = prop.allSources.map((x) => x.id);
+      for (const x of prop.all) {
+        for (const i of x.inputs || []) ghost(sNode(i), sNode(x.id));
+        if (x.type === "extract") for (const sid of x.config?.source_ids?.length ? x.config.source_ids : allSrc) ghost(srcNode(sid), sNode(x.id));
+      }
+      for (const i of prop.outputFrom) ghost(sNode(i), "output");
+    }
     return es;
-  }, [steps, sources, gaps.length, status, busy, editable, reads, model, inDraft]);
+  }, [steps, sources, gaps.length, status, busy, editable, reads, model, inDraft, runOf, highlight, prop]);
 
   // React Flow keeps measurements and selection on the node objects; refresh the rest.
   const [nodes, setNodes, onNodesChange] = useNodesState(base);
@@ -511,7 +503,17 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   useEffect(() => {
     const t = setTimeout(() => flow.fitView({ padding: 0.18, maxZoom: 1, duration: 200 }), 30);
     return () => clearTimeout(t);
-  }, [idsKey, tall, flow]);
+  }, [idsKey, flow]);
+
+  // Asked to show some nodes (a check item, a proposed change, a traced value).
+  useEffect(() => {
+    if (!focus) return;
+    const t = setTimeout(() => {
+      const ids = focus.ids.flatMap((id) => [id, `prop:${id}`]).filter((id) => flow.getNode(id));
+      if (ids.length) flow.fitView({ nodes: ids.map((id) => ({ id })), padding: 0.7, maxZoom: 1.1, duration: 250 });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [focus, flow]);
 
   // ── operations ─────────────────────────────────────────────────────────────
   const stepOf = (nodeId) => steps.find((s) => `step:${s.id}` === nodeId);
@@ -520,14 +522,6 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   const nodeOf = (id) => (id === "output" ? "output" : id.slice(5));
 
   const openDraft = () => send("POST", "/draft");
-  const discard = () => {
-    if (window.confirm("Discard the draft? Your changes to the steps are lost; the applied steps stay as they are.")) send("DELETE", "/draft");
-  };
-  const apply = async () => {
-    const r = await send("POST", "/draft/apply");
-    if (r) flash(`Applied${r.reset?.length ? `: ${r.reset.join(", ")} need approving again` : ""}.`);
-    else setShowCheck(true);
-  };
   const link = (a, b) => send("POST", "/draft/links", { source: a, target: b });
   const unlink = (a, b) => send("POST", "/draft/unlink", { source: a, target: b });
   const wire = (src, s) => {
@@ -618,11 +612,6 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     saveLayout({ ...keep, ...moved });
   };
   const tidy = () => { saveLayout({}); setTimeout(() => flow.fitView({ padding: 0.18, maxZoom: 1, duration: 200 }), 60); };
-  const focus = (node) => {
-    const id = node === "output" ? "output" : `step:${node}`;
-    onSelect(id);
-    flow.fitView({ nodes: [{ id }], padding: 0.8, maxZoom: 1.1, duration: 250 });
-  };
 
   // A step added from the background lands where the planner right-clicked.
   const addAt = (opts) => onAddStep({ ...opts, onAdded: (id, at) => at && saveLayout({ ...layout, [`step:${id}`]: at }) });
@@ -644,8 +633,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     while (ancestors.length) { const a = ancestors.pop(); if (!seen.has(a)) { seen.add(a); ancestors.push(...(model.inputs[a] || [])); } }
     const blocked = steps.filter((x) => seen.has(x.id) && x.status !== "approved").map((x) => x.id);
     return [
-      { label: "Open in editor", run: () => onSelect(`step:${s.id}`) },
-      { label: "Details", run: () => setDetails(`step:${s.id}`) },
+      { label: "Open", run: () => onSelect(`step:${s.id}`) },
       "-",
       { label: out ? "Preview again" : "Preview this step", run: () => preview(s), ...lock },
       s.status !== "approved" && {
@@ -661,7 +649,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
 
   function draftStepItems(s) {
     return [
-      { label: "Details", run: () => setDetails(`step:${s.id}`) },
+      { label: "Open", run: () => onSelect(`step:${s.id}`) },
       { label: "Edit settings…", run: () => onEditStep(s.id), ...lock },
       "-",
       { label: "Insert step before…", run: () => addAt({ before: s.id }), ...lock },
@@ -679,6 +667,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         : { label: "Edit pipeline", run: openDraft, ...lock, ...design },
       { label: d.sources_status === "final" ? "Add source here… (in a draft)" : "Add source here…", run: () => addSource(m.flow), ...lock },
       { label: "Ask the agent…", run: () => onAskAgent(""), ...lock },
+      inDraft && { label: "Check results", run: onShowCheck },
       "-",
       { label: "Fit to view", run: () => flow.fitView({ padding: 0.18, maxZoom: 1, duration: 200 }) },
       { label: "Tidy layout", run: tidy, ...(Object.keys(layout).length ? {} : off("Nothing has been moved")) },
@@ -690,7 +679,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       if (e.data.kind === "source") {
         const src = sourceOf(e.source), s = stepOf(e.target);
         return [
-          { label: `${s.id} reads ${src.id}`, run: () => setDetails(e.source) },
+          { label: `${s.id} reads ${src.id}`, run: () => onSelect(e.source) },
           "-",
           { label: "Disconnect", key: "Del", danger: true, run: () => unwire(src, s), ...lock },
         ];
@@ -698,7 +687,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       if (e.data.kind === "table") {
         const src = sourceOf(e.source), s = stepOf(e.target);
         return [
-          { label: `${s.id} joins ${src.id} as a table`, run: () => setDetails(e.source) },
+          { label: `${s.id} joins ${src.id} as a table`, run: () => onSelect(e.source) },
           "-",
           { label: "Stop joining it", key: "Del", danger: true, run: () => unjoin(src, s), ...lock },
         ];
@@ -714,18 +703,17 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     if (s) return inDraft ? draftStepItems(s) : liveStepItems(s);
     const src = sourceOf(id);
     if (src) return [
-      { label: "Details", run: () => setDetails(id) },
+      { label: "Open", run: () => onSelect(id) },
       { label: "Open in the source reader", run: () => onOpenSource(src.id) },
       "-",
       { label: d.sources_status === "final" ? "Remove source (in a draft)" : "Remove source", key: "Del", danger: true, run: () => removeSource(src), ...lock },
     ];
     if (id === "output") return [
-      !inDraft && { label: "Open output", run: () => onSelect("output") },
-      { label: "Details", run: () => setDetails("output") },
+      { label: "Open", run: () => onSelect("output") },
       !inDraft && { label: "Run the whole pipeline", run: () => send("POST", "/run", {}), ...lock, ...(steps.length ? {} : off("No steps yet")) },
     ];
     if (id === "gaps") return [
-      { label: "Details", run: () => setDetails("gaps") },
+      { label: "Explain", run: () => flash(`No step produces ${gaps.join(", ")}. Add the steps that fill them in a draft, or ask the agent.`) },
       { label: "Edit pipeline to add them", run: openDraft, ...lock, ...design },
       { label: "Ask the agent to fill them…", run: () => onAskAgent(`No step produces ${gaps.join(", ")}. Add the steps that fill ${gaps.length > 1 ? "them" : "it"}.`), ...lock },
     ];
@@ -741,64 +729,39 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     return [];
   }
 
-  function detailActions(id) {
-    const s = stepOf(id);
-    if (s) {
-      if (inDraft) return [{ label: "Edit settings…", run: () => onEditStep(s.id), primary: true, ...lock }];
-      const items = liveStepItems(s).filter((x) => x && x !== "-" && ["Open in editor", "Preview this step", "Preview again"].includes(x.label));
-      return items.map((x, k) => ({ ...x, primary: k === 0 }));
-    }
-    const src = sourceOf(id);
-    if (src) return [{ label: "Open in the source reader", run: () => onOpenSource(src.id) }];
-    if (id === "output" && !inDraft) return [{ label: "Open output", run: () => onSelect("output"), primary: true }];
-    return [];
-  }
 
-  const check = view.draft?.check;
-  const approved = steps.filter((s) => s.status === "approved").length;
+  // Group boxes stand for their rows; proposed nodes are not editable yet.
+  const real = (id) => (id.startsWith("parse:") ? `step:${id.slice(6)}` : id);
   return (
-    <div className={"pl-canvas" + (busy ? " busy" : "") + (tall ? " tall" : "") + (inDraft ? " drafting" : "")}>
-      <div className="pl-canvas-bar">
-        <b>Pipeline</b>
-        {inDraft ? (
-          <>
-            <span className="tag edited">draft</span>
-            <span className="assess">{check ? (check.ok ? `ready to apply${check.warnings.length ? `, ${check.warnings.length} warning(s)` : ""}` : `${check.errors.length} error(s) to fix`) : ""}</span>
-          </>
-        ) : <span className="assess">{steps.length ? `${approved}/${steps.length} steps approved` : "no steps yet"}</span>}
-        <span className="spacer" />
-        {inDraft ? (
-          <>
-            <button className="pl-bar-btn" disabled={disabled} onClick={() => addAt({ connect: true })} title="Add a step at the end, feeding Output">+ Add step</button>
-            <button className={"pl-bar-btn" + (showCheck ? " on" : "")} onClick={() => setShowCheck(!showCheck)}>
-              Check{check && !check.ok ? ` (${check.errors.length})` : ""}
-            </button>
-            <button className="pl-bar-btn primary" disabled={disabled || !check?.ok} onClick={apply}
-                    title={check?.ok ? "Replace the steps with the draft" : "Fix the errors Check reports first"}>Apply</button>
-            <button className="pl-bar-btn" disabled={disabled} onClick={discard}>Discard</button>
-          </>
-        ) : (
-          <button className="pl-bar-btn primary" disabled={disabled || !canDesign} title={canDesign ? "Change the steps in a draft" : designWhy}
-                  onClick={openDraft}>Edit pipeline</button>
-        )}
-        <button className="pl-bar-btn" disabled={disabled} onClick={() => addSource(null)}
+    <div className={"pl-canvas" + (busy ? " busy" : "") + (inDraft ? " drafting" : "") + (fill ? " fill" : "")}>
+      <div className="pl-toolbar">
+        <button disabled={disabled} onClick={() => addSource(null)}
                 title={d.sources_status === "final" ? "Goes into the draft; wire it to an Extract step" : "Fetched and added now"}>+ Source</button>
-        <button className="pl-bar-btn" disabled={disabled} onClick={() => onAskAgent("")}>Ask the agent</button>
-        <button className="pl-bar-btn" title="Put every node back in its default place" disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
-        <button className="pl-bar-btn" title={tall ? "Shrink the canvas" : "Make the canvas taller"} onClick={() => setTall(!tall)}>{tall ? "Shrink" : "Expand"}</button>
+        <button disabled={disabled || !canDesign} onClick={() => addAt({ connect: true })}
+                title={canDesign ? (inDraft ? "Add a step at the end, feeding Output" : "Opens a draft") : designWhy}>+ Step</button>
+        <span className="pl-toolbar-sep" />
+        <button title="Put every node back in its default place" disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
       </div>
-      {inDraft && showCheck && <CheckPanel view={view} onFocus={focus} onClose={() => setShowCheck(false)} />}
+      {trace && (
+        <div className="pl-trace-chip"><span className="pl-node-dot" /> Tracing <b>{trace}</b>
+          <button className="link" onClick={onClearTrace} aria-label="Stop tracing">✕</button></div>
+      )}
       <div className="pl-flow" ref={wrap}>
         <ReactFlow
           nodes={nodes} edges={shownEdges} nodeTypes={NODE_TYPES}
           onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-          onNodeClick={(_e, n) => { setMenu(null); onSelect(n.id); }}
-          onNodeDoubleClick={(_e, n) => {
-            if (stepOf(n.id) && !disabled && canDesign) onEditStep(n.id.slice(5));
-            else if (sourceOf(n.id)) onOpenSource(n.id.slice(4));
-            else setDetails(n.id);
+          onNodeClick={(_e, n) => {
+            setMenu(null);
+            if (n.id.startsWith("prop:")) { flash("Proposed by the agent: add it to the draft from the Agent tab to edit it."); return; }
+            if (n.id !== "srcbox") onSelect(real(n.id));
           }}
-          onNodeContextMenu={(e, n) => openMenu(e, { kind: "node", id: n.id })}
+          onNodeDoubleClick={(_e, n) => {
+            const id = real(n.id);
+            if (stepOf(id) && !disabled && canDesign) onEditStep(id.slice(5));
+            else if (sourceOf(id)) onOpenSource(id.slice(4));
+          }}
+          onNodeContextMenu={(e, n) => (n.id.startsWith("prop:") ? e.preventDefault()
+            : openMenu(e, { kind: "node", id: n.id === "srcbox" ? "sources" : real(n.id) }))}
           onEdgeContextMenu={(e, ed) => openMenu(e, { kind: "edge", id: ed.id })}
           onPaneContextMenu={(e) => openMenu(e, { kind: "pane", flow: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }) })}
           onPaneClick={() => setMenu(null)}
@@ -814,17 +777,9 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         >
           <Background gap={16} size={1} />
           <Controls showInteractive={false} position="bottom-left" />
-          <MiniMap pannable zoomable position="bottom-right" className="pl-minimap"
-                   nodeColor={(n) => ({ ok: TEAL, pending: "#6055C9", bad: "#D1495B" }[n.data?.status] || FAINT)} />
         </ReactFlow>
-        <div className="pl-flow-hint">
-          {inDraft ? "Draft: drag from a dot to wire · several wires into a step merge · right-click for more · nothing changes until Apply"
-            : "Edit pipeline to change the steps · right-click for more · Ctrl+scroll to zoom"}
-        </div>
         {notice && <div className="pl-toast" role="status" onClick={() => setNotice(null)}>{notice.text}</div>}
         {menu && <Menu menu={menu} items={menuItems(menu)} onClose={() => setMenu(null)} />}
-        {details && <DetailsPane id={details} view={view} model={model} problems={problems} onClose={() => setDetails(null)}
-                                 actions={detailActions(details)} act={send} disabled={disabled} />}
       </div>
     </div>
   );

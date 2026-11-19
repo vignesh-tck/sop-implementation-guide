@@ -1,33 +1,16 @@
-import { Fragment, Suspense, lazy, useState } from "react";
+import { Fragment, useState } from "react";
 import { call } from "../api.js";
 import SourceReader from "./SourceReader.jsx";
-import StepDialog from "./StepDialog.jsx";
-import SourceDialog from "./SourceDialog.jsx";
 import LoadMap from "./LoadMap.jsx";
-import StepPorts, { DraftPorts } from "./StepPorts.jsx";
-import { ancestorsOf, stepsModel } from "./ports.js";
-
-// The node editor library is large; load it only when the Pipeline page opens.
-const PipelineCanvas = lazy(() => import("./PipelineCanvas.jsx"));
-
-const KIND_TEXT = {
-  extracted: "read from the source",
-  derived: "computed by a step",
-  inferred: "model judgement (approved step)",
-  assumed: "value you stated",
-  manual: "your override",
-};
+import Stepper from "./Stepper.jsx";
+import { PAGES } from "./nav.js";
+import { stepsModel } from "./ports.js";
+import { KIND_TEXT, attention, isEdited, short } from "./records.js";
 
 function StatusTag({ status }) {
   if (status === "approved") return <span className="tag ok">approved</span>;
   if (status === "proposed") return <span className="tag edited">needs approval</span>;
   return <span className="tag">not set</span>;
-}
-
-function short(v, n = 80) {
-  if (v == null) return "";
-  const s = typeof v === "object" ? JSON.stringify(v) : String(v);
-  return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
 // ── Target schema ────────────────────────────────────────────────────────────
@@ -159,215 +142,7 @@ function SourcesCard({ view, act, disabled, picked, onPick }) {
   );
 }
 
-// ── Steps: design each one (prompt, preview, approve), in order ──────────────
-
-function GapsNote({ view }) {
-  if (!view.definition.steps?.length || !view.design_gaps?.length) return null;
-  return (
-    <div className="pl-gate" style={{ marginTop: 0, marginBottom: ".5rem" }}>
-      <b>The pipeline is not complete:</b> no step produces {view.design_gaps.map((g, i) => <Fragment key={g}>{i > 0 && ", "}<code>{g}</code></Fragment>)}.
-      Add the missing steps in a draft (Edit pipeline on the canvas), or ask the agent.
-    </div>
-  );
-}
-
-function NoStepsCard({ view }) {
-  return (
-    <div className="card">
-      <h4>Steps</h4>
-      <div className="assess">
-        {view.definition.schema?.status !== "approved" ? "First approve the target schema, then add sources and mark them final."
-          : view.definition.sources_status !== "final" ? "Add the sources and mark them final: the agent then outlines every step."
-          : view.busy ? "The agent is looking at the sources and outlining the steps…"
-          : view.draft ? "The steps are in a draft on the canvas: check it, then press Apply to review them one by one."
-          : "The agent outlines the steps from the final sources into a draft. If none appear, ask it in the chat, or press Edit pipeline on the canvas to add them yourself."}
-      </div>
-    </div>
-  );
-}
-
-// The step selected on the canvas: read its prompt, tune the instructions,
-// preview what it produces, then approve it.
-function StepCard({ view, act, disabled, stepId, onSelect, onEdit }) {
-  const model = stepsModel(view, false);
-  const steps = model.order.map((id) => model.steps.find((x) => x.id === id)).filter(Boolean);
-  const i = steps.findIndex((x) => x.id === stepId);
-  const s = steps[i];
-  if (!s) return null;
-  const out = view.outputs[s.id];
-  const cat = view.catalog[s.type] || {};
-  const before = ancestorsOf(model, s.id);
-  const blockedBy = steps.filter((x) => before.has(x.id) && x.status !== "approved").map((x) => x.id);
-  const go = (j) => steps[j] && onSelect(`step:${steps[j].id}`);
-  const feedsOutputAlone = model.outputFrom.length === 1 && model.outputFrom[0] === s.id;
-  return (
-    <div className={"card pl-step-card" + (out?.error ? " failed" : "")}>
-      <div className="pl-step-head">
-        <span className="assess">Step {i + 1} of {steps.length}</span>
-        <b className="pl-id">{s.id}</b>
-        <b>{cat.label || s.type}</b>
-        {cat.model && <span className="tag derived" title="Calls the model; its prompt is shown below">model</span>}
-        <StatusTag status={s.status} />
-        <span className="spacer" />
-        {out && !out.error && <span className="assess">{out.count} record(s)</span>}
-        <button className="pl-nav" disabled={i === 0} title="Previous step" onClick={() => go(i - 1)}>‹</button>
-        <button className="pl-nav" disabled={i === steps.length - 1} title="Next step" onClick={() => go(i + 1)}>›</button>
-      </div>
-      {cat.description && <div className="muted-note" style={{ marginTop: ".2rem" }}>{cat.description}</div>}
-      {s.note && <div className="pl-step-note">{s.note}</div>}
-      <StepDesigner key={s.id} step={s} out={out} view={view} act={act} disabled={disabled}
-                    isLast={feedsOutputAlone} blockedBy={blockedBy} onEdit={() => onEdit(s.id)} />
-      <div className="pl-step-actions">
-        <button disabled={disabled} onClick={() => onEdit(s.id)} title="Opens a draft if none is open">Edit settings…</button>
-      </div>
-      <div className="muted-note">
-        Settings, wiring, adding and removing steps change in a draft (Edit pipeline on the canvas), checked before they apply.
-        Tuning a model step's instructions here sends it and the steps after it back for approval.
-      </div>
-    </div>
-  );
-}
-
-// The prompt a model step sends: fixed text (locked) around the planner's instructions (editable).
-function PromptEditor({ step, prompt, act, disabled }) {
-  const [draft, setDraft] = useState(null);       // null = not editing
-  if (!prompt) return null;
-  if (prompt.error) return <div className="banner err">{prompt.error}</div>;
-  const value = draft ?? prompt.value;
-  const editing = draft !== null;
-  const save = () => act("PATCH", `/steps/${step.id}`, { config: { ...step.config, [prompt.key]: draft.trim() || null } })
-    .then((r) => r && setDraft(null));
-  const slot = (first) => (
-    first ? (
-      editing ? (
-        <textarea className="pl-slot-edit" rows={Math.min(10, Math.max(3, value.split("\n").length + 1))} value={value}
-                  placeholder={prompt.default} onChange={(e) => setDraft(e.target.value)} autoFocus />
-      ) : (
-        <span className="pl-slot" onClick={() => !disabled && setDraft(prompt.value)} title="Click to edit">
-          {prompt.value || <i>{prompt.default}</i>}
-        </span>
-      )
-    ) : <span className="pl-slot ref">{prompt.value || prompt.default} <i>(your instructions, as above)</i></span>
-  );
-  return (
-    <div className="pl-prompt">
-      <div className="pl-prompt-head">
-        <b>Prompt</b>
-        <span className="assess"><span className="pl-slot-key">highlighted</span> = your instructions, editable · grey = fixed rules (they keep every value quoted and checked)</span>
-      </div>
-      {prompt.prompts.map((pr, i) => (
-        <details key={i} open={i === 0}>
-          <summary>{pr.title}</summary>
-          <pre className="pl-prompt-text">{pr.before}{slot(i === 0)}{pr.after}</pre>
-        </details>
-      ))}
-      {prompt.fields && (
-        <details>
-          <summary>Fields requested ({prompt.fields.length}), sent as the answer format</summary>
-          <ul className="pl-prompt-fields">{prompt.fields.map((f) => <li key={f.name}><code>{f.name}</code>: {f.description}</li>)}</ul>
-          <div className="assess">These come from the target schema; ask in the chat to change a field's description.</div>
-        </details>
-      )}
-      <div className="btn-row">
-        {editing ? (
-          <>
-            <button className="primary" disabled={disabled || value === prompt.value} onClick={save}>Save instructions</button>
-            <button onClick={() => setDraft(null)}>Cancel</button>
-            {step.type === "geo_tie" && <button onClick={() => setDraft(prompt.default)}>Reset to default</button>}
-          </>
-        ) : (
-          <button disabled={disabled} onClick={() => setDraft(prompt.value)}>Edit instructions</button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StepDesigner({ step, out, view, act, disabled, isLast, blockedBy, onEdit }) {
-  const fields = view.definition.schema?.fields || [];
-  const [onlyAttention, setOnlyAttention] = useState(false);
-  const prompt = view.prompts?.[step.id];
-  const records = out?.records || [];
-  const shown = onlyAttention ? records.filter((r) => attention(r, fields).length) : records;
-  const flagged = records.filter((r) => attention(r, fields).length).length;
-  const preview = () => act("POST", "/run", isLast ? {} : { upto: step.id });
-  return (
-    <div className="pl-review">
-      {prompt ? <PromptEditor step={step} prompt={prompt} act={act} disabled={disabled} /> : step.type === "sql" ? (
-        <div className="pl-settings">
-          <b>SQL</b> <span className="assess">(runs in a sandbox on this step's input; no model call)</span>{" "}
-          <button className="link" disabled={disabled} onClick={onEdit}>edit</button>
-          {step.config?.tables?.length > 0 && <div className="assess">Joins: {step.config.tables.map((t) => <code key={t} style={{ marginRight: ".3rem" }}>{t}</code>)}</div>}
-          <pre className="pl-prompt-text pl-sql">{step.config?.query}</pre>
-        </div>
-      ) : (
-        <div className="pl-settings">
-          <b>Settings</b> <span className="assess">(no model call)</span>{" "}
-          <button className="link" disabled={disabled} onClick={onEdit}>edit</button>
-          <pre className="pl-prompt-text">{JSON.stringify(step.config, null, 2)}</pre>
-        </div>
-      )}
-      <StepPorts view={view} stepId={step.id} />
-      <div className="pl-output-head">
-        <b>Output</b>
-        <button disabled={disabled} className={!out ? "primary" : ""} onClick={preview}>
-          {out ? "Preview again" : "Preview this step"}
-        </button>
-        {isLast && <span className="assess">previewing the step that feeds Output runs the whole pipeline</span>}
-      </div>
-      {!out && <div className="assess">Not previewed with the current settings yet.</div>}
-      {out && view.last_run?.upto === step.id && view.last_run.reused?.length > 0 && (
-        <div className="assess">Started after {view.last_run.reused[view.last_run.reused.length - 1]}: the steps before it were unchanged, so their saved output was reused.</div>
-      )}
-      {out?.error && <div className="banner err">{out.error}</div>}
-      {out && !out.error && (
-        <>
-          {out.warnings?.length > 0 && (
-            <ul className="pl-warn pl-warn-list">{out.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
-          )}
-          {records.length < out.count && <div className="assess">First {records.length} of {out.count} records shown.</div>}
-          <label className="assess"><input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} />
-            {" "}Only records needing attention ({flagged})</label>
-          <RecordsTable records={shown} fields={fields} rowNote={(r) => attention(r, fields).join("; ")}
-                        renderDetail={(r) => (
-                          <>
-                            {attention(r, fields).length > 0 && <div className="pl-bad">Check: {attention(r, fields).join("; ")}</div>}
-                            <RecordDetail r={r} fields={fields} />
-                          </>
-                        )} />
-          <div className="muted-note">Not right? Tune the instructions above (or ask the agent) and preview again. Rows are corrected on the final output, once every step is approved.</div>
-        </>
-      )}
-      <div className="pl-review-foot">
-        {step.status === "approved" ? <span className="tag ok">approved</span> : (
-          <button className="primary" disabled={disabled || !out || !!out?.error || blockedBy.length > 0}
-                  title={blockedBy.length ? `Approve ${blockedBy.join(", ")} first` : !out ? "Preview it first" : ""}
-                  onClick={() => act("POST", `/steps/${step.id}/approve`)}>
-            Approve {step.id}
-          </button>
-        )}
-        {blockedBy.length > 0 && step.status !== "approved" && <span className="assess">Approve {blockedBy.join(", ")} first: this step works on their output.</span>}
-      </div>
-    </div>
-  );
-}
-
 // ── Final output: the planner's overrides ────────────────────────────────────
-
-function isEdited(r) {
-  return r.added_by_you || Object.values(r.prov || {}).some((p) => p.kind === "manual");
-}
-
-function attention(r, fields) {
-  const why = [];
-  if (r.excerpt_verified === false) why.push("excerpt not found in source");
-  const unq = fields.filter((f) => r.prov?.[f.name]?.verified === false).map((f) => f.name);
-  if (unq.length) why.push(`no confirmed quote: ${unq.join(", ")}`);
-  if (r.conflicts?.length) why.push(`conflict: ${r.conflicts.map((c) => c.field).join(", ")}`);
-  const blank = fields.filter((f) => f.required && !f.accept_blank && (r.values?.[f.name] == null || r.values[f.name] === "")).map((f) => f.name);
-  if (blank.length) why.push(`required blank: ${blank.join(", ")}`);
-  return why;
-}
 
 function asInput(v) {
   if (v == null) return "";
@@ -752,62 +527,7 @@ function VersionsCard({ view }) {
   );
 }
 
-// Where the design currently waits, in the order the user set: schema, sources,
-// then each step in turn, then run and publish.
-function stageOf(view) {
-  const d = view.definition;
-  const steps = d.steps || [];
-  if (d.schema?.status !== "approved") return "schema";
-  if (d.sources_status !== "final") return "sources";
-  if (steps.length === 0) return "steps";
-  const open = steps.find((s) => s.status !== "approved");
-  if (open) return `step:${open.id}`;
-  return "publish";
-}
-
-function NoOutputCard() {
-  return (
-    <div className="card">
-      <h4>Output</h4>
-      <div className="assess">No run yet. Preview a step to see what it produces.</div>
-    </div>
-  );
-}
-
 // ── The wizard: one page per design stage, in the order the user set ────────
-
-const PAGES = [
-  { key: "schema", label: "Target schema" },
-  { key: "sources", label: "Sources" },
-  { key: "steps", label: "Pipeline" },
-  { key: "review", label: "Review & publish" },
-];
-
-function pageOf(stage) {
-  if (stage === "schema") return 0;
-  if (stage === "sources") return 1;
-  if (stage === "publish") return 3;
-  return 2;
-}
-
-function Stepper({ view, page, reached, onGo }) {
-  return (
-    <nav className="pl-stepper" aria-label="Pipeline design stages">
-      {PAGES.map((p, i) => (
-        <button key={p.key} type="button" disabled={i > reached} onClick={() => onGo(i)}
-                className={"pl-stage" + (i === page ? " cur" : "") + (i < reached ? " done" : "") + (i === reached ? " now" : "")}
-                aria-current={i === page ? "step" : undefined}
-                title={i > reached ? `Finish ${PAGES[reached].label.toLowerCase()} first` : p.label}>
-          <span className="pl-stage-n">{i < reached ? "✓" : i + 1}</span>
-          <span className="pl-stage-label">{p.label}</span>
-        </button>
-      ))}
-      <span className="spacer" />
-      {view.busy && <span className="pl-progress"><span className="pl-spin" />
-        {view.progress || (view.busy === "turn" ? "The agent is working…" : "Running…")}</span>}
-    </nav>
-  );
-}
 
 function SourcesPage({ view, act, disabled, initialPick }) {
   const sources = stepsModel(view).sources;
@@ -821,133 +541,15 @@ function SourcesPage({ view, act, disabled, initialPick }) {
   );
 }
 
-// A source picked on the canvas.
-function SourceNodeCard({ view, sourceId, onOpen }) {
-  const m = stepsModel(view);
-  const s = m.sources.find((x) => x.id === sourceId);
-  if (!s) return null;
-  const meta = view.sources[s.id] || {};
-  const readers = m.steps.filter((x) => x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)));
-  return (
-    <div className="card">
-      <h4><b className="pl-id">{s.id}</b> {s.label} {s.draft_state === "new" && <span className="tag edited">new in draft</span>}</h4>
-      <div className="assess">{s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> : s.query}</div>
-      <div className={meta.error ? "pl-bad" : "assess"} style={{ marginTop: ".3rem" }}>
-        {meta.error || (meta.chars != null ? `${meta.chars.toLocaleString()} characters${meta.truncated ? " (truncated)" : ""}` : "")}
-      </div>
-      <div className="assess" style={{ marginTop: ".3rem" }}>
-        Read by {readers.length ? readers.map((x) => x.id).join(", ") : "no Extract step yet"}. Drag from its dot to an Extract
-        step to wire it; select a wire and press Delete to unwire it.
-      </div>
-      <div className="btn-row"><button onClick={onOpen}>Open in the source reader</button></div>
-    </div>
-  );
-}
-
-// A step selected while a draft is open: its draft settings, ports and problems.
-function DraftStepCard({ view, act, disabled, stepId, onEdit }) {
-  const s = (view.draft?.steps || []).find((x) => x.id === stepId);
-  if (!s) return null;
-  const cat = view.catalog[s.type] || {};
-  const check = view.draft.check || { errors: [], warnings: [] };
-  const errs = check.errors.filter((e) => e.node === s.id), warns = check.warnings.filter((w) => w.node === s.id);
-  return (
-    <div className="card pl-step-card">
-      <div className="pl-step-head">
-        <span className="tag edited">draft</span>
-        <b className="pl-id">{s.id}</b>
-        <b>{cat.label || s.type}</b>
-        {cat.model && <span className="tag derived">model</span>}
-        <span className="assess">{{ new: "new", changed: "changed", unchanged: "unchanged" }[s.draft_state]}</span>
-      </div>
-      {cat.description && <div className="muted-note" style={{ marginTop: ".2rem" }}>{cat.description}</div>}
-      {s.note && <div className="pl-step-note">{s.note}</div>}
-      {errs.length > 0 && <ul className="pl-check-list">{errs.map((e, k) => <li key={k} className="err">{e.text}</li>)}</ul>}
-      {warns.length > 0 && <ul className="pl-check-list">{warns.map((w, k) => <li key={k} className="warn">{w.text}</li>)}</ul>}
-      <div className="pl-settings">
-        <b>{s.type === "sql" ? "SQL" : "Settings"}</b>{" "}
-        <button className="link" disabled={disabled} onClick={() => onEdit(s.id)}>edit</button>
-        {s.type === "sql" ? <pre className="pl-prompt-text pl-sql">{s.config?.query}</pre>
-          : <pre className="pl-prompt-text">{JSON.stringify(s.config, null, 2)}</pre>}
-      </div>
-      <DraftPorts view={view} stepId={s.id} />
-      <div className="pl-step-actions">
-        <button disabled={disabled} onClick={() => onEdit(s.id)}>Edit settings…</button>
-        <button disabled={disabled} onClick={() => act("DELETE", `/draft/steps/${s.id}`)}>Remove from draft</button>
-      </div>
-      <div className="muted-note">Draft steps have no output yet: preview and approve them after Apply.</div>
-    </div>
-  );
-}
-
-function StepsPage({ view, act, disabled, stage, onSources }) {
-  // The selection follows the design: when a step is approved the next one opens.
-  const [sel, setSel] = useState(stage);
-  const [seenStage, setSeenStage] = useState(stage);
-  if (stage !== seenStage) { setSeenStage(stage); setSel(stage); }
-  const [dialog, setDialog] = useState(null);     // StepDialog's mode, plus onAdded
-  const [srcDialog, setSrcDialog] = useState(null);  // { at, onAdded } while adding a source
-
-  const steps = view.definition.steps || [];
-  const sources = stepsModel(view).sources;
-  const draftIds = new Set((view.draft?.steps || []).map((s) => s.id));
-  let shown = sel;
-  const draftPick = view.draft && shown?.startsWith("step:") && draftIds.has(shown.slice(5));
-  if (shown?.startsWith("step:") && !draftPick && !steps.some((s) => `step:${s.id}` === shown)) shown = null;
-  if (shown?.startsWith("src:") && !sources.some((s) => `src:${s.id}` === shown)) shown = null;
-  if (!shown || shown === "steps" || shown === "publish" || shown === "sources") {
-    const open = steps.find((s) => s.status !== "approved") || steps[0];
-    shown = open ? `step:${open.id}` : "steps";
-  }
-  if (shown === "gaps") shown = steps.length ? `step:${steps[steps.length - 1].id}` : "steps";
-  const pick = (k) => (k === "sources" ? onSources() : setSel(k));
-  const onEdit = (id) => setDialog({ kind: "edit", stepId: id });
-
-  let body;
-  if (shown === "steps") body = <NoStepsCard view={view} />;
-  else if (shown === "output") body = view.last_run ? <OutputCard view={view} act={act} disabled={disabled} /> : <NoOutputCard />;
-  else if (shown.startsWith("src:")) body = <SourceNodeCard view={view} sourceId={shown.slice(4)} onOpen={() => onSources(shown.slice(4))} />;
-  else if (view.draft && draftIds.has(shown.slice(5))) body = <DraftStepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onEdit={onEdit} />;
-  else body = <StepCard view={view} act={act} disabled={disabled} stepId={shown.slice(5)} onSelect={setSel} onEdit={onEdit} />;
-  return (
-    <>
-      <Suspense fallback={<div className="pl-canvas"><div className="pl-canvas-bar"><b>Pipeline</b><span className="assess">loading the canvas…</span></div><div className="pl-flow" /></div>}>
-        <PipelineCanvas view={view} sel={sel === "gaps" ? "gaps" : shown} onSelect={pick} act={act} disabled={disabled}
-                        onAddStep={(m) => setDialog({ kind: "add", ...m })} onAddSource={setSrcDialog} onEditStep={onEdit}
-                        onAskAgent={(text) => setDialog({ kind: "ask", text })} onOpenSource={onSources} />
-      </Suspense>
-      {shown.startsWith("step:") && <GapsNote view={view} />}
-      {body}
-      {dialog && <StepDialog view={view} mode={dialog} act={act} onAdded={dialog.onAdded}
-                             onClose={() => setDialog(null)} />}
-      {srcDialog && <SourceDialog view={view} act={act} at={srcDialog.at} onAdded={srcDialog.onAdded}
-                                  onClose={() => setSrcDialog(null)} />}
-    </>
-  );
-}
-
-export default function PipelinePanel({ view, act, pending }) {
+// The pages other than Pipeline (which has its own workspace): the schema, the
+// sources, then review and publish. `nav` is the page state from usePageNav.
+export default function PipelinePanel({ view, act, pending, nav, sourcePick }) {
   const disabled = pending || !!view.busy;
-  const stage = stageOf(view);
-  const reached = pageOf(stage);
-
-  // The page follows the design: finishing a stage slides the next one in, and
-  // a change that reopens an earlier stage (from the chat, say) slides back to it.
-  const [nav, setNav] = useState({ page: reached, dir: "fwd" });
-  const [seenReached, setSeenReached] = useState(reached);
-  if (reached !== seenReached) {
-    setSeenReached(reached);
-    setNav({ page: reached, dir: reached >= nav.page ? "fwd" : "back" });
-  }
-  const page = Math.min(nav.page, reached);
-  const go = (i) => i !== page && setNav({ page: i, dir: i > page ? "fwd" : "back" });
-  const [sourcePick, setSourcePick] = useState(null);    // a source opened from the canvas
+  const { page, reached, go } = nav;
 
   let body;
   if (page === 0) body = <SchemaCard view={view} act={act} disabled={disabled} />;
-  else if (page === 1) body = <SourcesPage view={view} act={act} disabled={disabled} initialPick={sourcePick} />;
-  else if (page === 2) body = <StepsPage view={view} act={act} disabled={disabled} stage={stage}
-                                         onSources={(id) => { setSourcePick(id || null); go(1); }} />;
+  else if (page === 1) body = <SourcesPage key={sourcePick || "-"} view={view} act={act} disabled={disabled} initialPick={sourcePick} />;
   else body = (
     <>
       <PublishCard view={view} act={act} disabled={disabled} />

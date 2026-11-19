@@ -3,7 +3,7 @@ import { uploadFiles } from "../api.js";
 
 // Just enough formatting for the agent's replies: paragraphs, line breaks,
 // **bold** and `code`. Built as elements, never as HTML.
-function Rich({ text }) {
+export function Rich({ text }) {
   return (text || "").split(/\n{2,}/).map((para, i) => (
     <p key={i}>
       {para.split("\n").map((line, j) => (
@@ -19,7 +19,7 @@ function Rich({ text }) {
   ));
 }
 
-function Message({ m }) {
+export function Message({ m }) {
   if (m.kind === "event") {
     if (m.level === "intro") return <div className="pl-msg agent"><Rich text={m.text} /></div>;
     return <div className={"pl-event " + (m.level || "info")}>{m.text}</div>;
