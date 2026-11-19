@@ -26,6 +26,7 @@ from backend.repositories.pipelines import (
     PipelineRepository,
     PipelineRunRepository,
 )
+from backend.tools import datasets
 
 log = logging.getLogger(__name__)
 
@@ -1396,6 +1397,12 @@ def _source_tables(p: dict) -> dict:
     return out
 
 
+def _next_version(db: Client, kind: str) -> int:
+    """The number the next publish of this kind will get (versions are per kind, not per pipeline)."""
+    latest = datasets.resolve(db, kind)
+    return (latest["version"] if latest else 0) + 1
+
+
 def view(db: Client, pipeline_id: int) -> dict[str, Any]:
     p = get(db, pipeline_id)
     s = kinds.spec(p["kind"])
@@ -1428,5 +1435,6 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"], "config": v["config"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},
         "loads": PipelineRunRepository(db).for_pipeline(pipeline_id),
+        "next_dataset_version": _next_version(db, p["kind"]),
         "created_by": p.get("created_by"), "created_at": p.get("created_at"),
     }

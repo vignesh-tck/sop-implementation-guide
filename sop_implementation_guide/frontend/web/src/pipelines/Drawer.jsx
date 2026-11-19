@@ -40,7 +40,7 @@ function ProposalCard({ view, act, disabled, onFocus, onShow }) {
   );
 }
 
-function AgentTab({ view, act, disabled, compose, context, contextLabel, onClearContext, onFocus, onShowProposal }) {
+export function AgentTab({ view, act, disabled, compose, context, contextLabel, onClearContext, onFocus, onShowProposal }) {
   const [text, setText] = useState("");
   const [seen, setSeen] = useState(null);
   if (compose && compose.at !== seen) { setSeen(compose.at); setText(compose.text); }

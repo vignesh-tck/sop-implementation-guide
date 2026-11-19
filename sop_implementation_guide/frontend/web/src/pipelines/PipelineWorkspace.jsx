@@ -56,7 +56,7 @@ function DraftBar({ view, act, disabled, onCheck, onAgent }) {
   );
 }
 
-export default function PipelineWorkspace({ view, act, pending, nav, onBack, error, onClearError, onOpenSource }) {
+export default function PipelineWorkspace({ view, act, pending, nav, onBack, error, onClearError, onOpenSource, initialSel }) {
   const disabled = pending || !!view.busy;
   const model = useMemo(() => stepsModel(view), [view]);
   const [mode, setMode] = useState("canvas");          // canvas | records
@@ -68,7 +68,7 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
   const setHeight = (h) => { setHeightState(h); keep("pl.drawer.h", h); };
 
   // The selection follows the design: when a step is approved the next one opens.
-  const [sel, setSel] = useState(nav.stage.startsWith("step:") ? nav.stage : null);
+  const [sel, setSel] = useState(initialSel || (nav.stage.startsWith("step:") ? nav.stage : null));
   const [seenStage, setSeenStage] = useState(nav.stage);
   if (nav.stage !== seenStage) { setSeenStage(nav.stage); if (nav.stage.startsWith("step:")) setSel(nav.stage); }
 
