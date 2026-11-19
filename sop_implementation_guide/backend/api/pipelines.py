@@ -333,6 +333,70 @@ def explore_sql(pipeline_id: int, body: SqlQuery, db: Client = Depends(get_supab
                                              body.limit or 50, body.inputs))
 
 
+@router.post("/{pipeline_id}/proposal/accept")
+def accept_proposal(pipeline_id: int, db: Client = Depends(get_supabase)):
+    """Add the agent's proposal to the draft (opening one)."""
+    _idle(db, pipeline_id)
+    _call(lambda: service.accept_proposal(db, pipeline_id))
+    return _view(db, pipeline_id)
+
+
+@router.delete("/{pipeline_id}/proposal")
+def discard_proposal(pipeline_id: int, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.discard_proposal(db, pipeline_id))
+    return _view(db, pipeline_id)
+
+
+class Accept(BaseModel):
+    fields: Optional[list[str]] = None   # none = every field of the record
+    accept: bool = True
+
+
+@router.post("/{pipeline_id}/records/{record_id}/accept")
+def accept_record(pipeline_id: int, record_id: str, body: Accept, db: Client = Depends(get_supabase)):
+    """Accept a record's values (or some fields) as they are now. Resets no step."""
+    _idle(db, pipeline_id)
+    _call(lambda: service.accept_values(db, pipeline_id, record_id, body.fields, body.accept))
+    return _view(db, pipeline_id)
+
+
+class Flag(BaseModel):
+    note: Optional[str] = None
+    flag: bool = True
+
+
+@router.post("/{pipeline_id}/records/{record_id}/flag")
+def flag_record(pipeline_id: int, record_id: str, body: Flag, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.flag_record(db, pipeline_id, record_id, body.note, body.flag))
+    return _view(db, pipeline_id)
+
+
+class Rerun(BaseModel):
+    step_id: str
+
+
+def _rerun_bg(pipeline_id: int, step_id: str, record_id: str) -> None:
+    db = get_supabase()
+    try:
+        service.rerun_record(db, pipeline_id, step_id, record_id)
+    except Exception as e:  # noqa: BLE001
+        service.event(db, pipeline_id, f"Re-running {step_id} for {record_id} failed: {e}", level="error")
+    finally:
+        PipelineRepository(db).release(pipeline_id)
+
+
+@router.post("/{pipeline_id}/records/{record_id}/rerun", status_code=202)
+def rerun_record(pipeline_id: int, record_id: str, body: Rerun, db: Client = Depends(get_supabase)):
+    """Run one model step again on one record (fresh), then the steps after it. Runs in the background."""
+    _call(lambda: service.get(db, pipeline_id))
+    if not _call(lambda: PipelineRepository(db).claim(pipeline_id, "run")):
+        raise HTTPException(status_code=409, detail="The pipeline is busy.")
+    threading.Thread(target=_rerun_bg, args=(pipeline_id, body.step_id, record_id), daemon=True).start()
+    return {"status": "running", "poll": f"GET /pipelines/{pipeline_id}"}
+
+
 class LoadMap(BaseModel):
     mapping: dict[str, Optional[str]]   # catalogue column -> output field, or null for none
 

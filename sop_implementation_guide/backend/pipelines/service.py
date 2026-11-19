@@ -10,7 +10,11 @@ written into the chat as an event, so the conversation shows what happened.
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import logging
+import threading
+from datetime import datetime, timezone
 from typing import Any
 
 from supabase import Client
@@ -33,14 +37,321 @@ def get(db: Client, pipeline_id: int) -> dict:
     p["definition"] = {"schema": {"status": None, "fields": []}, "sources": [], "steps": [],
                        **(p.get("definition") or {})}
     p["state"] = p.get("state") or {}
+    if _proposing():
+        _as_proposal(p)
     return p
 
 
 def _save(db: Client, p: dict, **extra) -> None:
-    PipelineRepository(db).update(p["id"], {"definition": p["definition"], **extra})
+    PipelineRepository(db).update(p["id"], {"definition": _stored(p), **extra})
+
+
+# ── The agent's proposal ─────────────────────────────────────────────────────
+#
+# The agent does not edit the draft: inside proposing() every draft edit (steps,
+# wiring, and sources once they are final) goes to definition["proposal"], a
+# copy of the draft (or of the applied steps when no draft is open). The planner
+# sees it as dashed nodes and a list of changes, then adds it to the draft or
+# discards it. It records what it was based on, so a proposal made before the
+# planner changed the steps is refused rather than undoing their change.
+
+_LOCAL = threading.local()
+
+
+@contextlib.contextmanager
+def proposing():
+    """Route draft edits made in this thread to the agent's proposal."""
+    prev = getattr(_LOCAL, "proposing", False)
+    _LOCAL.proposing = True
+    try:
+        yield
+    finally:
+        _LOCAL.proposing = prev
+
+
+def _proposing() -> bool:
+    return getattr(_LOCAL, "proposing", False)
+
+
+def _base_hash(definition: dict) -> str:
+    """The steps, wiring and sources the planner has now: the draft's, else the applied ones."""
+    d = definition.get("draft")
+    if d is None:
+        g = graph.normalise(definition)
+        steps, out, srcs = g["steps"], g["output_from"], definition.get("sources") or []
+    else:
+        steps, out = d["steps"], d["output_from"]
+        srcs = d["sources"] if d.get("sources") is not None else definition.get("sources") or []
+    return engine._hash({"steps": [{k: s.get(k) for k in ("id", "type", "config", "inputs")} for s in steps],
+                         "output_from": out, "sources": [s["id"] for s in srcs]})
+
+
+def _as_proposal(p: dict) -> None:
+    """Show the proposal to the draft functions as if it were the draft."""
+    d = p["definition"]
+    prop = d.get("proposal")
+    p["_real_draft"] = d.get("draft")
+    p["_proposal_base"] = prop["base"] if prop else _base_hash(d)
+    start = prop["draft"] if prop else d.get("draft")
+    if start is None:
+        d.pop("draft", None)
+    else:
+        d["draft"] = copy.deepcopy(start)
+
+
+def _stored(p: dict) -> dict:
+    """The definition as saved: in proposal mode the edited "draft" is the proposal."""
+    d = p["definition"]
+    if "_real_draft" not in p:
+        return d
+    out = {k: v for k, v in d.items() if k not in ("draft", "proposal")}
+    edited, real = d.get("draft"), p["_real_draft"]
+    if edited is not None and (d.get("proposal") or edited != real):
+        out["proposal"] = {"draft": edited, "base": p["_proposal_base"],
+                           "at": datetime.now(timezone.utc).isoformat()}
+    if real is not None:
+        out["draft"] = real
+    return out
+
+
+def _proposal_parts(p: dict) -> tuple[dict, dict] | None:
+    """(the planner's current steps as a definition, the proposal as a definition)."""
+    d = p["definition"]
+    prop = d.get("proposal")
+    if not prop:
+        return None
+    base = _draft_definition(p) if d.get("draft") is not None else {
+        **{k: v for k, v in d.items() if k not in ("draft", "proposal")},
+        "steps": graph.normalise(d)["steps"], "output_from": graph.normalise(d)["output_from"]}
+    pd = prop["draft"]
+    mine = {**{k: v for k, v in d.items() if k not in ("draft", "proposal")},
+            "sources": pd["sources"] if pd.get("sources") is not None else base["sources"],
+            "steps": pd["steps"], "output_from": pd["output_from"]}
+    return base, mine
+
+
+def _label(s: dict) -> str:
+    return f"{s['id']} {engine.CATALOG.get(s['type'], {}).get('label', s['type'])}"
+
+
+def proposal_changes(p: dict) -> list[dict]:
+    """What adding the proposal would change, one line per node: {op: + ~ -, node, text}."""
+    parts = _proposal_parts(p)
+    if not parts:
+        return []
+    base, mine = parts
+    old = {s["id"]: s for s in base["steps"]}
+    new = {s["id"]: s for s in mine["steps"]}
+    old_src = {s["id"]: s for s in base["sources"]}
+    new_src = {s["id"]: s for s in mine["sources"]}
+    out = []
+    for sid, s in new_src.items():
+        if sid not in old_src:
+            out.append({"op": "+", "node": f"src:{sid}", "text": f"Source {sid} · {s.get('label') or s.get('url') or s.get('query')}"})
+    for sid in old_src:
+        if sid not in new_src:
+            out.append({"op": "-", "node": f"src:{sid}", "text": f"Source {sid} removed"})
+    all_old = [x["id"] for x in base["sources"]]
+    all_new = [x["id"] for x in mine["sources"]]
+    for sid, s in new.items():
+        ins = s.get("inputs") or []
+        if sid not in old:
+            where = f" after {', '.join(ins)}" if ins else " (starts a branch)"
+            out.append({"op": "+", "node": f"step:{sid}", "text": f"{_label(s)}{where}"})
+            continue
+        o = old[sid]
+        bits = []
+        if s["type"] == "extract":
+            was = set((o.get("config") or {}).get("source_ids") or all_old)
+            now = set((s.get("config") or {}).get("source_ids") or all_new)
+            if now - was:
+                bits.append(f"also reads {', '.join(sorted(now - was))}")
+            if was - now:
+                bits.append(f"no longer reads {', '.join(sorted(was - now))}")
+        oc, nc = dict(o.get("config") or {}), dict(s.get("config") or {})
+        oc.pop("source_ids", None), nc.pop("source_ids", None)
+        keys = sorted(k for k in set(oc) | set(nc) if oc.get(k) != nc.get(k))
+        if keys:
+            slot = engine.EDITABLE.get(s["type"])
+            bits.append("instructions changed" if keys == [slot] else f"settings changed ({', '.join(keys)})")
+        if (o.get("inputs") or []) != ins:
+            bits.append(f"now takes {', '.join(ins) or 'nothing'}")
+        if bits:
+            out.append({"op": "~", "node": f"step:{sid}", "text": f"{_label(s)} {'; '.join(bits)}"})
+    for sid, o in old.items():
+        if sid not in new:
+            out.append({"op": "-", "node": f"step:{sid}", "text": f"{_label(o)} removed"})
+    if base["output_from"] != mine["output_from"]:
+        out.append({"op": "~", "node": "output", "text": f"Output now takes {', '.join(mine['output_from']) or 'nothing'}"})
+    return out
+
+
+def _proposal_view(p: dict) -> dict | None:
+    parts = _proposal_parts(p)
+    if not parts:
+        return None
+    base, mine = parts
+    prop = p["definition"]["proposal"]
+    old = {s["id"]: s for s in base["steps"]}
+    changes = proposal_changes(p)
+    changed = {c["node"][5:] for c in changes if c["op"] == "~" and c["node"].startswith("step:")}
+    result = check.check(p["kind"], mine)
+    return {
+        "at": prop.get("at"), "stale": prop.get("base") != _base_hash(p["definition"]), "changes": changes,
+        "steps": [{**s, "prop_state": "new" if s["id"] not in old else "changed" if s["id"] in changed else "unchanged"}
+                  for s in mine["steps"]],
+        "sources": [{**x, "prop_state": "unchanged" if x["id"] in {y["id"] for y in base["sources"]} else "new"}
+                    for x in mine["sources"]],
+        "removed": [sid for sid in old if sid not in {s["id"] for s in mine["steps"]}],
+        "removed_sources": [x["id"] for x in base["sources"] if x["id"] not in {y["id"] for y in mine["sources"]}],
+        "output_from": mine["output_from"],
+        "check": {"ok": result["ok"], "errors": result["errors"], "warnings": result["warnings"]},
+    }
+
+
+def accept_proposal(db: Client, pipeline_id: int) -> dict:
+    """The planner adds the agent's proposal to the draft (opening one). Nothing runs or resets until Apply."""
+    p = get(db, pipeline_id)
+    d = p["definition"]
+    prop = d.get("proposal")
+    if not prop:
+        raise PipelineError("There is no proposal from the agent.")
+    _require_design(p)
+    if prop.get("base") != _base_hash(d):
+        raise PipelineError("The steps changed after the agent made this proposal, so adding it would undo your change. "
+                            "Discard it and ask the agent again.")
+    changes = proposal_changes(p)
+    d["draft"] = prop["draft"]
+    d.pop("proposal")
+    _save(db, p)
+    event(db, pipeline_id, f"You added the agent's proposal to the draft ({len(changes)} change{'s' if len(changes) != 1 else ''}): "
+          + "; ".join(c["text"] for c in changes[:6]) + ("…" if len(changes) > 6 else "") + ". Check it, then Apply.")
+    return d["draft"]
+
+
+def discard_proposal(db: Client, pipeline_id: int) -> None:
+    p = get(db, pipeline_id)
+    d = p["definition"]
+    prop = d.pop("proposal", None)
+    if not prop:
+        raise PipelineError("There is no proposal from the agent.")
+    keep = {s["id"] for s in d["sources"]} | {s["id"] for s in (d.get("draft") or {}).get("sources") or []}
+    for sid in [x["id"] for x in prop["draft"].get("sources") or [] if x["id"] not in keep]:
+        (p["state"].get("sources") or {}).pop(sid, None)
+    _save(db, p, state=p["state"])
+    event(db, pipeline_id, "You discarded the agent's proposal.")
+
+
+# ── Reviewing the output's records ───────────────────────────────────────────
+#
+# definition["record_review"]: values the planner accepted (a fingerprint per
+# field, so a value that changes on a re-run needs accepting again) and records
+# they flagged for follow-up. Keyed by record id, with the record's key (its
+# first field) to notice a re-run that numbered records differently. Not part
+# of the definition hash: reviewing changes no step.
+
+def _review(p: dict) -> dict:
+    rr = p["definition"].setdefault("record_review", {})
+    rr.setdefault("accepted", {})
+    rr.setdefault("flags", {})
+    return rr
+
+
+def _final_record(p: dict, record_id: str) -> dict:
+    rec = next((r for r in (p["state"].get("last_run") or {}).get("records") or [] if r["id"] == record_id), None)
+    if not rec:
+        raise PipelineError(f"No record {record_id} in the last run's output.")
+    return rec
+
+
+def accept_values(db: Client, pipeline_id: int, record_id: str, fields: list[str] | None = None,
+                  accept: bool = True) -> dict:
+    """Accept (or stop accepting) a record's values as they are now: the named fields, or all of them."""
+    p = get(db, pipeline_id)
+    rec = _final_record(p, record_id)
+    names = [f["name"] for f in _fields(p)]
+    for n in fields or []:
+        if n not in names:
+            raise PipelineError(f"No field {n!r}.")
+    rr = _review(p)
+    mark = rr["accepted"].get(record_id)
+    if not mark or mark.get("key") != engine.record_key(rec, _fields(p)):
+        mark = rr["accepted"][record_id] = {"key": engine.record_key(rec, _fields(p)), "fields": {}}
+    for n in fields or names:
+        if accept:
+            mark["fields"][n] = engine._hash(rec["values"].get(n))
+        else:
+            mark["fields"].pop(n, None)
+    if not mark["fields"]:
+        rr["accepted"].pop(record_id)
+    _save(db, p)
+    if not fields:
+        event(db, pipeline_id, f"You {'accepted' if accept else 'reopened'} record {record_id} ({rec['values'].get(names[0]) or 'unnamed'}).")
+    return review_marks(p).get(record_id) or {}
+
+
+def flag_record(db: Client, pipeline_id: int, record_id: str, note: str | None = None, flag: bool = True) -> dict:
+    p = get(db, pipeline_id)
+    rec = _final_record(p, record_id)
+    rr = _review(p)
+    name = rec["values"].get(_fields(p)[0]["name"]) if _fields(p) else None
+    if flag:
+        rr["flags"][record_id] = {"key": engine.record_key(rec, _fields(p)), "note": (note or "").strip()[:500],
+                                  "at": datetime.now(timezone.utc).isoformat()}
+    else:
+        rr["flags"].pop(record_id, None)
+    _save(db, p)
+    event(db, pipeline_id, f"You {'flagged' if flag else 'cleared the flag on'} record {record_id} ({name or 'unnamed'})"
+          + (f": {note.strip()}" if flag and (note or "").strip() else "."), level="warn" if flag else "info")
+    return review_marks(p).get(record_id) or {}
+
+
+def review_marks(p: dict) -> dict:
+    """Per record of the last output: which fields are accepted as they are now, and its flag."""
+    rr = p["definition"].get("record_review") or {}
+    fields = _fields(p)
+    out = {}
+    for rec in (p["state"].get("last_run") or {}).get("records") or []:
+        key = engine.record_key(rec, fields)
+        a = (rr.get("accepted") or {}).get(rec["id"])
+        accepted = [n for n, fp in (a or {}).get("fields", {}).items()
+                    if a.get("key") == key and fp == engine._hash(rec["values"].get(n))]
+        flag = (rr.get("flags") or {}).get(rec["id"])
+        if flag and flag.get("key") != key:
+            flag = None
+        if accepted or flag:
+            out[rec["id"]] = {"accepted": accepted, "flag": flag}
+    return out
+
+
+def rerun_record(db: Client, pipeline_id: int, step_id: str, record_id: str) -> dict:
+    """Run one model step again on one record, without the cache, then the steps after it."""
+    p = get(db, pipeline_id)
+    repo = PipelineRepository(db)
+
+    def progress(msg: str) -> None:
+        p["state"]["progress"] = msg
+        repo.update(pipeline_id, {"state": p["state"]})
+
+    state = engine.rerun_record(p["kind"], p["definition"], p["state"], step_id, record_id,
+                                context=p["definition"].get("goal") or p["name"], progress=progress,
+                                refs=reference_rows(db))
+    state.pop("progress", None)
+    last = state["last_run"]
+    if last.get("upto") is None:
+        review(db, p)
+    repo.update(pipeline_id, {"state": state})
+    rec = next((r for r in last.get("records") or [] if r["id"] == record_id), None)
+    event(db, pipeline_id, f"You re-ran {step_id} for record {record_id}"
+          + (f" ({rec['values'].get(_fields(p)[0]['name'])})" if rec and _fields(p) else "")
+          + (f". Errors: {'; '.join(last['errors'])}" if last["errors"] else ": the steps after it were recomputed."),
+          level="warn" if last["errors"] else "info")
+    return summarise_run(last)
 
 
 def event(db: Client, pipeline_id: int, text: str, level: str = "info") -> None:
+    if _proposing():
+        return   # the agent's proposal lists its own changes; the draft's events would misdescribe them
     PipelineMessageRepository(db).add(pipeline_id, "event", {"text": text, "level": level})
 
 
@@ -1108,6 +1419,8 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
                   for st in graph.normalise(p["definition"])["steps"]},
         "graph": _graph_view(p["definition"]),
         "draft": _draft_view(p),
+        "proposal": _proposal_view(p),
+        "review_marks": review_marks(p),
         "ref_tables": {k: {"description": v["description"], "columns": v["columns"]} for k, v in engine.REF_TABLES.items()},
         "source_tables": _source_tables(p),
         "load_map": view_load_map(p),

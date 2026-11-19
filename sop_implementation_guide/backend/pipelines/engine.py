@@ -1850,6 +1850,67 @@ def step_signatures(definition: dict, context: str = "") -> dict[str, str]:
     return sigs
 
 
+RERUN_TYPES = ("research", "llm_fill", "geo_tie")
+
+
+def rerun_record(kind: str, definition: dict, state: dict, step_id: str, record_id: str, context: str = "",
+                 progress: Callable[[str], None] | None = None,
+                 refs: Callable[[str], list[dict]] | None = None) -> dict:
+    """
+    Run one model step again on one record, without the model cache (a fresh
+    look), put the result into that step's saved output, and recompute the
+    steps after it; everything else is reused. The step must hold the output of
+    the last run with its current settings. Mutates and returns `state`.
+    """
+    fields = (definition.get("schema") or {}).get("fields") or []
+    g = graph.normalise(definition)
+    by_step = {s["id"]: s for s in g["steps"]}
+    step = by_step.get(step_id)
+    if not step:
+        raise PipelineError(f"No step {step_id}.")
+    if step["type"] not in RERUN_TYPES:
+        raise PipelineError(f"{step_id} is a {CATALOG[step['type']]['label']} step. Only model steps that work record by record "
+                            "(research, model fill, geographic tie) can be re-run for one record.")
+    outputs = state.get("outputs") or {}
+    sigs = step_signatures(definition, context)
+    out = outputs.get(step_id)
+    if not out or out.get("error") or out.get("sig") != sigs[step_id] or len(out.get("records") or []) != out.get("count"):
+        raise PipelineError(f"{step_id} has no saved output from its current settings: run the pipeline first.")
+    if not any(r["id"] == record_id for r in out["records"]):
+        raise PipelineError(f"{record_id} is not in {step_id}'s output.")
+    entered = [r for i in step["inputs"] for r in (outputs.get(i) or {}).get("records") or [] if r["id"] == record_id]
+    if not entered:
+        raise PipelineError(f"The record as it entered {step_id} is not saved: run the pipeline first.")
+    rec = json.loads(json.dumps(entered[0], default=str))
+    cfg = validate_step(kind, step["type"], step["config"], fields, step["inputs"], definition.get("sources"))
+    step = {**step, "config": cfg}
+    by_src = {s["id"]: s for s in definition.get("sources") or []}
+    fresh_cache: dict = {}
+    if progress:
+        progress(f"Running {step_id} ({step['type']}) for {record_id}")
+    if step["type"] == "research":
+        warnings = _research(step, [rec], fields, fresh_cache, context, lambda m: progress and progress(m),
+                             lambda sid: fetch_source(by_src[sid]) if sid in by_src else {}, {})
+    else:
+        instr = cfg["instruction"] if step["type"] == "llm_fill" else geo_instruction(cfg)
+        warnings = _model_fill(step, [rec], fields, fresh_cache, instr, step["type"])
+    rec = json.loads(json.dumps(rec, default=str))
+    out["records"] = [rec if r["id"] == record_id else r for r in out["records"]]
+    out["coverage"] = coverage(out["records"], fields)
+    out["warnings"] = [w for w in out.get("warnings") or [] if not w.startswith(f"{record_id} re-run")] \
+        + [f"{record_id} re-run on its own" + (f": {'; '.join(warnings)}" if warnings else "")]
+    state["cache"] = {**(state.get("cache") or {}), **fresh_cache}
+    # The steps after it recompute from the changed output (model calls for the other records hit the cache).
+    for sid in graph.order(g):
+        if step_id in graph.ancestors(g, sid):
+            outputs.pop(sid, None)
+    state["outputs"] = outputs
+    upto = (state.get("last_run") or {}).get("upto")
+    if upto and upto != step_id and step_id not in graph.ancestors(g, upto):
+        upto = None
+    return run(kind, definition, state, upto=upto, context=context, progress=progress, refs=refs)
+
+
 def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh: bool = False,
         context: str = "", progress: Callable[[str], None] | None = None,
         refs: Callable[[str], list[dict]] | None = None) -> dict:

@@ -59,9 +59,13 @@ The order is fixed, and the app enforces it: schema, then sources, then steps.
    the draft's check warns about every field no step on the way to Output produces, and there must be
    no such warning when you finish proposing. Keep the pipeline otherwise short: only the transforms
    the data needs or the planner asks for.
-   Steps change in a DRAFT, never directly: add_step, update_step (except a model step's instructions
-   while it is being reviewed), remove_step, connect_steps and disconnect_steps all edit the draft
-   (add_step opens one if needed), and nothing runs or resets until the planner presses Apply. The steps
+   You PROPOSE changes; the planner makes them. add_step, update_step, remove_step, connect_steps and
+   disconnect_steps (and add_source / remove_source once the sources are final) edit YOUR PROPOSAL: a copy
+   of the planner's draft, or of the applied steps when no draft is open. The planner sees it on the
+   canvas as dashed nodes with a list of changes, and adds it to their draft or discards it; then they
+   Check and Apply the draft. Nothing runs or resets until then. While your proposal is pending, further
+   edits add to it (the state shows it under proposal). If the state says it is stale, the planner changed
+   the steps since: tell them to discard it, and propose again from the current state. The steps
    form a graph: each step takes its inputs' records. add_step appends at the end by default (it takes
    what fed Output and feeds Output itself); `after` puts it right after a step; `inputs` wires it
    explicitly. A step with several inputs merges them, which is how sources that need different reading
@@ -73,22 +77,27 @@ The order is fixed, and the app enforces it: schema, then sources, then steps.
    JOIN instead: a sql step with both branches as inputs, whose query reads each input as its own table
    named by its step id (SELECT a.id, b.x AS field FROM t2 a LEFT JOIN t5 b ON ...). Its rows keep the
    ids of the records it returns, so the joined branch's own records drop out; branches into a join may
-   have different schemas. When the draft is done, call check_pipeline, fix
-   every error it reports, then tell the planner to review the draft on the canvas and press Apply (you
-   cannot apply). run_preview runs the applied steps, not the draft.
-   Sources added or removed after they are final also go into the draft (add_source and remove_source do
-   this themselves). A new source is read by no step until you wire it: add an Extract step for it
+   have different schemas. When the proposal is done, call check_pipeline (it checks your proposal), fix
+   every error it reports, then tell the planner in one or two lines what you proposed and that they can
+   add it to the draft from the Agent tab or the canvas (you cannot add or apply it). run_preview runs
+   the applied steps, not the draft or your proposal.
+   Sources added or removed after they are final also go into your proposal (add_source and remove_source
+   do this themselves). A new source is read by no step until you wire it: add an Extract step for it
    (inputs [], config.source_ids [its id]) and merge that branch where the schemas match, or add its id
    to an existing Extract step's source_ids. Extract steps that read "every source" are pinned to the
    sources they read before, so a new source never changes them silently.
    Once applied, the planner reviews the steps one at a time, inputs first: they
    read its prompt in the panel, tune its instructions (the instructions/instruction config; the rest of
-   the prompt is fixed), preview its output and approve it. Write instructions they can read and edit:
+   the prompt is fixed), preview its output and approve it. Instruction changes you suggest are proposals
+   too (update_step). Write instructions they can read and edit:
    plain sentences about what counts as an item and what to look for. Changing a step's config, or the
    schema, sends that step and every later one back for approval.
    Once every step is approved and the pipeline has run, the planner can override rows of the final
    output (correct values, remove rows, add rows). Those show in the state as planner_overrides, are
    re-applied on every run (values marked "manual"), and are theirs: do not try to undo them with steps.
+   The planner also reviews the output record by record: they accept values and flag records for
+   follow-up (flagged_records in the state, with their note). A flag is a question for you when they ask:
+   look at that record's evidence and propose what would fix it.
 4. Preview with run_preview and report what came out honestly: record count, which required fields are
    blank and on how many records, excerpts that could not be verified, warnings.
    Work like an analyst, not an extractor: when fields are blank, first look at where the answers would
@@ -179,8 +188,8 @@ def _tools(kind: str) -> list[dict]:
              "source_id": {"type": "string"}, "offset": {"type": "integer"}, "length": {"type": "integer"}},
              "required": ["source_id"]}},
         {"name": "add_step",
-         "description": "Add a step from the catalog to the draft (opening one if needed). By default it goes at the "
-                        "end: it takes what fed Output and feeds Output. Returns the draft's check.",
+         "description": "Add a step from the catalog to your proposal. By default it goes at the end: it takes what "
+                        "fed Output and feeds Output. Returns the proposal's check.",
          "input_schema": {"type": "object", "properties": {
              "type": {"type": "string", "enum": step_types},
              "config": {"type": "object", "description": "As the catalog describes for this type."},
@@ -191,22 +200,21 @@ def _tools(kind: str) -> list[dict]:
                                        "that starts a new branch; then connect its output with connect_steps."}},
              "required": ["type", "config", "note"]}},
         {"name": "update_step",
-         "description": "Change a step's config or note, in the draft. Changing only a model step's instructions "
-                        "while no draft is open changes the applied step directly (it goes back for approval).",
+         "description": "Change a step's config or note, in your proposal.",
          "input_schema": {"type": "object", "properties": {
              "step_id": {"type": "string"}, "config": {"type": "object"}, "note": {"type": "string"}},
              "required": ["step_id"]}},
-        {"name": "remove_step", "description": "Remove a step from the draft; a step between two others is bridged.",
+        {"name": "remove_step", "description": "Remove a step in your proposal; a step between two others is bridged.",
          "input_schema": {"type": "object", "properties": {"step_id": {"type": "string"}}, "required": ["step_id"]}},
-        {"name": "connect_steps", "description": "In the draft, wire from_step's output into to_step (a step id, or "
-                                                  "'output'). Several inputs into one step merge.",
+        {"name": "connect_steps", "description": "In your proposal, wire from_step's output into to_step (a step id, "
+                                                  "or 'output'). Several inputs into one step merge.",
          "input_schema": {"type": "object", "properties": {
              "from_step": {"type": "string"}, "to_step": {"type": "string"}}, "required": ["from_step", "to_step"]}},
-        {"name": "disconnect_steps", "description": "In the draft, remove the wire from from_step into to_step (or 'output').",
+        {"name": "disconnect_steps", "description": "In your proposal, remove the wire from from_step into to_step (or 'output').",
          "input_schema": {"type": "object", "properties": {
              "from_step": {"type": "string"}, "to_step": {"type": "string"}}, "required": ["from_step", "to_step"]}},
-        {"name": "check_pipeline", "description": "Check the draft: wiring, settings, sources and schemas at merges. "
-                                                   "Errors must be fixed before the planner can apply it.",
+        {"name": "check_pipeline", "description": "Check your proposal: wiring, settings, sources and schemas at merges. "
+                                                   "Fix every error before handing it to the planner.",
          "input_schema": {"type": "object", "properties": {}}},
         {"name": "run_preview",
          "description": "Run the pipeline (or up to a step) on the sources and report records, coverage and warnings.",
@@ -274,6 +282,10 @@ def state_snapshot(p: dict) -> dict:
         "source_tables": {k: list(v["columns"]) for k, v in service._source_tables(p).items()},
         "load_map": ({"columns": {c["column"]: c["field"] for c in lm["columns"]}, "unmapped_fields": lm["extras"],
                       "notes": lm["notes"]} if (lm := service.view_load_map(p)) else None),
+        "proposal": ({"changes": [c["text"] for c in pv["changes"]], "stale": pv["stale"],
+                      "check": {k: [x["text"] for x in v] for k, v in pv["check"].items() if k in ("errors", "warnings")}}
+                     if (pv := service._proposal_view(p)) else None),
+        "flagged_records": {rid: m["flag"].get("note") or "" for rid, m in service.review_marks(p).items() if m.get("flag")},
         "planner_overrides": d.get("overrides"),
         "design_gaps": engine.design_gaps(d),
         "last_run": ({"at": last.get("at"), "upto": last.get("upto"), "records": cov.get("records"),
@@ -304,16 +316,28 @@ def _preview_result(p: dict, summary: dict) -> dict:
 # ── Tool execution ───────────────────────────────────────────────────────────
 
 def _check_result(db, pipeline_id: int) -> dict:
-    p = service.get(db, pipeline_id)
-    if p["definition"].get("draft") is None:
-        return {"draft": "none open"}
-    r = service.check_draft(p)
+    with service.proposing():
+        p = service.get(db, pipeline_id)
+        if p["definition"].get("draft") is None:
+            return {"proposal": "none yet"}
+        r = service.check_draft(p)
     return {"ok": r["ok"], "errors": [e["text"] for e in r["errors"]], "warnings": [w["text"] for w in r["warnings"]],
-            "next": "fix the errors" if r["errors"] else "the planner can review the draft and press Apply"}
+            "next": "fix the errors" if r["errors"] else "the planner can add your proposal to the draft, then Check and Apply"}
+
+
+# Tools that change the steps (or sources once final) edit the agent's proposal, never the draft.
+PROPOSING = {"add_step", "update_step", "remove_step", "connect_steps", "disconnect_steps", "add_source", "remove_source"}
 
 
 def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
     """Run one tool. Returns (result, is_error)."""
+    if name in PROPOSING:
+        with service.proposing():
+            return _run_tool(db, pipeline_id, name, args)
+    return _run_tool(db, pipeline_id, name, args)
+
+
+def _run_tool(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
     try:
         if name == "set_schema":
             schema = service.set_schema(db, pipeline_id, args.get("fields") or [])
@@ -332,19 +356,10 @@ def _execute(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
         if name == "add_step":
             step = service.draft_add_step(db, pipeline_id, args["type"], args.get("config") or {}, args.get("note"),
                                           after=args.get("after"), inputs=args.get("inputs"))
-            return {"step": step, "status": "added to the draft", "check": _check_result(db, pipeline_id)}, False
+            return {"step": step, "status": "added to your proposal", "check": _check_result(db, pipeline_id)}, False
         if name == "update_step":
-            p = service.get(db, pipeline_id)
-            live = next((s for s in p["definition"]["steps"] if s["id"] == args["step_id"]), None)
-            slot = engine.EDITABLE.get((live or {}).get("type"))
-            cfg = args.get("config")
-            only_slot = bool(live) and cfg is not None and all(cfg.get(k) == live["config"].get(k)
-                                                               for k in set(cfg) | set(live["config"]) if k != slot)
-            if p["definition"].get("draft") is None and only_slot:
-                return {"step": service.update_step(db, pipeline_id, args["step_id"], cfg, args.get("note")),
-                        "status": "changed on the applied step: it needs previewing and approving again"}, False
-            step = service.draft_update_step(db, pipeline_id, args["step_id"], cfg, args.get("note"))
-            return {"step": step, "status": "changed in the draft", "check": _check_result(db, pipeline_id)}, False
+            step = service.draft_update_step(db, pipeline_id, args["step_id"], args.get("config"), args.get("note"))
+            return {"step": step, "status": "changed in your proposal", "check": _check_result(db, pipeline_id)}, False
         if name == "remove_step":
             service.draft_remove_step(db, pipeline_id, args["step_id"])
             return {"removed": args["step_id"], "check": _check_result(db, pipeline_id)}, False
