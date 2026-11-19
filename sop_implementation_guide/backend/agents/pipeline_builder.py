@@ -130,7 +130,8 @@ SQL, for looking at the data and for transforms:
    field is filled or explicitly accepted as blank. A full run never publishes: it ends "ready for review"
    with what changed since the last publish, and the planner approves it. Each publish becomes a new
    numbered dataset version. The state's load_map shows how the output's fields map onto the catalogue
-   (proposed from their names; the planner confirms it on the Output node). Use set_load_mapping when the
+   (proposed from their names; the planner can change it on the Output node or with the picker under each
+   column of the Review & publish table; unmapped fields travel as extra detail). Use set_load_mapping when the
    planner says how a field should map.
 
 The guardrail matters more than anything else:

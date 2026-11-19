@@ -150,8 +150,28 @@ def _fits(col: str, f: dict, cat: dict) -> bool:
     return types is None or f["type"] in types
 
 
+# When no field has a column's name or a usual alternative, a field whose name
+# has a word starting with one of these is proposed instead (funding_program ->
+# program_name, amount_provided -> award_amount_max). Columns are tried in this
+# order, so the specific ones win: fund_details is eligibility, not a name.
+KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("application_url", ("url", "link", "website", "apply")),
+    ("deadline", ("deadline", "due", "close", "closing", "date")),
+    ("award_amount_min", ("min", "floor", "smallest")),
+    ("award_amount_max", ("amount", "award", "max", "ceiling", "value", "size")),
+    ("eligibility_notes", ("eligib", "detail", "description", "criteria", "requirement", "who", "purpose", "summary", "use")),
+    ("source_agency", ("agency", "org", "funder", "sponsor", "administ", "department", "provider")),
+    ("geo_scope", ("geo", "scope", "region", "area", "location", "jurisdiction", "reach")),
+    ("program_type", ("type", "level", "category", "tier")),
+    ("program_name", ("program", "programme", "title", "name", "opportunity", "grant", "fund", "scheme")),
+]
+
+
 def propose_load_map(fields: list[dict], cat: dict = CATALOGUE) -> dict[str, str | None]:
-    """Each column's field by name: its own name first, then the usual alternatives. A field is used once."""
+    """
+    Each column's field by name: its own name first, then the usual
+    alternatives, then a field with a matching word (KEYWORDS). A field is used once.
+    """
     by_name = {f["name"]: f for f in fields}
     used: set[str] = set()
     out: dict[str, str | None] = {}
@@ -160,6 +180,15 @@ def propose_load_map(fields: list[dict], cat: dict = CATALOGUE) -> dict[str, str
         out[col] = pick
         if pick:
             used.add(pick)
+    for f in fields:
+        if f["name"] in used:
+            continue
+        words = f["name"].lower().split("_")
+        col = next((c for c, keys in KEYWORDS if c in cat and not out.get(c) and _fits(c, f, cat)
+                    and any(w.startswith(k) for w in words for k in keys)), None)
+        if col:
+            out[col] = f["name"]
+            used.add(f["name"])
     return out
 
 

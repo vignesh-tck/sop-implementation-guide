@@ -1,13 +1,12 @@
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { call } from "../api.js";
 import Stepper from "./Stepper.jsx";
-import LoadMap from "./LoadMap.jsx";
 import { AgentTab } from "./Drawer.jsx";
 import { attention, isBlank, isEdited, short } from "./records.js";
 
 // Review & publish: where a full run waits for the planner. The status card says
-// whether it can be published and what to fix; the final output shows why each
-// value is there and takes the planner's overrides; the agent and the published
+// whether it can be published and what to fix; the final output is an editable
+// table whose column headers say where each column lands in the catalogue; the agent and the published
 // versions sit on the right. A run never publishes: only Approve & publish does.
 
 function pref(key, fallback) {
@@ -26,7 +25,7 @@ const LEGEND = [
   ["missing", "blank"],
 ];
 const KIND_LABEL = Object.fromEntries(LEGEND);
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 50;
 
 const when = (at) => (at || "").slice(0, 16).replace("T", " ");
 const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u || ""; } };
@@ -61,7 +60,10 @@ function gateActions(text, view, h) {
       buttons: ids.map((id) => <button key={id} onClick={() => h.reviewStep(id)}>Review {id}</button>),
     };
   }
-  if (text.includes("on the Output node")) return { buttons: [<button key="m" onClick={h.openMap}>Map a field</button>] };
+  if (text.includes("on the Output node")) {
+    return { text: <>Choose which column holds the programme name: the ▾ under its column name in the table below.</>,
+             buttons: [<button key="m" onClick={h.showTable}>Show the table</button>] };
+  }
   const req = text.match(/^Required field `([^`]+)` is blank/);
   if (req) {
     return {
@@ -99,7 +101,7 @@ function changeText(review) {
   return (parts.join(", ") || "no changes") + ` since v${review.since.dataset_version}`;
 }
 
-function StatusCard({ view, act, disabled, state, mapOpen, setMapOpen, handlers }) {
+function StatusCard({ view, state, handlers }) {
   const last = view.last_run;
   const review = last?.review;
   const published = review?.published;
@@ -107,7 +109,6 @@ function StatusCard({ view, act, disabled, state, mapOpen, setMapOpen, handlers 
   const steps = view.definition.steps || [];
   const records = last?.coverage?.records ?? 0;
   const required = (view.load_map?.columns || []).filter((c) => c.required);
-  const mapped = view.load_map?.columns.filter((c) => c.field) || [];
   const overrides = view.overrides ? ["changed", "removed", "added"].reduce((n, k) => n + (view.overrides[k]?.length || 0), 0) : 0;
 
   let icon = "✓", title, sub;
@@ -139,7 +140,7 @@ function StatusCard({ view, act, disabled, state, mapOpen, setMapOpen, handlers 
     }
     if (steps.length && steps.every((s) => s.status === "approved")) items.push(<Check key="s" ok>All steps approved</Check>);
     if (required.length && required.every((c) => c.field)) {
-      items.push(<Check key="m" ok>{required.map((c) => <Fragment key={c.column}><code>{c.field}</code> is mapped to <code>{c.column}</code></Fragment>)} on Output</Check>);
+      items.push(<Check key="m" ok>{required.map((c) => <Fragment key={c.column}><code>{c.field}</code> is the programme name (<code>{c.column}</code>)</Fragment>)}</Check>);
     }
     if (records) items.push(<Check key="r" ok>{records} records {state === "ready" ? `ready · ${changeText(review)}` : "produced"}</Check>);
   }
@@ -160,15 +161,6 @@ function StatusCard({ view, act, disabled, state, mapOpen, setMapOpen, handlers 
           : `A run never publishes. Nothing reaches the ${kind.toLowerCase()} catalogue or the blocks until you approve it here.`}
       </div>
       {state === "ready" && review?.since && <ChangeList review={review} kind={kind} />}
-      {view.load_map && (
-        <div className="pub-map">
-          <span className="pub-map-label">Maps onto the {kind.toLowerCase()} catalogue</span>
-          {mapped.length === 0 && <span className="assess">nothing mapped yet</span>}
-          {mapped.map((c) => <span key={c.column} className="pub-map-chip">{c.field} → <b>{c.column}</b></span>)}
-          <button className="link" onClick={() => setMapOpen(!mapOpen)}>{mapOpen ? "Done" : "Edit mapping"}</button>
-          {mapOpen && <div className="pub-map-edit"><LoadMap view={view} act={act} disabled={disabled} /></div>}
-        </div>
-      )}
     </div>
   );
 }
@@ -191,65 +183,7 @@ function ChangeList({ review, kind }) {
   );
 }
 
-// ── Editing values ───────────────────────────────────────────────────────────
-
-function asInput(v) {
-  if (v == null) return "";
-  if (typeof v === "boolean") return v ? "yes" : "no";
-  return String(v);
-}
-
-function FieldInput({ f, value, onChange, autoFocus }) {
-  if (f.type === "enum" || f.type === "boolean") {
-    return (
-      <select value={value} autoFocus={autoFocus} onChange={(e) => onChange(e.target.value)}>
-        <option value="">—</option>
-        {(f.type === "enum" ? f.enum_values : ["yes", "no"]).map((o) => <option key={o} value={o}>{o}</option>)}
-      </select>
-    );
-  }
-  if (f.name.includes("notes") || f.name.includes("details") || value.length > 70) {
-    return <textarea rows={3} value={value} autoFocus={autoFocus} onChange={(e) => onChange(e.target.value)} />;
-  }
-  return <input value={value} autoFocus={autoFocus} onChange={(e) => onChange(e.target.value)}
-                placeholder={f.type === "money" ? "e.g. 50000 or $50K" : f.type === "date" ? "YYYY-MM-DD" : f.type === "percent" ? "e.g. 25%" : ""} />;
-}
-
-function OneField({ f, value, disabled, onSave, onCancel }) {
-  const [v, setV] = useState(asInput(value));
-  return (
-    <div className="pub-edit-one">
-      <FieldInput f={f} value={v} onChange={setV} autoFocus />
-      <button className="primary" disabled={disabled || v === asInput(value)} onClick={() => onSave(v)}>Save</button>
-      <button onClick={onCancel}>Cancel</button>
-    </div>
-  );
-}
-
-function NewRow({ fields, disabled, onSave, onCancel }) {
-  const [draft, setDraft] = useState(() => Object.fromEntries(fields.map((f) => [f.name, ""])));
-  const filled = fields.filter((f) => draft[f.name].trim());
-  return (
-    <div className="pub-newrow">
-      <div><b>New row</b> <span className="assess">for a programme the sources missed. Its values are marked as yours.</span></div>
-      <div className="pub-newrow-grid">
-        {fields.map((f) => (
-          <label key={f.name}>
-            <span><code>{f.name}</code>{f.required ? "*" : ""} <span className="assess">{f.type}</span></span>
-            <FieldInput f={f} value={draft[f.name]} onChange={(v) => setDraft({ ...draft, [f.name]: v })} />
-          </label>
-        ))}
-      </div>
-      <div className="btn-row">
-        <button className="primary" disabled={disabled || !filled.length}
-                onClick={() => onSave(Object.fromEntries(filled.map((f) => [f.name, draft[f.name]])))}>Add row</button>
-        <button onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
-  );
-}
-
-// ── Why each value is here ───────────────────────────────────────────────────
+// ── Where a value came from ──────────────────────────────────────────────────
 
 function Explain({ view, r, f }) {
   const p = r.prov?.[f.name];
@@ -286,95 +220,124 @@ function Explain({ view, r, f }) {
   );
 }
 
-function WhyPanel({ view, act, disabled, locked, r, fields, review, onAsk }) {
-  const [editing, setEditing] = useState(null);
-  const edit = (body) => act("POST", "/output/records", body);
-  const save = async (name, value) => { if (await edit({ op: "set", record_id: r.id, values: { [name]: value } })) setEditing(null); };
-  const changed = (review?.changed || []).find((c) => c.id === r.id);
-  const why = attention(r, fields);
+// ── The final output as an editable table ────────────────────────────────────
+//
+// Click a cell to edit it (Enter saves, Esc cancels); the blank row at the
+// bottom adds one; the bin removes one. Each save is an override, kept and
+// re-applied on every run. The picker under each column name is where that
+// column lands in the catalogue. The strip under the table says where the
+// selected value came from.
 
+const NEW_ROW = "__new";
+
+function asInput(v) {
+  if (v == null) return "";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  return String(v);
+}
+
+function CellInput({ f, value, onSave, onCancel }) {
+  const start = asInput(value);
+  const [v, setV] = useState(start);
+  const sent = useRef(false);
+  const done = (x = v) => {
+    if (sent.current) return;
+    sent.current = true;
+    if (x === start) onCancel(); else onSave(x);
+  };
+  const keys = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); sent.current = true; onCancel(); }
+    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); done(); }
+  };
+  if (f.type === "enum" || f.type === "boolean") {
+    return (
+      <select className="pub-input" autoFocus value={v} onKeyDown={keys} onBlur={() => done()}
+              onChange={(e) => { setV(e.target.value); done(e.target.value); }}>
+        <option value="">—</option>
+        {(f.type === "enum" ? f.enum_values : ["yes", "no"]).map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    );
+  }
+  if (start.length > 60) {
+    return <textarea className="pub-input" autoFocus rows={4} value={v} onKeyDown={keys} onBlur={() => done()}
+                     onChange={(e) => setV(e.target.value)} />;
+  }
+  return <input className="pub-input" autoFocus value={v} onKeyDown={keys} onBlur={() => done()} onChange={(e) => setV(e.target.value)}
+                type={f.type === "date" ? "date" : "text"}
+                placeholder={f.type === "money" ? "e.g. 50000 or $50K" : f.type === "percent" ? "e.g. 25%" : ""} />;
+}
+
+// Where a column lands in the catalogue: a catalogue column, or extra detail
+// (kept with the programme; Block Funding reads it too).
+function MapPicker({ view, act, disabled, f }) {
+  const lm = view.load_map;
+  if (!lm) return null;
+  const mine = lm.columns.find((c) => c.field === f.name);
+  const fits = lm.columns.filter((c) => !c.types || c.types.includes(f.type));
+  async function pick(col) {
+    const mapping = {};
+    if (mine && mine.column !== col) mapping[mine.column] = null;
+    if (col) mapping[col] = f.name;
+    if (Object.keys(mapping).length) await act("PUT", "/load-map", { mapping });
+  }
   return (
-    <div className="pub-why">
-      <div className="pub-why-head">
-        <b>Why each value is here</b>
-        {r.source_url && !r.added_by_you && (
-          <span className="assess">from {r.source_id} · <a href={r.source_url} target="_blank" rel="noreferrer">{host(r.source_url)}</a>
-            {r.confidence != null && ` · confidence ${Number(r.confidence).toFixed(2)}`}</span>
-        )}
+    <select className={"pub-map-pick" + (mine ? " on" : "") + (mine?.auto ? " auto" : "")} value={mine?.column || ""} disabled={disabled}
+            aria-label={`Where ${f.name} goes in the catalogue`} onClick={(e) => e.stopPropagation()}
+            title={mine ? `${mine.use}${mine.auto ? " (matched from the name; pick another to change it)" : ""}`
+              : "Kept with each programme as extra detail; Block Funding reads it too"}
+            onChange={(e) => pick(e.target.value)}>
+      <option value="">extra detail</option>
+      {fits.map((c) => (
+        <option key={c.column} value={c.column}>→ {c.column}{c.field && c.field !== f.name ? ` (now ${c.field})` : ""}</option>
+      ))}
+    </select>
+  );
+}
+
+function needsLook(r, f) {
+  const v = r.values?.[f.name];
+  if (isBlank(v)) return f.required && !f.accept_blank;
+  return r.prov?.[f.name]?.verified === false || (r.conflicts || []).some((c) => c.field === f.name);
+}
+
+function Strip({ view, act, disabled, locked, r, f, onAsk, onClose }) {
+  const p = r.prov?.[f.name];
+  const v = r.values?.[f.name];
+  const kind = isBlank(v) ? "missing" : p?.kind;
+  const undo = !locked && p?.kind === "manual" && p.was && !r.added_by_you;
+  const why = attention(r, [f]);
+  return (
+    <div className="pub-strip" role="region" aria-label="Where this value came from">
+      <div className="pub-strip-head">
+        <code>{r.id}</code><span>·</span><b>{f.name}</b>
+        {kind && <span className={"pub-kind " + kind}>{KIND_LABEL[kind] || kind}</span>}
         <span className="spacer" />
-        <button className="link" onClick={() => onAsk(r)}>💬 Ask the agent</button>
-        {!locked && isEdited(r) && !r.added_by_you && (
-          <button className="link" disabled={disabled} onClick={() => edit({ op: "undo", record_id: r.id })}>Undo all my overrides</button>
+        {undo && (
+          <button className="link" disabled={disabled}
+                  onClick={() => act("POST", "/output/records", { op: "set", record_id: r.id, values: { [f.name]: p.was.value } })}>Undo my change</button>
         )}
-        {!locked && <button className="link danger" disabled={disabled} onClick={() => edit({ op: "remove", record_id: r.id })}>Remove row</button>}
+        <button className="link" onClick={() => onAsk(r)}>Ask the agent</button>
+        <button className="link" aria-label="Close" onClick={onClose}>✕</button>
       </div>
-      {changed && (
-        <div className="pl-note"><b>Changed since v{review.since.dataset_version}:</b>{" "}
-          {changed.fields.map((d) => `${d.field} ${short(d.old, 60) || "blank"} → ${short(d.new, 60) || "blank"}`).join("; ")}</div>
-      )}
+      <div className="pub-strip-body"><Explain view={view} r={r} f={f} /></div>
       {why.length > 0 && <div className="pl-warn">Check: {why.join("; ")}</div>}
-      {r.analyst_note && <div className="pl-note"><b>Analyst note:</b> {r.analyst_note}</div>}
-      <div className="pub-why-rows">
-        {fields.map((f) => {
-          const p = r.prov?.[f.name];
-          const v = r.values?.[f.name];
-          const blank = isBlank(v);
-          const kind = blank ? "missing" : p?.kind || "";
-          return (
-            <div key={f.name} className="pub-why-row">
-              <code className="pub-why-field">{f.name}</code>
-              <div className={"pub-why-val" + (blank ? " blank" : "")}>
-                {editing === f.name
-                  ? <OneField f={f} value={v} disabled={disabled} onSave={(x) => save(f.name, x)} onCancel={() => setEditing(null)} />
-                  : blank ? "blank" : fmtValue(f, v)}
-              </div>
-              <div>{kind && <span className={"pub-kind " + kind}>{KIND_LABEL[kind] || kind}</span>}</div>
-              <div className="pub-why-explain"><Explain view={view} r={r} f={f} /></div>
-              <div className="pub-why-act">
-                {!locked && editing !== f.name && (
-                  p?.kind === "manual" && p.was && !r.added_by_you
-                    ? <button className="link" disabled={disabled} onClick={() => edit({ op: "set", record_id: r.id, values: { [f.name]: p.was.value } })}>Undo override</button>
-                    : <button className="link" disabled={disabled} onClick={() => setEditing(f.name)}>{blank ? "Enter value" : "Override"}</button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {!r.added_by_you && (r.excerpt || r.research?.length > 0 || r.leads?.length > 0) && (
-        <details className="pub-more">
-          <summary>Source excerpt and research</summary>
-          {r.excerpt && (
-            <>
-              <div>Excerpt {r.excerpt_verified ? <span className="tag ok">found in source</span> : <span className="tag gone">not found in source</span>}</div>
-              <blockquote>{r.excerpt}</blockquote>
-              {r.excerpt_unmatched?.length > 0 && <div className="pl-bad">Not found in the source: {r.excerpt_unmatched.map((m, i) => <q key={i}>{m}</q>)}</div>}
-            </>
-          )}
-          {r.research?.length > 0 && (
-            <div className="assess"><b>Research read:</b>{" "}
-              {r.research.map((x, i) => (
-                <span key={i}>{i > 0 && " · "}<a href={x.url} target="_blank" rel="noreferrer">{host(x.url)}</a>
-                  {x.error ? " (unreadable)" : ` (${[x.filled?.length && `filled ${x.filled.join(", ")}`,
-                    x.replaced?.length && `improved ${x.replaced.join(", ")}`].filter(Boolean).join("; ") || "nothing new"})`}</span>
-              ))}
-            </div>
-          )}
-          {r.leads?.length > 0 && <div className="assess"><b>Leads noted:</b> {r.leads.map((l) => `${(l.fields || []).join(", ")} → ${l.where}`).join(" · ")}</div>}
-        </details>
+      {!r.added_by_you && r.source_url && (
+        <div className="assess">
+          Row from {r.source_id} · <a href={r.source_url} target="_blank" rel="noreferrer">{host(r.source_url)}</a>
+          {r.excerpt && <> · excerpt {r.excerpt_verified ? "found in the source" : <span className="pl-bad">not found in the source</span>}</>}
+          {r.analyst_note && <> · note: {r.analyst_note}</>}
+        </div>
       )}
     </div>
   );
 }
 
-// ── Final output ─────────────────────────────────────────────────────────────
-
 function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
   const fields = view.definition.schema?.fields || [];
   const [q, setQ] = useState("");
-  const [open, setOpen] = useState(null);
-  const [adding, setAdding] = useState(false);
   const [page, setPage] = useState(0);
+  const [sel, setSel] = useState(null);          // { id, field }
+  const [editing, setEditing] = useState(null);  // { id, field }
   const records = view.last_records || [];
   const last = view.last_run;
   if (!last) return null;
@@ -384,91 +347,129 @@ function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
   const marks = review?.since ? review.marks || {} : {};
   const removed = last.removed || [];
   const edit = (body) => act("POST", "/output/records", body);
+  const noName = (view.load_map?.columns || []).filter((c) => c.required && !c.field);
 
   const needs = (r) => attention(r, fields).length > 0 || marks[r.id] === "changed";
-  const shown = records.filter((r) => (filter !== "attention" || needs(r)) &&
+  const shown = records.filter((r) =>
+    (filter === "all" || (filter === "attention" ? needs(r) : isEdited(r))) &&
     (!q.trim() || Object.values(r.values || {}).some((v) => String(v ?? "").toLowerCase().includes(q.trim().toLowerCase()))));
   const pages = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
   const pg = Math.min(page, pages - 1);
   const slice = shown.slice(pg * PAGE_SIZE, (pg + 1) * PAGE_SIZE);
-  const nNeeds = records.filter(needs).length;
+  const showNew = !locked && filter === "all" && !q.trim() && pg === pages - 1;
+
+  async function save(r, f, value) {
+    const ok = r.id === NEW_ROW
+      ? await edit({ op: "add", values: { [f.name]: value } })
+      : await edit({ op: "set", record_id: r.id, values: { [f.name]: value } });
+    if (ok) setEditing(null);
+  }
+  function open(r, f) {
+    setSel(r.id === NEW_ROW ? null : { id: r.id, field: f.name });
+    if (!locked) setEditing({ id: r.id, field: f.name });
+  }
+  const selRec = sel && records.find((r) => r.id === sel.id);
+  const selField = sel && fields.find((f) => f.name === sel.field);
+
+  const row = (r) => {
+    const fresh = r.id === NEW_ROW;
+    return (
+      <tr key={r.id} className={"pub-row" + (fresh ? " fresh" : "")}>
+        <td className="pub-rowid">
+          {fresh ? <span className="assess">+ new</span> : <>
+            {r.id}
+            {marks[r.id] && <span className={"pub-pill " + (marks[r.id] === "new" ? "new" : "chg")}>{marks[r.id]}</span>}
+            {!locked && (
+              <button className="pub-bin" title="Remove this row" aria-label={`Remove ${r.id}`} disabled={disabled}
+                      onClick={() => edit({ op: "remove", record_id: r.id })}>🗑</button>
+            )}
+          </>}
+        </td>
+        {fields.map((f) => {
+          const v = r.values?.[f.name];
+          const p = r.prov?.[f.name];
+          const isEd = editing?.id === r.id && editing.field === f.name;
+          const isSel = sel?.id === r.id && sel.field === f.name;
+          const cls = ["pub-cell", p?.kind === "manual" && !isBlank(v) && "edited", !fresh && needsLook(r, f) && "warn",
+            isSel && "sel", isEd && "editing", locked && "ro"].filter(Boolean).join(" ");
+          return (
+            <td key={f.name} className={cls} onClick={() => !isEd && open(r, f)} title={isBlank(v) ? "" : short(v, 400)}>
+              {isEd ? <CellInput f={f} value={v} onSave={(x) => save(r, f, x)} onCancel={() => setEditing(null)} />
+                : isBlank(v) ? <span className="pub-blank">{fresh ? "" : f.required && !f.accept_blank ? "blank" : "—"}</span>
+                : short(fmtValue(f, v), 80)}
+            </td>
+          );
+        })}
+      </tr>
+    );
+  };
 
   return (
     <div className="card pub-output" id="pub-output">
       <div className="pub-output-head">
         <span className="pub-output-title">{locked && last.upto ? `Preview to ${last.upto}` : "Final output"}</span>
-        <span className="pub-count">{total} records</span>
+        <span className="pub-count">{total} rows</span>
         <span className="spacer" />
         <input className="pub-search" placeholder="Search rows" value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} />
         <div className="ws-seg" role="tablist" aria-label="Rows">
-          {[["all", "All"], ["attention", `Needs attention${nNeeds ? ` · ${nNeeds}` : ""}`]].map(([k, t]) => (
+          {[["all", "All"], ["attention", "Needs a look"], ["edited", "Edited by you"]].map(([k, t]) => (
             <button key={k} type="button" role="tab" aria-selected={filter === k} className={filter === k ? "on" : ""}
                     onClick={() => { setFilter(k); setPage(0); }}>{t}</button>
           ))}
         </div>
-        {!locked && <button disabled={disabled || adding} onClick={() => setAdding(true)}>+ Add row</button>}
       </div>
-      <div className="assess pub-output-note">
-        {locked ? `Rows can be overridden once the design is done. ${locked}`
-          : "Correct values, remove rows or add rows the sources missed. Your overrides are kept and re-applied every run."}
+      <div className="pub-output-note">
+        {locked ? <span className="assess">Read only for now. {locked}</span> : <>
+          <span>Click a cell to change it. Enter saves, Esc cancels. Your changes are kept every time the pipeline re-runs.</span>
+          <span className="pub-key edited">edited by you</span><span className="pub-key warn">needs a look</span>
+        </>}
       </div>
-      {last.override_notes?.length > 0 && <div className="pl-warn">{last.override_notes.join(" · ")}</div>}
-      <div className="pub-legend">{LEGEND.map(([k, t]) => <span key={k} className={"pub-kind " + k}>{t}</span>)}</div>
-      {adding && (
-        <NewRow fields={fields} disabled={disabled} onCancel={() => setAdding(false)}
-                onSave={async (values) => { if (await edit({ op: "add", values })) setAdding(false); }} />
-      )}
-      {slice.length === 0 ? <div className="assess pub-empty">{records.length ? "No rows match." : "No records."}</div> : (
-        <div className="table-wrap pub-table-wrap">
-          <table className="pub-table">
-            <thead><tr><th>row</th>{fields.map((f) => <th key={f.name}>{f.name}{f.required ? "*" : ""}</th>)}</tr></thead>
-            <tbody>
-              {slice.map((r) => {
-                const isOpen = open === r.id;
-                return (
-                  <Fragment key={r.id}>
-                    <tr className={"pub-row" + (isOpen ? " open" : "")} onClick={() => setOpen(isOpen ? null : r.id)}>
-                      <td className="pub-rowid">
-                        <span className="pub-chev" aria-hidden="true">{isOpen ? "⌄" : "›"}</span>{r.id}
-                        {r.added_by_you && <span className="pub-pill manual">added</span>}
-                        {marks[r.id] && <span className={"pub-pill " + (marks[r.id] === "new" ? "new" : "chg")}>{marks[r.id]}</span>}
-                        {attention(r, fields).length > 0 && <span className="pl-bad" title={attention(r, fields).join("; ")}> ⚠</span>}
-                      </td>
-                      {fields.map((f) => {
-                        const v = r.values?.[f.name];
-                        const p = r.prov?.[f.name];
-                        const blank = isBlank(v);
-                        const conflict = (r.conflicts || []).some((c) => c.field === f.name);
-                        return (
-                          <td key={f.name} className={"pub-cell " + (blank ? "missing" + (f.required && !f.accept_blank ? " req" : "") : p?.kind || "")}
-                              title={blank ? "" : short(v, 400)}>
-                            {blank ? "blank" : short(fmtValue(f, v), 60)}
-                            {!blank && p?.kind === "manual" && <span className="pub-pill manual">yours</span>}
-                            {!blank && p?.verified === false && <span className="pl-bad" title="Quote not found in the source"> ⚠</span>}
-                            {conflict && <span className="pl-bad" title="A source page contradicts this value"> ≠</span>}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                    {isOpen && (
-                      <tr className="pub-detail-row">
-                        <td colSpan={fields.length + 1}>
-                          <WhyPanel view={view} act={act} disabled={disabled} locked={locked} r={r} fields={fields} review={review} onAsk={onAsk} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+      {view.load_map && (
+        <div className="assess pub-map-note">
+          The ▾ under each column name is where it goes in the {view.kind_label.toLowerCase()} catalogue. It’s matched from the
+          name; change any. “Extra detail” columns still go with the programme, and Block Funding reads them.
         </div>
+      )}
+      {noName.length > 0 && (
+        <div className="pl-warn">Pick the column that holds the programme name: choose <b>→ {noName[0].column}</b> under its name.</div>
+      )}
+      {last.override_notes?.length > 0 && <div className="pl-warn">{last.override_notes.join(" · ")}</div>}
+      <div className="table-wrap pub-table-wrap">
+        <table className="pub-table">
+          <thead>
+            <tr>
+              <th className="pub-rowid-h">row</th>
+              {fields.map((f) => (
+                <th key={f.name}>
+                  <div className="pub-th-name">{f.name}{f.required ? "*" : ""}</div>
+                  <MapPicker view={view} act={act} disabled={disabled} f={f} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {slice.map(row)}
+            {showNew && row({ id: NEW_ROW, values: {}, prov: {} })}
+          </tbody>
+        </table>
+        {slice.length === 0 && !showNew && <div className="assess pub-empty">{records.length ? "No rows match." : "No records."}</div>}
+      </div>
+      {selRec && selField && (
+        <Strip view={view} act={act} disabled={disabled} locked={locked} r={selRec} f={selField} onAsk={onAsk} onClose={() => setSel(null)} />
       )}
       <div className="pub-pager">
         <span className="assess">
           {shown.length ? `Showing ${pg * PAGE_SIZE + 1}–${Math.min((pg + 1) * PAGE_SIZE, shown.length)} of ${shown.length}` : ""}
           {records.length < total ? ` (the first ${records.length} of ${total} are kept for review)` : ""}
         </span>
+        {removed.length > 0 && (
+          <span className="assess pub-removed">Removed by you:{" "}
+            {removed.map(({ record: r }, i) => (
+              <Fragment key={r.id}>{i > 0 && ", "}{short(r.values?.[fields[0]?.name], 40) || r.id}{" "}
+                <button className="link" disabled={disabled || !!locked} onClick={() => edit({ op: "undo", record_id: r.id })}>restore</button></Fragment>
+            ))}
+          </span>
+        )}
         {pages > 1 && (
           <span className="pub-pager-btns">
             <button disabled={pg === 0} onClick={() => setPage(pg - 1)}>‹ Prev</button>
@@ -476,15 +477,6 @@ function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
           </span>
         )}
       </div>
-      {removed.length > 0 && (
-        <div className="pl-removed">
-          <b>Removed by you ({removed.length})</b>
-          <ul>{removed.map(({ record: r }) => (
-            <li key={r.id}><span className="assess">{r.id}</span> {r.values?.[fields[0]?.name] || "(unnamed)"}
-              <button className="link" disabled={disabled || !!locked} onClick={() => edit({ op: "undo", record_id: r.id })}>restore</button></li>
-          ))}</ul>
-        </div>
-      )}
     </div>
   );
 }
@@ -588,7 +580,6 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
   const [compose, setCompose] = useState(null);
   const [ctx, setCtx] = useState(null);
   const [filter, setFilter] = useState("all");
-  const [mapOpen, setMapOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const setSide = (o) => { setSideState(o); keep("pl.review.side", o); };
 
@@ -604,7 +595,7 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
 
   const handlers = {
     act, disabled, go: nav.go, reviewStep: onReviewStep, run: () => run(false),
-    openMap: () => setMapOpen(true),
+    showTable: () => document.getElementById("pub-output")?.scrollIntoView({ behavior: "smooth" }),
     showAttention: () => { setFilter("attention"); document.getElementById("pub-output")?.scrollIntoView({ behavior: "smooth" }); },
   };
   const ask = (r) => {
@@ -634,7 +625,7 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
       <div className={"pub-body" + (side ? " with-side" : "")}>
         <div className="pub-main">
           <div className="pub-scroll">
-            <StatusCard view={view} act={act} disabled={disabled} state={state} mapOpen={mapOpen} setMapOpen={setMapOpen} handlers={handlers} />
+            <StatusCard view={view} state={state} handlers={handlers} />
             <OutputCard view={view} act={act} disabled={disabled} filter={filter} setFilter={setFilter} onAsk={ask} />
           </div>
           {state === "ready" && (
