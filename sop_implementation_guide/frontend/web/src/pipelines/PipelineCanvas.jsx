@@ -148,7 +148,7 @@ function Settings({ s }) {
 
 function DetailsPane({ id, view, model, problems, onClose, actions }) {
   const d = view.definition;
-  const sources = d.sources || [];
+  const sources = model.sources;
   const fields = d.schema?.fields || [];
   let title, body;
   if (id.startsWith("step:")) {
@@ -213,7 +213,7 @@ function DetailsPane({ id, view, model, problems, onClose, actions }) {
         <Detail label="Fetched">{meta.error ? <span className="pl-bad">{meta.error}</span>
           : meta.chars != null ? `${meta.chars.toLocaleString()} characters${meta.truncated ? " (truncated)" : ""}` : "—"}</Detail>
         <Detail label="Read by">{readers.length ? readers.map((x) => x.id).join(", ") : "no Extract step"}</Detail>
-        <Detail label="Sources">{d.sources_status === "final" ? "final" : "open"}</Detail>
+        <Detail label="Sources">{s.draft_state === "new" ? "new in the draft: applies with it" : d.sources_status === "final" ? "final" : "open"}</Detail>
         {meta.preview && <Detail label="Preview"><span className="pl-pre">{cut(meta.preview, 400)}</span></Detail>}
       </>
     );
@@ -259,8 +259,12 @@ function CheckPanel({ view, onFocus, onClose }) {
   const added = steps.filter((s) => s.draft_state === "new").map((s) => s.id);
   const changed = steps.filter((s) => s.draft_state === "changed").map((s) => s.id);
   const removed = view.draft.removed || [];
+  const srcAdded = (view.draft.sources || []).filter((s) => s.draft_state === "new").map((s) => s.id);
+  const srcRemoved = view.draft.removed_sources || [];
+  const resets = steps.filter((s) => s.resets).map((s) => s.id);
   const plan = [added.length && `adds ${added.join(", ")}`, changed.length && `changes ${changed.join(", ")}`,
-                removed.length && `removes ${removed.join(", ")}`].filter(Boolean).join("; ");
+                removed.length && `removes ${removed.join(", ")}`, srcAdded.length && `adds source ${srcAdded.join(", ")}`,
+                srcRemoved.length && `removes source ${srcRemoved.join(", ")}`].filter(Boolean).join("; ");
   const item = (x, k, cls) => (
     <li key={k} className={cls}>
       {x.node ? <button type="button" className="link" onClick={() => onFocus(x.node)}>{x.node === "output" ? "Output" : x.node}</button> : null}
@@ -273,7 +277,8 @@ function CheckPanel({ view, onFocus, onClose }) {
         <b>Check</b>
         {c.ok ? <span className="tag ok">no errors</span> : <span className="tag gone">{c.errors.length} error{c.errors.length > 1 ? "s" : ""}</span>}
         {c.warnings.length > 0 && <span className="tag edited">{c.warnings.length} warning{c.warnings.length > 1 ? "s" : ""}</span>}
-        <span className="assess">Apply {plan || "changes nothing"}. Unchanged steps keep their approval.</span>
+        <span className="assess">Apply {plan || "changes nothing"}.{" "}
+          {resets.length ? `${resets.join(", ")} will need approving again; the other steps keep their approval.` : "Every applied step keeps its approval."}</span>
         <span className="spacer" />
         <button className="link" onClick={onClose} aria-label="Hide check">✕</button>
       </div>
@@ -289,11 +294,11 @@ function CheckPanel({ view, onFocus, onClose }) {
 
 // ── The canvas ───────────────────────────────────────────────────────────────
 
-function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAskAgent, onOpenSource }) {
+function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEditStep, onAskAgent, onOpenSource }) {
   const d = view.definition;
   const model = useMemo(() => stepsModel(view), [view]);
   const inDraft = model.draft;
-  const sources = useMemo(() => d.sources || [], [d.sources]);
+  const sources = model.sources;
   const steps = model.steps;
   const liveSteps = useMemo(() => Object.fromEntries((d.steps || []).map((s) => [s.id, s])), [d.steps]);
   const gaps = useMemo(() => (!inDraft && steps.length ? view.design_gaps || [] : []), [inDraft, steps.length, view.design_gaps]);
@@ -410,6 +415,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
       const meta = view.sources[s.id] || {};
       add(`src:${s.id}`, "source", {
         kind: s.id, title: cut(s.label, 24), connectable: editable, running: running === "sources",
+        draft: inDraft && s.draft_state === "new" ? "new" : null,
         sub: s.kind === "grants_gov" ? "Grants.gov search" : cut(s.url, 30),
         meta: meta.error ? "unreadable" : meta.chars != null ? `${meta.chars.toLocaleString()} chars` : null,
       }, { deletable: !disabled, connectable: editable });
@@ -531,11 +537,9 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
     return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, source_ids: rest } });
   };
   const removeStep = (s) => send("DELETE", `/draft/steps/${s.id}`);
-  const removeSource = (src) => {
-    const msg = d.sources_status === "final" ? " The sources are reopened and every step goes back for approval." : "";
-    if (!window.confirm(`Remove source ${src.id} (${src.label})?${msg}`)) return null;
-    return send("DELETE", `/sources/${src.id}`);
-  };
+  // Once sources are final this removes it in the draft (opening one); before, straight away.
+  const removeSource = (src) => send("DELETE", `/sources/${src.id}`);
+  const addSource = (at) => onAddSource({ at, onAdded: (id, pos) => pos && saveLayout({ ...layout, [`src:${id}`]: pos }) });
   const preview = (s) => send("POST", "/run", model.outputFrom.length === 1 && model.outputFrom[0] === s.id ? {} : { upto: s.id });
   const approve = (s) => send("POST", `/steps/${s.id}/approve`);
 
@@ -578,8 +582,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
     if (disabled) return false;
     const doomed = editable ? ns.map((n) => stepOf(n.id)).filter(Boolean) : [];
     const doomedSources = ns.map((n) => sourceOf(n.id)).filter(Boolean);
-    if (doomedSources.length > 1) flash("Remove one source at a time: each removal reopens the sources.");
-    else if (doomedSources[0] && !doomed.length) removeSource(doomedSources[0]);
+    for (const src of doomed.length ? [] : doomedSources) if (!(await removeSource(src))) break;
     for (const s of doomed) if (!(await removeStep(s))) break;
     if (!ns.length && editable) {
       for (const e of es) {
@@ -655,6 +658,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
     if (m.kind === "pane") return [
       inDraft ? { label: "Add step here…", run: () => addAt({ at: m.flow }), ...lock }
         : { label: "Edit pipeline", run: openDraft, ...lock, ...design },
+      { label: d.sources_status === "final" ? "Add source here… (in a draft)" : "Add source here…", run: () => addSource(m.flow), ...lock },
       { label: "Ask the agent…", run: () => onAskAgent(""), ...lock },
       "-",
       { label: "Fit to view", run: () => flow.fitView({ padding: 0.18, maxZoom: 1, duration: 200 }) },
@@ -686,7 +690,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
       { label: "Details", run: () => setDetails(id) },
       { label: "Open in the source reader", run: () => onOpenSource(src.id) },
       "-",
-      { label: "Remove source", danger: true, run: () => removeSource(src), ...lock },
+      { label: d.sources_status === "final" ? "Remove source (in a draft)" : "Remove source", key: "Del", danger: true, run: () => removeSource(src), ...lock },
     ];
     if (id === "output") return [
       !inDraft && { label: "Open output", run: () => onSelect("output") },
@@ -703,7 +707,10 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
         : { label: "Edit pipeline", run: openDraft, ...lock, ...design },
       { label: "Ask the agent to outline the steps…", run: () => onAskAgent("Outline the steps for this pipeline."), ...lock, ...design },
     ];
-    if (id === "sources") return [{ label: "Add sources", run: () => onOpenSource(null) }];
+    if (id === "sources") return [
+      { label: "Add source…", run: () => addSource(null), ...lock },
+      { label: "Open the Sources page", run: () => onOpenSource(null) },
+    ];
     return [];
   }
 
@@ -747,6 +754,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onEditStep, onAsk
           <button className="pl-bar-btn primary" disabled={disabled || !canDesign} title={canDesign ? "Change the steps in a draft" : designWhy}
                   onClick={openDraft}>Edit pipeline</button>
         )}
+        <button className="pl-bar-btn" disabled={disabled} onClick={() => addSource(null)}
+                title={d.sources_status === "final" ? "Goes into the draft; wire it to an Extract step" : "Fetched and added now"}>+ Source</button>
         <button className="pl-bar-btn" disabled={disabled} onClick={() => onAskAgent("")}>Ask the agent</button>
         <button className="pl-bar-btn" title="Put every node back in its default place" disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
         <button className="pl-bar-btn" title={tall ? "Shrink the canvas" : "Make the canvas taller"} onClick={() => setTall(!tall)}>{tall ? "Shrink" : "Expand"}</button>

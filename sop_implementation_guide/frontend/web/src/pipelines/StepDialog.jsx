@@ -367,7 +367,7 @@ export default function StepDialog({ view, mode, act, onClose, onAdded }) {
   const model = stepsModel(view);          // the draft if one is open, else the applied steps
   const steps = model.steps;
   const fields = view.definition.schema?.fields || [];
-  const sources = view.definition.sources || [];
+  const sources = model.sources;
   const catalog = view.catalog || {};
   const editing = mode.kind === "edit" ? steps.find((s) => s.id === mode.stepId) : null;
 

@@ -71,6 +71,11 @@ The order is fixed, and the app enforces it: schema, then sources, then steps.
    the same fields produced and parsed the same way. When the draft is done, call check_pipeline, fix
    every error it reports, then tell the planner to review the draft on the canvas and press Apply (you
    cannot apply). run_preview runs the applied steps, not the draft.
+   Sources added or removed after they are final also go into the draft (add_source and remove_source do
+   this themselves). A new source is read by no step until you wire it: add an Extract step for it
+   (inputs [], config.source_ids [its id]) and merge that branch where the schemas match, or add its id
+   to an existing Extract step's source_ids. Extract steps that read "every source" are pinned to the
+   sources they read before, so a new source never changes them silently.
    Once applied, the planner reviews the steps one at a time, inputs first: they
    read its prompt in the panel, tune its instructions (the instructions/instruction config; the rest of
    the prompt is fixed), preview its output and approve it. Write instructions they can read and edit:
@@ -148,7 +153,8 @@ def _tools(kind: str) -> list[dict]:
              "required": ["name", "type", "required", "description"]}}},
              "required": ["fields"]}},
         {"name": "add_source",
-         "description": "Add a source and fetch it now. kind url needs url; kind grants_gov needs a 2-5 word keyword query.",
+         "description": "Add a source and fetch it now. kind url needs url; kind grants_gov needs a 2-5 word keyword query. "
+                        "Once the sources are final it goes into the draft, read by no step until you wire it.",
          "input_schema": {"type": "object", "properties": {
              "kind": {"type": "string", "enum": ["url", "grants_gov"]},
              "url": {"type": "string"}, "query": {"type": "string"}, "label": {"type": "string"}},
@@ -239,6 +245,8 @@ def state_snapshot(p: dict) -> dict:
         "output_from": graph.normalise(d)["output_from"],
         "draft": ({"steps": [{k: s.get(k) for k in ("id", "type", "config", "note", "inputs")} for s in d["draft"]["steps"]],
                    "output_from": d["draft"]["output_from"],
+                   **({"sources": [{k: x.get(k) for k in ("id", "kind", "url", "query", "label")} for x in d["draft"]["sources"]]}
+                      if d["draft"].get("sources") is not None else {}),
                    "check": {k: [x["text"] for x in v] for k, v in service.check_draft(p).items() if k in ("errors", "warnings")}}
                   if d.get("draft") is not None else None),
         "planner_overrides": d.get("overrides"),

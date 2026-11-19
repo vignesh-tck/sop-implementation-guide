@@ -1697,24 +1697,31 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
 def step_signatures(definition: dict, context: str = "") -> dict[str, str]:
     """
     One fingerprint per step of everything its output depends on: the fields,
-    the sources, the context, this step, and the fingerprints of its inputs. A
-    stored output whose fingerprint still matches can be reused instead of
-    recomputed. A plain chain gets the same fingerprints it always had.
+    the context, this step, the fingerprints of its inputs, and for an Extract
+    step the sources it reads (and only those, so adding a source changes only
+    the branch that reads it). A stored output whose fingerprint still matches
+    can be reused instead of recomputed.
     """
     schema = definition.get("schema") or {}
     base = _hash({
         "context": context,
         "fields": [{k: f.get(k) for k in ("name", "type", "required", "enum_values", "extract", "description")}
                    for f in schema.get("fields", [])],
-        "sources": [{k: s.get(k) for k in ("id", "kind", "url", "query")} for s in definition.get("sources", [])],
     })
+    sources = definition.get("sources") or []
     g = graph.normalise(definition)
     by_id = {s["id"]: s for s in g["steps"]}
     sigs: dict[str, str] = {}
     for sid in graph.order(g):
         s, ins = by_id[sid], by_id[sid]["inputs"]
         after = base if not ins else sigs[ins[0]] if len(ins) == 1 else [sigs[i] for i in ins]
-        sigs[sid] = _hash({"after": after, "step": {k: s.get(k) for k in ("id", "type", "config")}})
+        step = {k: s.get(k) for k in ("id", "type", "config")}
+        if s["type"] == "extract":
+            # "every source" and the same sources listed are the same step
+            ids = (s.get("config") or {}).get("source_ids") or [x["id"] for x in sources]
+            step["config"] = {**(s.get("config") or {}), "source_ids": ids}
+            step["reads"] = [{k: x.get(k) for k in ("id", "kind", "url", "query")} for x in sources if x["id"] in ids]
+        sigs[sid] = _hash({"after": after, "step": step})
     return sigs
 
 

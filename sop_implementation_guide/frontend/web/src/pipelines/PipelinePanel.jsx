@@ -2,6 +2,7 @@ import { Fragment, Suspense, lazy, useState } from "react";
 import { call } from "../api.js";
 import SourceReader from "./SourceReader.jsx";
 import StepDialog from "./StepDialog.jsx";
+import SourceDialog from "./SourceDialog.jsx";
 import StepPorts, { DraftPorts } from "./StepPorts.jsx";
 import { ancestorsOf, stepsModel } from "./ports.js";
 
@@ -90,7 +91,8 @@ function SchemaCard({ view, act, disabled }) {
 function SourcesCard({ view, act, disabled, picked, onPick }) {
   const [url, setUrl] = useState("");
   const [query, setQuery] = useState("");
-  const sources = view.definition.sources || [];
+  const sources = stepsModel(view).sources;       // the draft's while one is open
+  const goingAway = view.draft?.removed_sources || [];
   async function addUrl() {
     if (!url.trim()) return;
     if (await act("POST", "/sources", { kind: "url", url: url.trim() })) setUrl("");
@@ -107,7 +109,7 @@ function SourcesCard({ view, act, disabled, picked, onPick }) {
       <h4>Sources {final ? <span className="tag ok">final</span> : sources.length > 0 && <span className="tag edited">open</span>}</h4>
       <div className="muted-note" style={{ marginTop: 0, marginBottom: ".5rem" }}>
         {final
-          ? "The agent outlines the steps from these sources. Adding or removing one reopens them and sends every step back for approval."
+          ? "These sources are final. Adding or removing one now goes into the draft (Pipeline page): wire a new source to an Extract step, then Apply. Nothing resets until then."
           : "Add every source the pipeline should read, then mark them final: the agent takes a quick look at each and outlines all the steps."}
       </div>
       {sources.length === 0 && <div className="assess">None yet. Paste URLs in the chat or below, or attach files in the chat.</div>}
@@ -118,6 +120,7 @@ function SourcesCard({ view, act, disabled, picked, onPick }) {
             <li key={s.id} className={"pl-src" + (picked === s.id ? " sel" : "")} onClick={() => onPick(s.id)} title="Read this source">
               <b className="pl-id">{s.id}</b>
               <span className="url" title={s.url || s.query}>{s.label}</span>
+              {s.draft_state === "new" && <span className="tag edited">new in draft</span>}
               <span className={"assess" + (meta.error ? " pl-bad" : "")} title={meta.error || meta.preview}>
                 {meta.error ? "unreadable" : meta.chars != null ? `${meta.chars.toLocaleString()} chars${meta.truncated ? " (truncated)" : ""}` : ""}
               </span>
@@ -127,6 +130,7 @@ function SourcesCard({ view, act, disabled, picked, onPick }) {
           );
         })}
       </ul>
+      {goingAway.length > 0 && <div className="assess">Removed in the draft (gone when you Apply): {goingAway.join(", ")}</div>}
       <div className="pl-add">
         <input placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addUrl()} />
         <button onClick={addUrl} disabled={disabled || !url.trim()}>Add URL</button>
@@ -798,7 +802,7 @@ function Stepper({ view, page, reached, onGo }) {
 }
 
 function SourcesPage({ view, act, disabled, initialPick }) {
-  const sources = view.definition.sources || [];
+  const sources = stepsModel(view).sources;
   const [picked, setPicked] = useState(initialPick ?? sources[0]?.id ?? null);
   const src = sources.find((s) => s.id === picked) || sources[sources.length - 1] || null;
   return (
@@ -811,13 +815,14 @@ function SourcesPage({ view, act, disabled, initialPick }) {
 
 // A source picked on the canvas.
 function SourceNodeCard({ view, sourceId, onOpen }) {
-  const s = (view.definition.sources || []).find((x) => x.id === sourceId);
+  const m = stepsModel(view);
+  const s = m.sources.find((x) => x.id === sourceId);
   if (!s) return null;
   const meta = view.sources[s.id] || {};
-  const readers = (view.definition.steps || []).filter((x) => x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)));
+  const readers = m.steps.filter((x) => x.type === "extract" && (!x.config?.source_ids?.length || x.config.source_ids.includes(s.id)));
   return (
     <div className="card">
-      <h4><b className="pl-id">{s.id}</b> {s.label}</h4>
+      <h4><b className="pl-id">{s.id}</b> {s.label} {s.draft_state === "new" && <span className="tag edited">new in draft</span>}</h4>
       <div className="assess">{s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.url}</a> : s.query}</div>
       <div className={meta.error ? "pl-bad" : "assess"} style={{ marginTop: ".3rem" }}>
         {meta.error || (meta.chars != null ? `${meta.chars.toLocaleString()} characters${meta.truncated ? " (truncated)" : ""}` : "")}
@@ -873,9 +878,10 @@ function StepsPage({ view, act, disabled, stage, onSources }) {
   const [seenStage, setSeenStage] = useState(stage);
   if (stage !== seenStage) { setSeenStage(stage); setSel(stage); }
   const [dialog, setDialog] = useState(null);     // StepDialog's mode, plus onAdded
+  const [srcDialog, setSrcDialog] = useState(null);  // { at, onAdded } while adding a source
 
   const steps = view.definition.steps || [];
-  const sources = view.definition.sources || [];
+  const sources = stepsModel(view).sources;
   const draftIds = new Set((view.draft?.steps || []).map((s) => s.id));
   let shown = sel;
   const draftPick = view.draft && shown?.startsWith("step:") && draftIds.has(shown.slice(5));
@@ -899,13 +905,15 @@ function StepsPage({ view, act, disabled, stage, onSources }) {
     <>
       <Suspense fallback={<div className="pl-canvas"><div className="pl-canvas-bar"><b>Pipeline</b><span className="assess">loading the canvas…</span></div><div className="pl-flow" /></div>}>
         <PipelineCanvas view={view} sel={sel === "gaps" ? "gaps" : shown} onSelect={pick} act={act} disabled={disabled}
-                        onAddStep={(m) => setDialog({ kind: "add", ...m })} onEditStep={onEdit}
+                        onAddStep={(m) => setDialog({ kind: "add", ...m })} onAddSource={setSrcDialog} onEditStep={onEdit}
                         onAskAgent={(text) => setDialog({ kind: "ask", text })} onOpenSource={onSources} />
       </Suspense>
       {shown.startsWith("step:") && <GapsNote view={view} />}
       {body}
       {dialog && <StepDialog view={view} mode={dialog} act={act} onAdded={dialog.onAdded}
                              onClose={() => setDialog(null)} />}
+      {srcDialog && <SourceDialog view={view} act={act} at={srcDialog.at} onAdded={srcDialog.onAdded}
+                                  onClose={() => setSrcDialog(null)} />}
     </>
   );
 }

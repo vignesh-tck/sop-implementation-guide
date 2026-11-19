@@ -12,18 +12,19 @@ const ROWS_TEXT = {
 
 export const STATE_TEXT = { text: "unparsed text", set: "filled" };
 
-// { draft, steps, inputs: {id: [ids]}, outputFrom, order, ports }
+// { draft, steps, sources, inputs: {id: [ids]}, outputFrom, order, ports }
 export function stepsModel(view, useDraft = !!view.draft) {
   if (useDraft && view.draft) {
     const steps = view.draft.steps || [];
     const order = view.draft.check?.order?.length ? view.draft.check.order : steps.map((s) => s.id);
-    return { draft: true, steps, inputs: Object.fromEntries(steps.map((s) => [s.id, s.inputs || []])),
+    return { draft: true, steps, sources: view.draft.sources || view.definition.sources || [],
+             inputs: Object.fromEntries(steps.map((s) => [s.id, s.inputs || []])),
              outputFrom: view.draft.output_from || [], order, ports: view.draft.ports || {} };
   }
   const steps = view.definition.steps || [];
   const ids = steps.map((s) => s.id);
   return {
-    draft: false, steps,
+    draft: false, steps, sources: view.definition.sources || [],
     inputs: view.graph?.inputs || Object.fromEntries(ids.map((id, i) => [id, i ? [ids[i - 1]] : []])),
     outputFrom: view.graph?.output_from || ids.slice(-1),
     order: view.graph?.order || ids,

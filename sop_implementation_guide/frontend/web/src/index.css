@@ -1114,3 +1114,6 @@ main.view.pl-view {
 .pl-state { font-size: .74rem; padding: 0 .3rem; border-radius: 3px; }
 .pl-state.set { color: var(--teal); background: color-mix(in srgb, var(--teal) 10%, transparent); }
 .pl-state.text { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.pl-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--border); margin-bottom: .3rem; }
+.pl-tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: .3rem .6rem; font-size: .82rem; color: var(--muted); }
+.pl-tab.on { color: var(--orange); border-bottom-color: var(--orange); }

@@ -137,15 +137,13 @@ def accept_blank(db: Client, pipeline_id: int, field: str, accept: bool) -> dict
 
 # ── Sources ──────────────────────────────────────────────────────────────────
 
-def add_source(db: Client, pipeline_id: int, kind: str, url: str | None = None, query: str | None = None,
-               label: str | None = None, by_user: bool = False) -> dict:
-    """Add a source and fetch it at once, so a bad URL is reported now rather than at run time."""
-    p = get(db, pipeline_id)
+def _source(kind: str, url: str | None, query: str | None, label: str | None, taken: list[dict]) -> dict:
+    """A new source, checked, with an id unused by the applied sources and the draft's."""
     if kind == "url":
         url = (url or "").strip()
         if not url.lower().startswith(("http://", "https://")):
             raise PipelineError("A source URL must start with http:// or https://.")
-        if any(s.get("url") == url for s in p["definition"]["sources"]):
+        if any(s.get("url") == url for s in taken):
             raise PipelineError("That source is already in the pipeline.")
     elif kind == "grants_gov":
         query = (query or "").strip()
@@ -153,28 +151,83 @@ def add_source(db: Client, pipeline_id: int, kind: str, url: str | None = None, 
             raise PipelineError("A Grants.gov source needs a keyword query.")
     else:
         raise PipelineError("Source kind must be url or grants_gov.")
-    reopened = _reopen_sources(p)
-    src = {"id": _next_id(p["definition"]["sources"], "s"), "kind": kind,
-           **({"url": url} if kind == "url" else {"query": query}),
-           "label": (label or "").strip() or (url if kind == "url" else f"Grants.gov: {query}")}
+    return {"id": _next_id(taken, "s"), "kind": kind, **({"url": url} if kind == "url" else {"query": query}),
+            "label": (label or "").strip() or (url if kind == "url" else f"Grants.gov: {query}")}
+
+
+def _fetch_meta(src: dict) -> dict:
     try:
-        meta = engine.source_meta(engine.fetch_source(src, fresh=True))   # downloaded now, then read from its saved copy
+        return engine.source_meta(engine.fetch_source(src, fresh=True))   # downloaded now, then read from its saved copy
     except PipelineError as e:
-        meta = {"error": str(e)}
+        return {"error": str(e)}
+
+
+def _fetch_text(src: dict, meta: dict) -> str:
+    return f" (could not be read: {meta['error']})" if meta.get("error") else f" ({meta['chars']:,} characters)."
+
+
+def add_source(db: Client, pipeline_id: int, kind: str, url: str | None = None, query: str | None = None,
+               label: str | None = None, by_user: bool = False) -> dict:
+    """
+    Add a source and fetch it at once, so a bad URL is reported now rather than
+    at run time. While the sources are still being collected it is added
+    straight away. Once they are final and steps are designed on them, it goes
+    into the draft instead (opening one), to be wired to an Extract step and
+    applied with the rest; nothing resets until then.
+    """
+    p = get(db, pipeline_id)
+    if p["definition"].get("sources_status") == "final":
+        return _draft_add_source(db, p, kind, url, query, label, by_user)
+    src = _source(kind, url, query, label, p["definition"]["sources"] + ((p["definition"].get("draft") or {}).get("sources") or []))
+    meta = _fetch_meta(src)
     p["definition"]["sources"].append(src)
     p["state"].setdefault("sources", {})[src["id"]] = meta
     _save(db, p, state=p["state"])
     if by_user:
-        event(db, pipeline_id, f"You added source {src['id']}: {src['label']}"
-              + (f" (could not be read: {meta['error']})" if meta.get("error") else f" ({meta['chars']:,} characters).")
-              + reopened, level="warn" if meta.get("error") or reopened else "info")
-    elif reopened:
-        event(db, pipeline_id, f"Source {src['id']} was added." + reopened, level="warn")
+        event(db, pipeline_id, f"You added source {src['id']}: {src['label']}" + _fetch_text(src, meta),
+              level="warn" if meta.get("error") else "info")
     return {**src, "fetch": meta}
 
 
+def _draft_add_source(db: Client, p: dict, kind: str, url: str | None, query: str | None,
+                      label: str | None, by_user: bool) -> dict:
+    d = _draft(p, open_=True)
+    sources = _draft_sources(p)
+    src = _source(kind, url, query, label, sources + p["definition"]["sources"])
+    # An Extract step reading "every source" keeps reading the ones it reads now: the new
+    # source is read only by the Extract step it is wired to.
+    pinned = []
+    for s in d["steps"]:
+        if s["type"] == "extract" and not (s.get("config") or {}).get("source_ids"):
+            s["config"] = {**(s.get("config") or {}), "source_ids": [x["id"] for x in sources]}
+            pinned.append(s["id"])
+    meta = _fetch_meta(src)
+    d["sources"] = sources + [src]
+    p["state"].setdefault("sources", {})[src["id"]] = meta
+    _save(db, p, state=p["state"])
+    event(db, p["id"], f"{_who(by_user)} added source {src['id']} to the draft: {src['label']}" + _fetch_text(src, meta)
+          + (f" {', '.join(pinned)} keep{'s' if len(pinned) == 1 else ''} reading the sources {'it' if len(pinned) == 1 else 'they'} read before."
+             if pinned else "")
+          + " Wire it to an Extract step, then Apply.", level="warn" if meta.get("error") else "info")
+    return {**src, "fetch": meta, "draft": True}
+
+
 def remove_source(db: Client, pipeline_id: int, source_id: str, by_user: bool = False) -> None:
+    """Remove a source: straight away while sources are collected, in the draft once they are final."""
     p = get(db, pipeline_id)
+    if p["definition"].get("sources_status") == "final":
+        d = _draft(p, open_=True)
+        sources = _draft_sources(p)
+        if not any(s["id"] == source_id for s in sources):
+            raise PipelineError(f"No source {source_id}.")
+        d["sources"] = [s for s in sources if s["id"] != source_id]
+        readers = [s["id"] for s in d["steps"] if s["type"] == "extract"
+                   and source_id in ((s.get("config") or {}).get("source_ids") or [])]
+        _save(db, p)
+        event(db, pipeline_id, f"{_who(by_user)} removed source {source_id} in the draft."
+              + (f" {', '.join(readers)} still name{'s' if len(readers) == 1 else ''} it: rewire before applying." if readers else "")
+              + " It goes when you Apply.")
+        return
     before = len(p["definition"]["sources"])
     p["definition"]["sources"] = [s for s in p["definition"]["sources"] if s["id"] != source_id]
     if len(p["definition"]["sources"]) == before:
@@ -182,25 +235,30 @@ def remove_source(db: Client, pipeline_id: int, source_id: str, by_user: bool = 
     p["state"].get("sources", {}).pop(source_id, None)
     # Extract steps wired to it stop naming it; one wired to nothing else falls back to all sources.
     rewired = []
-    for s in p["definition"]["steps"] + ((p["definition"].get("draft") or {}).get("steps") or []):
+    for s in p["definition"]["steps"]:
         ids = (s.get("config") or {}).get("source_ids")
         if s["type"] == "extract" and ids and source_id in ids:
             s["config"]["source_ids"] = [i for i in ids if i != source_id] or None
-            if s["config"]["source_ids"] is None and s["id"] not in rewired:
+            if s["config"]["source_ids"] is None:
                 rewired.append(s["id"])
-    reopened = _reopen_sources(p)
     _save(db, p, state=p["state"])
     note = (f" {', '.join(rewired)} read only {source_id}, so {'it now reads' if len(rewired) == 1 else 'they now read'}"
             " every source: rewire on the canvas if that is wrong.") if rewired else ""
-    if by_user or reopened or rewired:
-        event(db, pipeline_id, f"{'You removed' if by_user else 'Removed'} source {source_id}." + reopened + note,
-              level="warn" if reopened or rewired else "info")
+    if by_user or rewired:
+        event(db, pipeline_id, f"{'You removed' if by_user else 'Removed'} source {source_id}." + note,
+              level="warn" if rewired else "info")
+
+
+def _any_source(p: dict, source_id: str) -> dict | None:
+    """An applied source, or one only in the draft."""
+    return next((s for s in p["definition"]["sources"] + ((p["definition"].get("draft") or {}).get("sources") or [])
+                 if s["id"] == source_id), None)
 
 
 def source_text(db: Client, pipeline_id: int, source_id: str) -> dict:
     """The full fetched text of one source, for the planner to read before marking sources final."""
     p = get(db, pipeline_id)
-    src = next((s for s in p["definition"]["sources"] if s["id"] == source_id), None)
+    src = _any_source(p, source_id)
     if not src:
         raise LookupError(f"No source {source_id}.")
     fetched = engine.fetch_source(src)   # its saved copy; never downloaded again here
@@ -229,19 +287,9 @@ def finalize_sources(db: Client, pipeline_id: int) -> dict:
     return p["definition"]
 
 
-def _reopen_sources(p: dict) -> str:
-    """Sources changed after they were final: steps already approved worked on the old sources."""
-    if p["definition"].get("sources_status") != "final":
-        return ""
-    p["definition"]["sources_status"] = "open"
-    reset = _invalidate_from(p, 0)
-    return (" The sources are no longer final: mark them final again when they are complete."
-            + _reset_text(reset))
-
-
 def read_source(db: Client, pipeline_id: int, source_id: str, offset: int = 0, length: int = 3000) -> dict:
     p = get(db, pipeline_id)
-    src = next((s for s in p["definition"]["sources"] if s["id"] == source_id), None)
+    src = _any_source(p, source_id)
     if not src:
         raise PipelineError(f"No source {source_id}.")
     text = engine.fetch_source(src).get("text") or ""
@@ -257,10 +305,10 @@ def read_source(db: Client, pipeline_id: int, source_id: str, offset: int = 0, l
 # removing, rewiring, settings) changes in a draft, below, which is checked
 # and then applied in one go.
 
-def _check_sources(p: dict, step_type: str, cfg: dict) -> dict:
-    """An Extract step's wiring must name sources that exist. An empty list means all sources."""
+def _check_sources(p: dict, step_type: str, cfg: dict, sources: list[dict] | None = None) -> dict:
+    """An Extract step's wiring must name sources that exist (the draft's, for a draft step). Empty means all."""
     if step_type == "extract" and cfg.get("source_ids") is not None:
-        known = [s["id"] for s in p["definition"]["sources"]]
+        known = [s["id"] for s in (p["definition"]["sources"] if sources is None else sources)]
         unknown = [i for i in cfg["source_ids"] if i not in known]
         if unknown:
             raise PipelineError(f"No source {', '.join(map(str, unknown))}; the sources are {', '.join(known) or 'none'}.")
@@ -394,10 +442,16 @@ def _draft(p: dict, open_: bool = False) -> dict:
     return d
 
 
+def _draft_sources(p: dict) -> list[dict]:
+    """The draft's sources: its own list once it has changed them, else the applied ones."""
+    d = p["definition"].get("draft") or {}
+    return list(d["sources"]) if d.get("sources") is not None else list(p["definition"]["sources"])
+
+
 def _draft_definition(p: dict) -> dict:
     d = p["definition"]["draft"]
     return {**{k: v for k, v in p["definition"].items() if k != "draft"},
-            "steps": d["steps"], "output_from": d["output_from"]}
+            "sources": _draft_sources(p), "steps": d["steps"], "output_from": d["output_from"]}
 
 
 def _draft_step(d: dict, step_id: str) -> dict:
@@ -430,7 +484,14 @@ def discard_draft(db: Client, pipeline_id: int) -> None:
 
 
 def check_draft(p: dict) -> dict:
-    return check.check(p["kind"], _draft_definition(p))
+    result = check.check(p["kind"], _draft_definition(p))
+    # As when sources are marked final: a source that could not be fetched cannot go in.
+    meta = p["state"].get("sources") or {}
+    bad = [s["id"] for s in _draft_sources(p) if (meta.get(s["id"]) or {}).get("error")]
+    for sid in bad:
+        result["errors"].append({"node": None, "text": f"{sid} could not be read ({meta[sid]['error']}): remove or replace it."})
+    result["ok"] = result["ok"] and not bad
+    return result
 
 
 def _splice_after(d: dict, after: str, new_id: str) -> None:
@@ -452,7 +513,7 @@ def draft_add_step(db: Client, pipeline_id: int, step_type: str, config: dict, n
     """
     p = get(db, pipeline_id)
     d = _draft(p, open_=True)
-    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config or {}, _fields(p)))
+    cfg = _check_sources(p, step_type, engine.validate_step(p["kind"], step_type, config or {}, _fields(p)), _draft_sources(p))
     taken = d["steps"] + p["definition"]["steps"]
     step = {"id": _next_id(taken, "t"), "type": step_type, "config": cfg, "note": (note or "").strip(), "inputs": []}
     ids = {s["id"] for s in d["steps"]}
@@ -493,7 +554,7 @@ def draft_update_step(db: Client, pipeline_id: int, step_id: str, config: dict |
     d = _draft(p, open_=True)
     s = _draft_step(d, step_id)
     if config is not None:
-        s["config"] = _check_sources(p, s["type"], engine.validate_step(p["kind"], s["type"], config, _fields(p)))
+        s["config"] = _check_sources(p, s["type"], engine.validate_step(p["kind"], s["type"], config, _fields(p)), _draft_sources(p))
     if note is not None:
         s["note"] = note.strip()
     _save(db, p)
@@ -589,6 +650,13 @@ def apply_draft(db: Client, pipeline_id: int) -> dict:
     changed = [s["id"] for s in g["steps"] if s["id"] in old_g and s["id"] not in kept
                and ({k: s.get(k) for k in ("type", "config", "inputs")} != {k: old_g[s["id"]].get(k) for k in ("type", "config", "inputs")})]
 
+    old_src = {x["id"] for x in p["definition"]["sources"]}
+    new_sources = _draft_sources(p)
+    src_added = [x["id"] for x in new_sources if x["id"] not in old_src]
+    src_removed = [i for i in old_src if i not in {x["id"] for x in new_sources}]
+    for sid in src_removed:
+        p["state"].get("sources", {}).pop(sid, None)
+    p["definition"]["sources"] = new_sources
     stored = graph.stored(g)
     p["definition"]["steps"] = stored["steps"]
     if "output_from" in stored:
@@ -598,12 +666,15 @@ def apply_draft(db: Client, pipeline_id: int) -> dict:
     p["definition"].pop("draft", None)
     _save(db, p, state=p["state"])
     parts = [f"added {', '.join(added)}" if added else "", f"removed {', '.join(removed)}" if removed else "",
-             f"changed {', '.join(changed)}" if changed else ""]
+             f"changed {', '.join(changed)}" if changed else "",
+             f"added source {', '.join(src_added)}" if src_added else "",
+             f"removed source {', '.join(src_removed)}" if src_removed else ""]
     summary = "; ".join(x for x in parts if x) or "no changes to the steps"
     event(db, pipeline_id, f"You applied the draft: {summary}." + _reset_text(reset)
           + (f" {len(result['warnings'])} warning(s) from the check remain." if result["warnings"] else ""),
           level="warn" if reset or result["warnings"] else "info")
-    return {"added": added, "removed": removed, "changed": changed, "reset": reset, "warnings": result["warnings"]}
+    return {"added": added, "removed": removed, "changed": changed, "reset": reset, "warnings": result["warnings"],
+            "sources_added": src_added, "sources_removed": src_removed}
 
 
 # Where the planner put each node on the canvas. Display only: not part of the
@@ -924,13 +995,33 @@ def _draft_view(p: dict) -> dict | None:
     if d is None:
         return None
     live = {s["id"]: s for s in graph.normalise(p["definition"])["steps"]}
+    live_ids = [x["id"] for x in p["definition"]["sources"]]
+    draft_ids = [x["id"] for x in _draft_sources(p)]
+
+    def own(s: dict, all_ids: list[str]) -> dict:
+        """What a step is, with "every source" spelled out, so pinning it is not a change."""
+        cfg = dict(s.get("config") or {})
+        if s["type"] == "extract":
+            cfg["source_ids"] = cfg.get("source_ids") or all_ids
+        return {"type": s["type"], "config": cfg, "inputs": s.get("inputs")}
+
+    # Which applied steps Apply sends back for approval (their fingerprint changes).
+    context = p["definition"].get("goal") or p["name"]
+    try:
+        old_sigs = engine.step_signatures(p["definition"], context)
+        new_sigs = engine.step_signatures(_draft_definition(p), context)
+    except graph.GraphError:
+        old_sigs, new_sigs = {}, {}
     steps = []
     for s in d["steps"]:
         old = live.get(s["id"])
-        state = ("new" if not old else "unchanged" if all(old.get(k) == s.get(k) for k in ("type", "config", "inputs"))
-                 else "changed")
-        steps.append({**s, "draft_state": state})
-    return {"steps": steps, "output_from": d["output_from"], "check": check_draft(p),
+        state = ("new" if not old else "unchanged" if own(old, live_ids) == own(s, draft_ids) else "changed")
+        resets = bool(old) and old.get("status") == "approved" and old_sigs.get(s["id"]) != new_sigs.get(s["id"])
+        steps.append({**s, "draft_state": state, "resets": resets})
+    live_src = {x["id"] for x in p["definition"]["sources"]}
+    sources = [{**x, "draft_state": "unchanged" if x["id"] in live_src else "new"} for x in _draft_sources(p)]
+    return {"steps": steps, "output_from": d["output_from"], "check": check_draft(p), "sources": sources,
+            "removed_sources": [i for i in live_src if i not in {x["id"] for x in sources}],
             "removed": [sid for sid in live if sid not in {s["id"] for s in d["steps"]}],
             "ports": {s["id"]: engine.step_io(s, _fields(p)) for s in d["steps"]}}
 
