@@ -238,7 +238,6 @@ class RecordEdit(BaseModel):
 @router.post("/{pipeline_id}/output/records")
 def edit_output(pipeline_id: int, body: RecordEdit, db: Client = Depends(get_supabase)):
     """The planner's overrides on the final output: correct a row, remove it, add one, or undo."""
-    _idle(db, pipeline_id)
     _call(lambda: service.edit_output(db, pipeline_id, body.op, body.record_id, body.values))
     return _view(db, pipeline_id)
 

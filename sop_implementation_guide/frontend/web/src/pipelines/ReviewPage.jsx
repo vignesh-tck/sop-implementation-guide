@@ -337,6 +337,8 @@ function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
   const [page, setPage] = useState(0);
   const [sel, setSel] = useState(null);          // { id, field }
   const [editing, setEditing] = useState(null);  // { id, field }
+  const [saving, setSaving] = useState({});      // "id|field" -> { v }: shown at once, until the server answers
+  const queue = useRef(Promise.resolve());
   const records = view.last_records || [];
   const last = view.last_run;
   if (!last) return null;
@@ -345,7 +347,14 @@ function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
   const review = last.review;
   const marks = review?.since ? review.marks || {} : {};
   const removed = last.removed || [];
-  const edit = (body) => act("POST", "/output/records", body);
+  // One save at a time: each reads and rewrites the overrides on the server, so
+  // two at once could lose one. A save takes a few seconds (several database
+  // round trips), so the cell shows the new value while it is on its way.
+  const edit = (body) => {
+    const run = queue.current.then(() => act("POST", "/output/records", body));
+    queue.current = run.catch(() => null);
+    return run;
+  };
   const noName = (view.load_map?.columns || []).filter((c) => c.required && !c.field);
 
   const needs = (r) => attention(r, fields).length > 0 || marks[r.id] === "changed";
@@ -358,10 +367,20 @@ function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
   const showNew = !locked && filter === "all" && !q.trim() && pg === pages - 1;
 
   async function save(r, f, value) {
-    const ok = r.id === NEW_ROW
-      ? await edit({ op: "add", values: { [f.name]: value } })
-      : await edit({ op: "set", record_id: r.id, values: { [f.name]: value } });
-    if (ok) setEditing(null);
+    const key = `${r.id}|${f.name}`;
+    const mark = { v: value };
+    setEditing(null);
+    setSaving((s) => ({ ...s, [key]: mark }));
+    await (r.id === NEW_ROW
+      ? edit({ op: "add", values: { [f.name]: value } })
+      : edit({ op: "set", record_id: r.id, values: { [f.name]: value } }));
+    // On failure the cell goes back to the saved value; the error shows above the page.
+    setSaving((s) => {
+      if (s[key] !== mark) return s;   // a newer save of this cell is still on its way
+      const next = { ...s };
+      delete next[key];
+      return next;
+    });
   }
   function open(r, f) {
     setSel(r.id === NEW_ROW ? null : { id: r.id, field: f.name });
@@ -389,11 +408,13 @@ function OutputCard({ view, act, disabled, filter, setFilter, onAsk }) {
           const p = r.prov?.[f.name];
           const isEd = editing?.id === r.id && editing.field === f.name;
           const isSel = sel?.id === r.id && sel.field === f.name;
-          const cls = ["pub-cell", p?.kind === "manual" && !isBlank(v) && "edited", !fresh && needsLook(r, f) && "warn",
+          const pend = saving[`${r.id}|${f.name}`];
+          const cls = ["pub-cell", (pend || (p?.kind === "manual" && !isBlank(v))) && "edited", !pend && !fresh && needsLook(r, f) && "warn",
             isSel && "sel", isEd && "editing", locked && "ro"].filter(Boolean).join(" ");
           return (
             <td key={f.name} className={cls} onClick={() => !isEd && open(r, f)} title={isBlank(v) ? "" : short(v, 400)}>
-              {isEd ? <CellInput f={f} value={v} onSave={(x) => save(r, f, x)} onCancel={() => setEditing(null)} />
+              {isEd ? <CellInput f={f} value={pend ? pend.v : v} onSave={(x) => save(r, f, x)} onCancel={() => setEditing(null)} />
+                : pend ? <span className="pub-saving" title="Saving…">{short(pend.v, 80) || "blank"}</span>
                 : isBlank(v) ? <span className="pub-blank">{fresh ? "" : f.required && !f.accept_blank ? "blank" : "—"}</span>
                 : short(fmtValue(f, v), 80)}
             </td>

@@ -1068,6 +1068,8 @@ def edit_output(db: Client, pipeline_id: int, op: str, record_id: str | None = N
     re-applied to every full run; applied to the current output now.
     """
     p = get(db, pipeline_id)
+    if PipelineRepository.is_busy(p):   # checked here, on the row this reads anyway, to save a round trip
+        raise PipelineError("The pipeline is busy (the agent or a run is working). Wait for it to finish.")
     locked = output_locked(p)
     if locked:
         raise PipelineError(locked)
