@@ -93,3 +93,19 @@ export default function SourceReader({ pipelineId, source, meta }) {
     </div>
   );
 }
+
+// The reader as a dialog, opened from a source on the Pipeline canvas.
+export function SourceReaderDialog({ view, sourceId, onClose }) {
+  const source = (view.draft?.sources || view.definition.sources || []).find((s) => s.id === sourceId)
+    || (view.definition.sources || []).find((s) => s.id === sourceId);
+  if (!source) return null;
+  return (
+    <div className="pl-modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="pl-modal pl-reader-modal" role="dialog" aria-modal="true" aria-label={`Read ${source.label}`}>
+        <div className="pl-modal-head"><b>Source text</b><span className="spacer" />
+          <button className="link" onClick={onClose} aria-label="Close">✕</button></div>
+        <SourceReader pipelineId={view.id} source={source} meta={view.sources[source.id]} />
+      </div>
+    </div>
+  );
+}

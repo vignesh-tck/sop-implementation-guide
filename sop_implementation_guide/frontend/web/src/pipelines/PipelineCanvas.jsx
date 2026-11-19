@@ -341,9 +341,9 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     });
     st.steps = "idle";
     st.gaps = "bad";
-    st.output = problems.errors.output ? "bad" : run ? (run.upto ? "pending" : "ok") : "idle";
+    st.output = problems.errors.output ? "bad" : d.schema?.status !== "approved" ? "pending" : run ? (run.upto ? "pending" : "ok") : "idle";
     return st;
-  }, [d.sources_status, sources, steps, view.sources, view.outputs, run, inDraft, problems, liveSteps]);
+  }, [d.schema?.status, d.sources_status, sources, steps, view.sources, view.outputs, run, inDraft, problems, liveSteps]);
 
   const reads = useCallback((s) => (s.config?.source_ids?.length ? s.config.source_ids : sources.map((x) => x.id)), [sources]);
 
@@ -724,7 +724,6 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     ];
     if (id === "sources") return [
       { label: "Add source…", run: () => addSource(null), ...lock },
-      { label: "Open the Sources page", run: () => onOpenSource(null) },
     ];
     return [];
   }

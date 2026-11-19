@@ -1,25 +1,21 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { call } from "../api.js";
-import ChatPane from "./ChatPane.jsx";
-import PipelinePanel from "./PipelinePanel.jsx";
 import ReviewPage from "./ReviewPage.jsx";
 import { usePageNav } from "./nav.js";
 
 // The node editor library is large; load the Pipeline page only when it opens.
 const PipelineWorkspace = lazy(() => import("./PipelineWorkspace.jsx"));
 
-// The Pipeline page is a full-width workspace led by the canvas, with the agent
-// in a drawer. Review & publish is full width too, with the agent on the right.
-// The other pages keep the chat on the left. Agent turns and runs
-// happen in the background on the server; while the pipeline reports `busy`
-// this polls until it clears.
+// Two full-width pages: the Pipeline canvas (schema on the Output node, sources
+// and steps on the canvas, the agent in a drawer) and Review & publish (the
+// agent on the right). Agent turns and runs happen in the background on the
+// server; while the pipeline reports `busy` this polls until it clears.
 export default function PipelineBuilder({ id, onBack }) {
   const [view, setView] = useState(null);
   const [error, setError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [pending, setPending] = useState(false);
-  const [sourcePick, setSourcePick] = useState(null);   // a source opened from the canvas
-  const [stepPick, setStepPick] = useState(null);       // a step opened from Review & publish
+  const [nodePick, setNodePick] = useState(null);       // a node opened from Review & publish
   const timer = useRef(null);
   const nav = usePageNav(view);
 
@@ -75,37 +71,23 @@ export default function PipelineBuilder({ id, onBack }) {
   }
   if (!view) return <main className="view"><div className="empty">Loading pipeline…</div></main>;
 
-  if (stepPick && view && nav.page !== 2) setStepPick(null);
+  if (nodePick && view && nav.page !== 0) setNodePick(null);
 
-  if (nav.page === 3) {
+  if (nav.page === 1) {
     return (
       <main className="view pl-ws-view">
         <ReviewPage view={view} act={act} pending={pending} nav={nav} onBack={onBack}
                     error={actionError} onClearError={() => setActionError(null)}
-                    onReviewStep={(sid) => { setStepPick(sid); nav.go(2); }} />
-      </main>
-    );
-  }
-  if (nav.page === 2) {
-    return (
-      <main className="view pl-ws-view">
-        <Suspense fallback={<div className="empty">Loading the canvas…</div>}>
-          <PipelineWorkspace view={view} act={act} pending={pending} nav={nav} onBack={onBack} initialSel={stepPick ? `step:${stepPick}` : null}
-                             error={actionError} onClearError={() => setActionError(null)}
-                             onOpenSource={(id) => { setSourcePick(id || null); nav.go(1); }} />
-        </Suspense>
+                    onOpenNode={(sel) => { setNodePick(sel); nav.go(0); }} />
       </main>
     );
   }
   return (
-    <main className="view pl-view">
-      <section className="pl-chat">
-        <ChatPane view={view} act={act} onBack={onBack} />
-      </section>
-      <section className="pl-panel">
-        {actionError && <div className="banner err">{actionError}</div>}
-        <PipelinePanel view={view} act={act} pending={pending} nav={nav} sourcePick={sourcePick} />
-      </section>
+    <main className="view pl-ws-view">
+      <Suspense fallback={<div className="empty">Loading the canvas…</div>}>
+        <PipelineWorkspace view={view} act={act} pending={pending} nav={nav} onBack={onBack} initialSel={nodePick}
+                           error={actionError} onClearError={() => setActionError(null)} />
+      </Suspense>
     </main>
   );
 }

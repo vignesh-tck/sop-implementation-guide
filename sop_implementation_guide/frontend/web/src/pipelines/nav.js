@@ -1,12 +1,11 @@
 import { useState } from "react";
 
-// The design stages, in the order the user set: schema, sources, the pipeline
-// (each step designed and approved), then review and publish.
+// Two pages: the Pipeline canvas, where the design happens in the order the
+// user set (approve the schema on the Output node, mark the sources final, then
+// design and approve each step), and Review & publish.
 
 export const PAGES = [
-  { key: "schema", label: "Target schema" },
-  { key: "sources", label: "Sources" },
-  { key: "steps", label: "Pipeline" },
+  { key: "pipeline", label: "Pipeline" },
   { key: "review", label: "Review & publish" },
 ];
 
@@ -23,10 +22,7 @@ export function stageOf(view) {
 }
 
 export function pageOf(stage) {
-  if (stage === "schema") return 0;
-  if (stage === "sources") return 1;
-  if (stage === "publish") return 3;
-  return 2;
+  return stage === "publish" ? 1 : 0;
 }
 
 // The page follows the design: finishing a stage slides the next one in, and a

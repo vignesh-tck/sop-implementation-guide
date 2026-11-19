@@ -57,7 +57,7 @@ function gateActions(text, view, h) {
     const ids = m[1].split(/,\s*/);
     return {
       text: <>Steps not approved: <b>{ids.map((id) => stepLabel(view, id)).join(", ")}</b></>,
-      buttons: ids.map((id) => <button key={id} onClick={() => h.reviewStep(id)}>Review {id}</button>),
+      buttons: ids.map((id) => <button key={id} onClick={() => h.openNode(`step:${id}`)}>Review {id}</button>),
     };
   }
   if (text.includes("on the Output node")) {
@@ -75,9 +75,8 @@ function gateActions(text, view, h) {
   if (/not been run|run it again|preview up to|had errors|produced no records/.test(text)) {
     return { buttons: [<button key="r" disabled={h.disabled} onClick={h.run}>Run pipeline</button>] };
   }
-  if (/schema/i.test(text)) return { buttons: [<button key="g" onClick={() => h.go(0)}>Open the schema</button>] };
-  if (/source/i.test(text)) return { buttons: [<button key="g" onClick={() => h.go(1)}>Open the sources</button>] };
-  if (/step/i.test(text)) return { buttons: [<button key="g" onClick={() => h.go(2)}>Open the pipeline</button>] };
+  if (/schema/i.test(text)) return { buttons: [<button key="g" onClick={() => h.openNode("output")}>Open the schema</button>] };
+  if (/source|step/i.test(text)) return { buttons: [<button key="g" onClick={() => h.openNode(null)}>Open the pipeline</button>] };
   return { buttons: [] };
 }
 
@@ -573,7 +572,7 @@ function SidePanel({ view, act, disabled, tab, setTab, onCollapse, compose, ctx,
 
 // ── The page ─────────────────────────────────────────────────────────────────
 
-export default function ReviewPage({ view, act, pending, nav, onBack, error, onClearError, onReviewStep }) {
+export default function ReviewPage({ view, act, pending, nav, onBack, error, onClearError, onOpenNode }) {
   const disabled = pending || !!view.busy;
   const [side, setSideState] = useState(() => pref("pl.review.side", true));
   const [tab, setTab] = useState("agent");
@@ -594,7 +593,7 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
         blocked: ["warn", "Not ready to publish"], ready: ["ready", "Ready for review"] }[state];
 
   const handlers = {
-    act, disabled, go: nav.go, reviewStep: onReviewStep, run: () => run(false),
+    act, disabled, openNode: onOpenNode, run: () => run(false),
     showTable: () => document.getElementById("pub-output")?.scrollIntoView({ behavior: "smooth" }),
     showAttention: () => { setFilter("attention"); document.getElementById("pub-output")?.scrollIntoView({ behavior: "smooth" }); },
   };
@@ -637,7 +636,7 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
         </div>
         {side ? (
           <SidePanel view={view} act={act} disabled={disabled} tab={tab} setTab={setTab} onCollapse={() => setSide(false)}
-                     compose={compose} ctx={ctx} onClearCtx={() => setCtx(null)} onCanvas={() => nav.go(2)} />
+                     compose={compose} ctx={ctx} onClearCtx={() => setCtx(null)} onCanvas={() => nav.go(0)} />
         ) : (
           <button type="button" className="pub-side-open" onClick={() => setSide(true)} title="Show the agent and history">Agent ⇤</button>
         )}

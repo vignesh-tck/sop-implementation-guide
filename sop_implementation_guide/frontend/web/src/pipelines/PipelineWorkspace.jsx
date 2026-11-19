@@ -6,9 +6,12 @@ import Drawer from "./Drawer.jsx";
 import RecordsView from "./RecordsView.jsx";
 import StepDialog from "./StepDialog.jsx";
 import SourceDialog from "./SourceDialog.jsx";
+import { SourceReaderDialog } from "./SourceReader.jsx";
 import { ancestorsOf, stepsModel } from "./ports.js";
 
-// The Pipeline page: the canvas leads. The selected node opens on the right;
+// The Pipeline page: the canvas leads. The design starts here too: the target
+// schema is on the Output node, sources are added on the canvas and marked
+// final in the bar, then steps. The selected node opens on the right;
 // the agent, the records and Check sit in a drawer underneath; the records can
 // also fill the page. The agent proposes changes; the planner adds them to the
 // draft, checks and applies.
@@ -20,7 +23,7 @@ function keep(key, v) {
   try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* storage blocked: the setting lasts this visit */ }
 }
 
-function DraftBar({ view, act, disabled, onCheck, onAgent }) {
+function DraftBar({ view, act, disabled, onCheck, onAgent, onSelect }) {
   const d = view.draft;
   const prop = view.proposal;
   const def = view.definition;
@@ -28,6 +31,31 @@ function DraftBar({ view, act, disabled, onCheck, onAgent }) {
   const propChip = prop && (
     <button type="button" className="ws-chip prop" onClick={onAgent}>Agent proposal · {prop.changes.length} change{prop.changes.length === 1 ? "" : "s"}</button>
   );
+  if (!d && def.schema?.status !== "approved") {
+    return (
+      <div className="ws-bar">
+        <span className="ws-chip draft">1 · Approve the target schema</span>
+        <span className="assess">The fields every record must have. They’re on the Output node; the agent can propose them.</span>
+        <button className="primary" onClick={() => onSelect("output")}>Open the schema</button>
+        {propChip}
+      </div>
+    );
+  }
+  if (!d && def.sources_status !== "final") {
+    const sources = def.sources || [];
+    const unreadable = sources.filter((s) => view.sources[s.id]?.error).map((s) => s.id);
+    return (
+      <div className="ws-bar">
+        <span className="ws-chip draft">2 · Add sources, then mark them final</span>
+        <span className="assess">{!sources.length ? "Use + Source on the canvas, paste URLs to the agent, or attach files."
+          : unreadable.length ? `${unreadable.join(", ")} could not be read: remove or replace it first.`
+          : `${sources.length} source${sources.length > 1 ? "s" : ""}. When they’re complete, the agent looks at each and outlines the steps.`}</span>
+        <button className="primary" disabled={disabled || !sources.length || unreadable.length > 0}
+                onClick={() => act("POST", "/sources/final")}>Sources are final</button>
+        {propChip}
+      </div>
+    );
+  }
   if (!d) {
     const steps = def.steps || [];
     const approved = steps.filter((s) => s.status === "approved").length;
@@ -56,7 +84,7 @@ function DraftBar({ view, act, disabled, onCheck, onAgent }) {
   );
 }
 
-export default function PipelineWorkspace({ view, act, pending, nav, onBack, error, onClearError, onOpenSource, initialSel }) {
+export default function PipelineWorkspace({ view, act, pending, nav, onBack, error, onClearError, initialSel }) {
   const disabled = pending || !!view.busy;
   const model = useMemo(() => stepsModel(view), [view]);
   const [mode, setMode] = useState("canvas");          // canvas | records
@@ -68,9 +96,11 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
   const setHeight = (h) => { setHeightState(h); keep("pl.drawer.h", h); };
 
   // The selection follows the design: when a step is approved the next one opens.
-  const [sel, setSel] = useState(initialSel || (nav.stage.startsWith("step:") ? nav.stage : null));
+  // Before the schema is approved, the Output node (which holds it) is open.
+  const stageSel = (st) => (st.startsWith("step:") ? st : st === "schema" ? "output" : null);
+  const [sel, setSel] = useState(initialSel || stageSel(nav.stage));
   const [seenStage, setSeenStage] = useState(nav.stage);
-  if (nav.stage !== seenStage) { setSeenStage(nav.stage); if (nav.stage.startsWith("step:")) setSel(nav.stage); }
+  if (nav.stage !== seenStage) { setSeenStage(nav.stage); if (stageSel(nav.stage)) setSel(stageSel(nav.stage)); }
 
   // The selected node rides along with the next message, unless removed.
   const [noContext, setNoContext] = useState(null);
@@ -86,6 +116,8 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
   const [showProposal, setShowProposal] = useState(true);
   const [dialog, setDialog] = useState(null);
   const [srcDialog, setSrcDialog] = useState(null);
+  const [reader, setReader] = useState(null);         // a source whose full text is open
+  const onOpenSource = (id) => id && setReader(id);
 
   const known = (id) => id === "output" || model.steps.some((s) => `step:${s.id}` === id) || model.sources.some((s) => `src:${s.id}` === id);
   const focusNodes = (ids) => {
@@ -125,7 +157,7 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
         </div>
       </div>
       <DraftBar view={view} act={act} disabled={disabled} onCheck={() => { setOpen(true); setTab("check"); }}
-                onAgent={() => { setMode("canvas"); setOpen(true); setTab("agent"); }} />
+                onAgent={() => { setMode("canvas"); setOpen(true); setTab("agent"); }} onSelect={(id) => focusNodes([id])} />
       {error && <div className="banner err ws-error" onClick={onClearError} role="alert">{error}</div>}
       {mode === "records" ? (
         <RecordsView view={view} act={act} disabled={disabled} selected={recordSel} onSelect={setRecordSel}
@@ -149,11 +181,12 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
           {sel && known(sel) && (
             <Inspector view={view} act={act} disabled={disabled} sel={sel} onClose={() => setSel(null)} onSelect={(id) => focusNodes([id])}
                        onEditStep={(id) => setDialog({ kind: "edit", stepId: id })} onOpenSource={onOpenSource}
-                       onShowRecords={showRecords} onPublish={() => nav.go(3)} />
+                       onShowRecords={showRecords} onPublish={() => nav.go(1)} />
           )}
         </div>
       )}
       {dialog && <StepDialog view={view} mode={dialog} act={act} onAdded={dialog.onAdded} onClose={() => setDialog(null)} />}
+      {reader && <SourceReaderDialog view={view} sourceId={reader} onClose={() => setReader(null)} />}
       {srcDialog && <SourceDialog view={view} act={act} at={srcDialog.at} onAdded={srcDialog.onAdded} onClose={() => setSrcDialog(null)} />}
     </div>
   );

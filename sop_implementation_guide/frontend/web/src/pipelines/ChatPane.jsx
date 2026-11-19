@@ -1,5 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
-import { uploadFiles } from "../api.js";
+import { Fragment } from "react";
 
 // Just enough formatting for the agent's replies: paragraphs, line breaks,
 // **bold** and `code`. Built as elements, never as HTML.
@@ -38,74 +37,5 @@ export function Message({ m }) {
         </div>
       )}
     </div>
-  );
-}
-
-export default function ChatPane({ view, act, onBack }) {
-  const [text, setText] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
-  const bottom = useRef(null);
-  const busy = !!view.busy;
-
-  useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [view.messages.length, busy]);
-
-  async function send() {
-    const t = text.trim();
-    if (!t || busy) return;
-    const r = await act("POST", "/messages", { text: t });
-    if (r) setText("");
-  }
-
-  async function attach(e) {
-    const files = Array.from(e.target.files || []);
-    e.target.value = "";
-    if (!files.length) return;
-    setUploading(true);
-    setUploadError(null);
-    try {
-      const res = await uploadFiles(files);
-      for (const u of res.uploaded) await act("POST", "/sources", { kind: "url", url: u.url, label: u.filename });
-      if (res.errors?.length) setUploadError(res.errors.map((er) => `${er.filename}: ${er.error}`).join("; "));
-    } catch (err) {
-      setUploadError(err.message);
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="pl-chat-head">
-        <button className="link" onClick={onBack}>← Pipelines</button>
-        <span className="assess">{view.kind_label} pipeline · chat</span>
-      </div>
-      <div className="pl-messages">
-        {view.messages.map((m) => <Message key={m.id} m={m} />)}
-        {busy && (
-          <div className="pl-event info">
-            <span className="spin">●</span> {view.busy === "run" ? "Running the pipeline" : "The agent is working"}
-            {view.progress ? ` · ${view.progress}` : "…"}
-          </div>
-        )}
-        <div ref={bottom} />
-      </div>
-      {uploadError && <div className="banner err" style={{ margin: "0 .75rem .5rem" }}>{uploadError}</div>}
-      <div className="pl-compose">
-        <textarea
-          rows={3} value={text} disabled={busy}
-          placeholder={busy ? "Wait for the agent…" : "Describe the goal and fields, paste URLs, ask for changes… (Enter to send, Shift+Enter for a new line)"}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-        />
-        <div className="pl-compose-actions">
-          <label className={"pl-attach" + (busy || uploading ? " disabled" : "")} title="Upload .pdf, .csv or .txt as a source">
-            <input type="file" multiple accept=".txt,.csv,.pdf" onChange={attach} disabled={busy || uploading} />
-            {uploading ? "Uploading…" : "Attach file"}
-          </label>
-          <button className="primary" onClick={send} disabled={busy || !text.trim()}>Send</button>
-        </div>
-      </div>
-    </>
   );
 }

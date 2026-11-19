@@ -107,7 +107,7 @@ agency's vocabulary, e.g. "pedestrian safety", "community garden"); prose querie
 FUNDING_INTRO = (
     "Let's build a funding pipeline. Tell me:\n"
     "1. **The goal**: what kind of funding this pipeline should collect, and for what work.\n"
-    "2. **The fields** you need for each programme. Or press *Use default funding fields* in the panel "
+    "2. **The fields** you need for each programme. Or press *Use default funding fields* on the Output node "
     "(name, agency, type, award range, deadline, eligibility, application link, geographic reach).\n"
     "3. **Sources**: paste URLs here, or upload PDFs, CSVs or text files.\n\n"
     "I'll propose the steps on the right. Approve or adjust each one, preview the output, and load it "

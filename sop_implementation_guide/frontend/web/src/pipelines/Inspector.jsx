@@ -1,5 +1,6 @@
 import { useState } from "react";
 import LoadMap from "./LoadMap.jsx";
+import Schema from "./Schema.jsx";
 import StepPorts, { DraftPorts } from "./StepPorts.jsx";
 import { ancestorsOf, stepsModel } from "./ports.js";
 import { attention } from "./records.js";
@@ -255,6 +256,10 @@ function OutputInspector({ view, act, disabled, model, onClose, onSelect, onPubl
       </div>
       <h3 className="ins-title">Output</h3>
       <div className="ins-body">
+        <Section title={<>Target schema {view.definition.schema?.status === "approved" ? <span className="tag ok">approved</span>
+          : (view.definition.schema?.fields || []).length ? <span className="tag edited">needs approval</span> : null}</>}>
+          <Schema view={view} act={act} disabled={disabled} />
+        </Section>
         <Section title="Takes"><Chips items={model.outputFrom.map((i) => [i, i, `step:${i}`])} onPick={onSelect} /></Section>
         {(errs.length > 0 || warns.length > 0) && (
           <ul className="pl-check-list">

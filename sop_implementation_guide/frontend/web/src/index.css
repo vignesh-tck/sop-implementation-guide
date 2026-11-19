@@ -1504,3 +1504,20 @@ textarea.pub-input { resize: vertical; min-width: 16rem; }
   .pub-body:not(.with-side) { grid-template-columns: minmax(0, 1fr); }
   .pub-side-open { writing-mode: horizontal-tb; border-left: none; border-top: 1px solid var(--border); }
 }
+
+/* ── Target schema on the Output node; the source reader as a dialog ────── */
+.ins-sec h6 .tag { text-transform: none; letter-spacing: 0; font-weight: 600; margin-left: .3rem; }
+.sch { display: flex; flex-direction: column; gap: .45rem; align-items: flex-start; }
+.sch-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.sch-table th { text-align: left; font-size: .7rem; font-weight: 600; color: var(--muted); padding: .2rem .3rem; border-bottom: 1px solid var(--border); }
+.sch-table td { padding: .3rem .3rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.sch-table td:first-child { word-break: break-word; }
+.sch-table tr.gap td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+.sch-req { color: var(--red); margin-left: .1rem; }
+.sch-judge {
+  margin-left: .3rem; font-size: .66rem; padding: 0 .35rem; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, var(--border)); color: var(--amber);
+}
+.pl-modal.pl-reader-modal { width: min(64rem, 100%); }
+.pl-reader-modal .pl-reader { position: static; margin: 0; border: none; border-radius: 0 0 10px 10px; box-shadow: none; min-height: 0; overflow: hidden; }
+.pl-reader-modal .pl-reader-text { height: min(64vh, 40rem); }
