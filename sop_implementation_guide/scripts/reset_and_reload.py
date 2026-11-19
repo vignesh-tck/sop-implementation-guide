@@ -181,7 +181,7 @@ def main() -> int:
         + ("" if args.with_tracts else
            "\n  2. python -m scripts.sync_tract_eligibility   (needs the blocks just loaded)")
         + "\n  " + ("2" if args.with_tracts else "3")
-        + ". Repopulate funding_programs via the Funding Discovery panel."
+        + ". Repopulate funding_programs by publishing a funding pipeline."
     )
     return code
 

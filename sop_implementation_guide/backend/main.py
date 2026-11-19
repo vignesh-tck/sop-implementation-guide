@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.blocks import router as blocks_router
 from backend.api.datasets import router as datasets_router
-from backend.api.discovery import router as discovery_router
 from backend.api.pathways import router as pathways_router
 from backend.api.pipelines import router as pipelines_router
 from backend.api.plans import router as plans_router
@@ -36,7 +35,6 @@ app.add_middleware(
 
 app.include_router(blocks_router)
 app.include_router(threads_router)
-app.include_router(discovery_router)
 app.include_router(plans_router)
 app.include_router(pathways_router)
 app.include_router(zoning_router)

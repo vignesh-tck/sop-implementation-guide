@@ -232,11 +232,6 @@ def check_excerpt(excerpt: Optional[str], sources: list[dict], min_len: int = 24
     return {"verified": False, "missing": best[1] if best else parts, "source_index": best[0] if best else None}
 
 
-def excerpt_is_genuine(excerpt: Optional[str], sources: list[dict], min_len: int = 24) -> bool:
-    """True when every sentence of the quote is in one of the sources (see check_excerpt)."""
-    return check_excerpt(excerpt, sources, min_len)["verified"]
-
-
 def search(query: str, max_results: int = 5) -> dict:
     """
     Optional research step: look for additional official sources.

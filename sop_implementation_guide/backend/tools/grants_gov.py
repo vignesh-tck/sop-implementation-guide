@@ -27,15 +27,6 @@ log = logging.getLogger(__name__)
 
 BASE = "https://api.grants.gov/v1/api"
 
-# Recognises a pasted Grants.gov URL so the discovery agent can route it here
-# instead of through the plain GET fetcher.
-HOST_MARKERS = ("grants.gov",)
-
-
-def handles(url: str) -> bool:
-    """True when this adapter should be used for a user-supplied source URL."""
-    return any(m in (url or "").lower() for m in HOST_MARKERS)
-
 
 class GrantsGovError(RuntimeError):
     """Grants.gov was unreachable or returned an unusable response."""

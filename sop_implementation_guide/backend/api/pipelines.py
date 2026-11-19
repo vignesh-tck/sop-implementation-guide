@@ -7,14 +7,14 @@ a background thread: POST returns at once, the pipeline reports `busy`, and the
 client polls GET until it clears. Panel actions are refused while busy, so the
 planner and the agent never edit the definition at the same time.
 
-Uploads reuse POST /funding/discovery/uploads, which returns public URLs that
-are then added here as url sources.
+Uploads go to POST /pipelines/uploads, which returns public URLs that are
+then added here as url sources.
 """
 
 import threading
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from supabase import Client
 
@@ -23,6 +23,7 @@ from backend.db.session import get_supabase
 from backend.pipelines import kinds, service
 from backend.pipelines.engine import PipelineError
 from backend.repositories.datasets import DatasetTablesMissing
+from backend.tools import upload_storage
 from backend.repositories.pipelines import (
     PipelineMessageRepository,
     PipelineRepository,
@@ -56,6 +57,23 @@ def _view(db: Client, pipeline_id: int) -> dict:
     v = service.view(db, pipeline_id)
     v["messages"] = pipeline_builder.display(PipelineMessageRepository(db).for_pipeline(pipeline_id))
     return v
+
+
+@router.post("/uploads")
+async def upload_sources(files: list[UploadFile] = File(...)):
+    """
+    Store user-supplied documents (.pdf, .csv, .txt) and return their public
+    URLs, which are then added as sources and read like any pasted URL. Partial
+    success by design: one bad file shouldn't block the rest of the batch.
+    """
+    uploaded, errors = [], []
+    for f in files:
+        content = await f.read()
+        try:
+            uploaded.append({"filename": f.filename, "url": upload_storage.store(f.filename, content)})
+        except ValueError as e:
+            errors.append({"filename": f.filename, "error": str(e)})
+    return {"uploaded": uploaded, "errors": errors}
 
 
 @router.get("/kinds")

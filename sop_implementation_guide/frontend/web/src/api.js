@@ -23,7 +23,7 @@ export async function call(method, path, body) {
 export async function uploadFiles(files) {
   const formData = new FormData();
   for (const f of files) formData.append("files", f);
-  const res = await fetch(API_BASE + "/funding/discovery/uploads", { method: "POST", body: formData });
+  const res = await fetch(API_BASE + "/pipelines/uploads", { method: "POST", body: formData });
   const data = await res.json();
   if (!res.ok) throw new Error((data && data.detail) || res.statusText);
   return data; // { uploaded: [{filename, url}], errors: [{filename, error}] }

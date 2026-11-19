@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 
 from supabase import Client
 
-from backend.agents.funding_discovery import _designation_from_scope, _program_key
 from backend.pipelines import engine
 from backend.repositories.datasets import DatasetRecordRepository
 from backend.repositories.funding_programs import _jsonable
@@ -270,6 +269,20 @@ def _column_value(col: str, f: dict, v):
     if isinstance(v, (dict, list)):
         return engine._sql_text(v)
     return str(v) if not isinstance(v, str) else v
+
+
+def _program_key(name: str, source_url: str) -> str:
+    """Stable key so re-extracting the same programme updates rather than duplicates."""
+    slug = "-".join(("".join(c if c.isalnum() else " " for c in name.lower())).split())[:60]
+    host = (source_url.split("//")[-1].split("/")[0] or "extracted").replace("www.", "")
+    return f"{host}:{slug}" if slug else f"{host}:unnamed"
+
+
+def _designation_from_scope(scope: str | None) -> str | None:
+    """'tract:NMTC' means eligibility depends on a tract designation."""
+    if scope and scope.startswith("tract:"):
+        return scope.split(":", 1)[1] or None
+    return None
 
 
 def _funding_row(pipeline: dict, rec: dict, fields: list[dict]) -> dict:
