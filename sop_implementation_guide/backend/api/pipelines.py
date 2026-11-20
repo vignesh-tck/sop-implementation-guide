@@ -5,7 +5,8 @@ A pipeline is read whole with GET /pipelines/{id} (definition, step outputs,
 coverage, load gate, chat). Agent turns and runs take minutes, so they run in
 a background thread: POST returns at once, the pipeline reports `busy`, and the
 client polls GET until it clears. Panel actions are refused while busy, so the
-planner and the agent never edit the definition at the same time.
+planner and the agent never edit the definition at the same time. POST
+/pipelines/{id}/stop ends the turn or run (backend/pipelines/jobs.py).
 
 Uploads go to POST /pipelines/uploads, which returns public URLs that are
 then added here as url sources.
@@ -15,7 +16,6 @@ one output's schema, mapping, records or overrides take ?output=<id>; without
 it they act on the first output ("output"), as they always did.
 """
 
-import threading
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -24,7 +24,7 @@ from supabase import Client
 
 from backend.agents import pipeline_builder
 from backend.db.session import get_supabase
-from backend.pipelines import kinds, service
+from backend.pipelines import jobs, kinds, service
 from backend.pipelines.engine import PipelineError
 from backend.repositories.datasets import DatasetTablesMissing
 from backend.tools import upload_storage
@@ -149,8 +149,26 @@ def send_message(pipeline_id: int, body: Message, db: Client = Depends(get_supab
     _call(lambda: service.get(db, pipeline_id))
     if not _call(lambda: PipelineRepository(db).claim(pipeline_id, "turn")):
         raise HTTPException(status_code=409, detail="The agent is still working on the last message.")
-    threading.Thread(target=pipeline_builder.run_turn, args=(pipeline_id, text), daemon=True).start()
+    jobs.start(pipeline_id, pipeline_builder.run_turn, pipeline_id, text)
     return {"status": "working", "poll": f"GET /pipelines/{pipeline_id}"}
+
+
+@router.post("/{pipeline_id}/stop")
+def stop(pipeline_id: int, db: Client = Depends(get_supabase)):
+    """
+    Stop the agent's turn or the run now. The pipeline is free at once; the
+    job ends at its next check (after a slow model call returns, say) and
+    writes nothing more. Work it finished before stopping is kept. Also clears
+    a busy flag left behind by a server restart.
+    """
+    p = _call(lambda: service.get(db, pipeline_id))
+    if not p.get("busy"):
+        return _view(db, pipeline_id)
+    jobs.stop(pipeline_id)
+    _call(lambda: PipelineRepository(db).release(pipeline_id))
+    what = "the agent" if p["busy"] == "turn" else "the run"
+    service.event(db, pipeline_id, f"You stopped {what}. What it finished before stopping is kept.", level="warn")
+    return _view(db, pipeline_id)
 
 
 # ── Panel actions (the planner's) ────────────────────────────────────────────
@@ -244,7 +262,7 @@ def finalize_sources(pipeline_id: int, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)
     p = _call(lambda: service.finalize_sources(db, pipeline_id))
     if not p.get("steps") and _call(lambda: PipelineRepository(db).claim(pipeline_id, "turn")):
-        threading.Thread(target=pipeline_builder.run_turn, args=(pipeline_id, OUTLINE_REQUEST), daemon=True).start()
+        jobs.start(pipeline_id, pipeline_builder.run_turn, pipeline_id, OUTLINE_REQUEST)
     return _view(db, pipeline_id)
 
 
@@ -441,8 +459,6 @@ def _rerun_bg(pipeline_id: int, step_id: str, record_id: str) -> None:
         service.rerun_record(db, pipeline_id, step_id, record_id)
     except Exception as e:  # noqa: BLE001
         service.event(db, pipeline_id, f"Re-running {step_id} for {record_id} failed: {e}", level="error")
-    finally:
-        PipelineRepository(db).release(pipeline_id)
 
 
 @router.post("/{pipeline_id}/records/{record_id}/rerun", status_code=202)
@@ -451,7 +467,7 @@ def rerun_record(pipeline_id: int, record_id: str, body: Rerun, db: Client = Dep
     _call(lambda: service.get(db, pipeline_id))
     if not _call(lambda: PipelineRepository(db).claim(pipeline_id, "run")):
         raise HTTPException(status_code=409, detail="The pipeline is busy.")
-    threading.Thread(target=_rerun_bg, args=(pipeline_id, body.step_id, record_id), daemon=True).start()
+    jobs.start(pipeline_id, _rerun_bg, pipeline_id, body.step_id, record_id)
     return {"status": "running", "poll": f"GET /pipelines/{pipeline_id}"}
 
 
@@ -493,8 +509,6 @@ def _run_bg(pipeline_id: int, upto: Optional[str], fresh: bool) -> None:
         service.run(db, pipeline_id, upto=upto, fresh=fresh)
     except Exception as e:  # noqa: BLE001
         service.event(db, pipeline_id, f"Run failed: {type(e).__name__}: {e}", level="error")
-    finally:
-        PipelineRepository(db).release(pipeline_id)
 
 
 @router.post("/{pipeline_id}/run", status_code=202)
@@ -502,7 +516,7 @@ def run_pipeline(pipeline_id: int, body: RunRequest, db: Client = Depends(get_su
     _call(lambda: service.get(db, pipeline_id))
     if not _call(lambda: PipelineRepository(db).claim(pipeline_id, "run")):
         raise HTTPException(status_code=409, detail="The pipeline is busy.")
-    threading.Thread(target=_run_bg, args=(pipeline_id, body.upto, body.fresh), daemon=True).start()
+    jobs.start(pipeline_id, _run_bg, pipeline_id, body.upto, body.fresh)
     return {"status": "running", "poll": f"GET /pipelines/{pipeline_id}"}
 
 

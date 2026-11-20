@@ -9,7 +9,13 @@ const PipelineWorkspace = lazy(() => import("./PipelineWorkspace.jsx"));
 // Two full-width pages: the Pipeline canvas (schema on the Output node, sources
 // and steps on the canvas, the agent in a drawer) and Review & publish (the
 // agent on the right). Agent turns and runs happen in the background on the
-// server; while the pipeline reports `busy` this polls until it clears.
+// server; while the pipeline reports `busy` this polls until it clears. A poll
+// that fails keeps the last view with `lost` set and polls on more slowly, so an
+// overloaded or restarting server never leaves the page waiting for good.
+const POLL_MS = 1500;
+const RETRY_MS = 5000;
+const POLL_TIMEOUT_MS = 20000;
+
 export default function PipelineBuilder({ id, onBack }) {
   const [view, setView] = useState(null);
   const [error, setError] = useState(null);
@@ -21,12 +27,13 @@ export default function PipelineBuilder({ id, onBack }) {
 
   const load = useCallback(async () => {
     try {
-      const v = await call("GET", `/pipelines/${id}`);
+      const v = await call("GET", `/pipelines/${id}`, undefined, { timeout: POLL_TIMEOUT_MS });
       setView(v);
       setError(null);
       return v;
     } catch (e) {
       setError(e.message);
+      setView((cur) => (cur?.busy ? { ...cur, lost: e.message } : cur));   // a new object, so polling goes on
       return null;
     }
   }, [id]);
@@ -36,7 +43,7 @@ export default function PipelineBuilder({ id, onBack }) {
   // Poll while the server is working.
   useEffect(() => {
     clearTimeout(timer.current);
-    if (view?.busy) timer.current = setTimeout(load, 1500);
+    if (view?.busy) timer.current = setTimeout(load, view.lost ? RETRY_MS : POLL_MS);
     return () => clearTimeout(timer.current);
   }, [view, load]);
 

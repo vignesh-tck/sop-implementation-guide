@@ -1,7 +1,8 @@
 import { PAGES } from "./nav.js";
 
 // The design stages as a stepper: done stages can be revisited, later ones wait.
-export default function Stepper({ view, page, reached, onGo }) {
+// While the agent or a run is working, Stop ends it and frees the pipeline at once.
+export default function Stepper({ view, page, reached, onGo, onStop }) {
   return (
     <nav className="pl-stepper" aria-label="Pipeline design stages">
       {PAGES.map((p, i) => (
@@ -14,8 +15,11 @@ export default function Stepper({ view, page, reached, onGo }) {
         </button>
       ))}
       <span className="spacer" />
-      {view.busy && <span className="pl-progress"><span className="pl-spin" />
-        {view.progress || (view.busy === "turn" ? "The agent is working…" : "Running…")}</span>}
+      {view.busy && <span className="pl-progress" title={view.lost || view.progress || ""}><span className="pl-spin" />
+        {view.lost ? "Lost contact with the server, retrying…"
+          : view.progress || (view.busy === "turn" ? "The agent is working…" : "Running…")}</span>}
+      {view.busy && onStop && <button type="button" className="pl-stop" onClick={onStop}
+        title={view.busy === "turn" ? "Stop the agent. What it finished so far is kept." : "Stop the run. What it finished so far is kept."}>Stop</button>}
     </nav>
   );
 }

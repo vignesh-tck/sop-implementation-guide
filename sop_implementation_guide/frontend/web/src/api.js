@@ -1,11 +1,19 @@
 const API_BASE = (import.meta.env.VITE_API_BASE || "http://localhost:8000").replace(/\/+$/, "");
 
-export async function call(method, path, body) {
-  const res = await fetch(API_BASE + path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
+// timeout (ms) gives up on a request the server never answers, e.g. while it is overloaded.
+export async function call(method, path, body, { timeout } = {}) {
+  let res;
+  try {
+    res = await fetch(API_BASE + path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(timeout ? { signal: AbortSignal.timeout(timeout) } : {}),
+    });
+  } catch (e) {
+    if (e.name === "TimeoutError") throw new Error(`The server did not answer within ${Math.round(timeout / 1000)}s`);
+    throw e;
+  }
   const text = await res.text();
   let data = null;
   try {

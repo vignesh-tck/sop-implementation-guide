@@ -24,7 +24,7 @@ from typing import Any
 import anthropic
 
 from backend.db.session import get_supabase
-from backend.pipelines import engine, graph, kinds, outputs, service
+from backend.pipelines import engine, graph, jobs, kinds, outputs, service
 from backend.pipelines.engine import PipelineError
 from backend.repositories.pipelines import PipelineMessageRepository, PipelineRepository
 from backend.tools.llm_extractor import _get_client
@@ -527,7 +527,11 @@ def _create(client, **kwargs):
 
 
 def run_turn(pipeline_id: int, text: str) -> None:
-    """One planner message and everything the agent does in reply. Runs in a background thread."""
+    """
+    One planner message and everything the agent does in reply. Runs as a
+    background job (backend/pipelines/jobs.py), which clears busy afterwards;
+    after Stop it ends at the next model or tool call without writing more.
+    """
     db = get_supabase()
     msgs = PipelineMessageRepository(db)
     try:
@@ -546,9 +550,11 @@ def run_turn(pipeline_id: int, text: str) -> None:
 
         client = _get_client()
         for _ in range(MAX_TOOL_ROUNDS):
+            jobs.check()
             resp = _create(client, model=MODEL, max_tokens=16000,
                            system=[{"type": "text", "text": system}], tools=tools, messages=messages,
                            cache_control={"type": "ephemeral"}, output_config={"effort": "medium"})
+            jobs.check()   # stopped while the model was thinking: drop its reply
             content = [b.model_dump(mode="json", exclude_none=True) for b in resp.content]
             msgs.add(pipeline_id, "assistant", content)
             messages.append({"role": "assistant", "content": content})
@@ -566,6 +572,7 @@ def run_turn(pipeline_id: int, text: str) -> None:
             for b in resp.content:
                 if b.type != "tool_use":
                     continue
+                jobs.check()
                 result, is_error = _execute(db, pipeline_id, b.name, b.input or {})
                 results.append({"type": "tool_result", "tool_use_id": b.id,
                                 "content": json.dumps(result, default=str), **({"is_error": True} if is_error else {})})
@@ -576,8 +583,6 @@ def run_turn(pipeline_id: int, text: str) -> None:
     except Exception as e:  # noqa: BLE001 — surfaced in the chat, never lost in a thread
         log.exception("pipeline turn failed for %s", pipeline_id)
         service.event(db, pipeline_id, f"The agent hit an error: {type(e).__name__}: {e}", level="error")
-    finally:
-        PipelineRepository(db).release(pipeline_id)
 
 
 # ── Chat as the UI shows it ──────────────────────────────────────────────────

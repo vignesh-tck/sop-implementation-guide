@@ -99,8 +99,9 @@ export function AgentTab({ view, act, disabled, compose, context, contextLabel, 
             </div>
           )}
           {busy && (
-            <div className="pl-event info"><span className="spin">●</span> {view.busy === "run" ? "Running the pipeline" : "The agent is working"}
-              {view.progress ? ` · ${view.progress}` : "…"}</div>
+            <div className="pl-event info"><span className="spin">●</span> {view.lost ? "Lost contact with the server, retrying…"
+              : <>{view.busy === "run" ? "Running the pipeline" : "The agent is working"}{view.progress ? ` · ${view.progress}` : "…"}</>}
+              {" "}<button type="button" className="link" onClick={() => act("POST", "/stop")}>Stop</button></div>
           )}
           <div ref={bottom} />
         </div>

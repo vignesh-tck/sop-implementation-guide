@@ -157,7 +157,7 @@ export default function PipelineWorkspace({ view, act, pending, nav, onBack, err
         <button className="link" onClick={onBack}>‹ Pipelines</button>
         <b className="ws-name">{view.name}</b>
         <span className="ws-kind">{view.kind_label} · def v{view.definition_version}</span>
-        <Stepper view={view} page={nav.page} reached={nav.reached} onGo={nav.go} />
+        <Stepper view={view} page={nav.page} reached={nav.reached} onGo={nav.go} onStop={() => act("POST", "/stop")} />
         <div className="ws-seg" role="tablist" aria-label="View">
           {[["canvas", "Canvas"], ["records", "Records"]].map(([k, t]) => (
             <button key={k} type="button" role="tab" aria-selected={mode === k} className={mode === k ? "on" : ""} onClick={() => setMode(k)}>{t}</button>

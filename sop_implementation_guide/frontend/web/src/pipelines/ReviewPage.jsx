@@ -680,7 +680,7 @@ export default function ReviewPage({ view, act, pending, nav, onBack, error, onC
         <button className="link" onClick={onBack}>‹ Pipelines</button>
         <b className="ws-name">{view.name}</b>
         <span className="ws-kind">{view.kind_label} · def v{view.definition_version}</span>
-        <Stepper view={view} page={nav.page} reached={nav.reached} onGo={nav.go} />
+        <Stepper view={view} page={nav.page} reached={nav.reached} onGo={nav.go} onStop={() => act("POST", "/stop")} />
       </div>
       <div className="ws-bar">
         <span className={"ws-chip pub-chip " + chip[0]}>{chip[1]}</span>

@@ -19,7 +19,7 @@ from typing import Any
 
 from supabase import Client
 
-from backend.pipelines import engine, graph, kinds, outputs, zoning_steps
+from backend.pipelines import engine, graph, jobs, kinds, outputs, zoning_steps
 from backend.pipelines.engine import PipelineError
 from backend.repositories.pipelines import (
     PipelineMessageRepository,
@@ -381,14 +381,17 @@ def rerun_record(db: Client, pipeline_id: int, step_id: str, record_id: str) -> 
     """Run one model step again on one record, without the cache, then the steps after it."""
     p = get(db, pipeline_id)
     repo = PipelineRepository(db)
+    stopped = jobs.checker()
 
     def progress(msg: str) -> None:
+        stopped()
         p["state"]["progress"] = msg
         repo.update(pipeline_id, {"state": p["state"]})
 
     outputs.rerun_record(p["kind"], p["definition"], p["state"], step_id, record_id,
                          context=p["definition"].get("goal") or p["name"], progress=progress,
                          refs=reference_rows(db))
+    stopped()
     p["state"].pop("progress", None)
     po = _out(p, outputs.owner(p["definition"], step_id))
     last = po["state"].get("last_run") or {}
@@ -1354,13 +1357,16 @@ def run(db: Client, pipeline_id: int, upto: str | None = None, fresh: bool = Fal
     elif upto and froms.get(outputs.owner(d, upto)) == [upto]:
         upto, only = None, outputs.owner(d, upto)   # previewing the step that feeds an output runs that output whole
     which = [only] if only else [outputs.owner(d, upto)] if upto else outputs.ids(d)
+    stopped = jobs.checker()
 
     def progress(msg: str) -> None:
+        stopped()
         p["state"]["progress"] = msg
         repo.update(pipeline_id, {"state": p["state"]})
 
     outputs.run(p["kind"], d, p["state"], upto=upto, fresh=fresh, context=d.get("goal") or p["name"],
                 progress=progress, refs=reference_rows(db), only=only)
+    stopped()
     p["state"].pop("progress", None)
     if upto is None:
         for oid in which:
