@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from postgrest.exceptions import APIError
+from postgrest.types import ReturnMethod
 from supabase import Client
 
 from backend.repositories.base import BaseRepository
@@ -49,7 +50,10 @@ class PipelineRepository(_PipelineRepository):
         return self._run(q.order("updated_at", desc=True)).data or []
 
     def update(self, pipeline_id: int, data: dict) -> None:
-        self._run(self._db.table(self._table).update({**data, "updated_at": _now()}).eq("id", pipeline_id))
+        # minimal: by default PostgREST sends the whole updated row back, and a
+        # pipeline's state runs to megabytes; a run writes it at every progress report.
+        self._run(self._db.table(self._table).update({**data, "updated_at": _now()},
+                                                     returning=ReturnMethod.minimal).eq("id", pipeline_id))
 
     def delete(self, pipeline_id: int) -> None:
         self._run(self._db.table(self._table).delete().eq("id", pipeline_id))
