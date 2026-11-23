@@ -527,44 +527,10 @@ button.ghost { background: var(--surface); font-size: .8rem; color: var(--orange
 .plan-step.editing .ps-tags { margin-left: 2.1rem; }
 
 
-/* ---- zoning tab ---- */
-.zoning-head h4 { margin-bottom: 0; }
-.stat-row { display: flex; flex-wrap: wrap; gap: .4rem 1.25rem; font-size: .82rem; color: var(--muted); }
-.stat-row b { color: var(--text); }
-.subtabs { display: flex; gap: .25rem; margin: 0 0 .75rem; flex-wrap: wrap; }
-.zoning-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 1rem; align-items: start; }
-@media (max-width: 860px) { .zoning-grid { grid-template-columns: minmax(0, 1fr); } }
-.zoning-list { padding: .5rem 0 0; max-height: calc(100vh - 260px); overflow-y: auto; position: sticky; top: .5rem; }
-.zoning-list ul { list-style: none; margin: 0; padding: 0; }
-.zoning-list li { padding: .45rem .75rem; border-left: 3px solid transparent; border-bottom: 1px solid var(--border); cursor: pointer; }
-.zoning-list li:hover { background: var(--surface-2); }
-.zoning-list li[aria-selected="true"] { background: var(--surface-2); border-left-color: var(--orange); }
-.zone-filter { display: flex; flex-direction: column; gap: .25rem; padding: 0 .75rem .5rem; }
-.zone-filter select { font-size: .8rem; }
-.zl-top { display: flex; align-items: baseline; gap: .35rem; font-size: .85rem; }
-.zl-score { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted); }
-.zl-meta { margin-top: .2rem; font-size: .75rem; }
-.zone-chip {
-  display: inline-block; font-size: .68rem; padding: .02rem .35rem; margin: 0 .2rem .15rem 0; border-radius: 3px;
-  border: 1px solid var(--silver); color: var(--silver); font-weight: 600;
-}
-.zone-chip.legacy { border-color: var(--amber); color: var(--amber); }
-.zone-chip.overlay { border-style: dashed; border-color: var(--muted); color: var(--muted); font-weight: 400; }
-.zd-title { margin: 0 0 .6rem; font-size: 1rem; }
+/* ---- zoning facts table and outcome badges (plan steps) ---- */
 table.facts th { width: 13rem; text-transform: none; letter-spacing: 0; font-size: .78rem; }
 table.facts td { font-size: .84rem; }
 table.facts .cases { word-break: break-word; margin-bottom: .2rem; }
-.zfindings { list-style: none; margin: 0; padding: 0; }
-.zfindings > li { border-bottom: 1px solid var(--border); }
-.zfinding-head {
-  display: flex; align-items: center; gap: .45rem; width: 100%; text-align: left; flex-wrap: wrap;
-  background: transparent; border: none; padding: .45rem .2rem; font-weight: 400; color: var(--text);
-}
-.zfinding-head:hover { background: var(--surface-2); }
-.zfinding-head .caret { color: var(--muted); font-size: .7rem; width: .8rem; }
-.zf-label { font-weight: 600; }
-.zf-summary { flex: 1; min-width: 10rem; }
-.zfinding-body { padding: .2rem .4rem .75rem 1.5rem; }
 .outcome {
   display: inline-block; min-width: 2.1rem; text-align: center; font-size: .7rem; font-weight: 700;
   padding: .1rem .3rem; border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
@@ -573,44 +539,6 @@ table.facts .cases { word-break: break-word; margin-bottom: .2rem; }
 .outcome.special_exception { background: color-mix(in srgb, var(--amber) 16%, transparent); border-color: var(--amber); color: var(--amber); }
 .outcome.prohibited { background: color-mix(in srgb, var(--red) 14%, transparent); border-color: var(--red); color: var(--red); }
 .outcome.legacy { background: color-mix(in srgb, var(--silver) 14%, transparent); border-color: var(--silver); color: var(--silver); }
-.legend-row { display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: .78rem; color: var(--muted); margin-bottom: .6rem; }
-.use-matrix th { text-align: center; white-space: nowrap; }
-.use-matrix th:first-child { text-align: left; }
-.use-matrix td.um-label { min-width: 16rem; font-size: .83rem; }
-.use-matrix td.um-label .assess { font-size: .72rem; }
-.use-matrix td.um-cell { text-align: center; padding: .25rem; }
-.um-btn { background: transparent; border: 1px solid transparent; padding: .1rem; border-radius: 4px; }
-.um-btn.picked { border-color: var(--orange); }
-.cell-detail p { font-size: .85rem; }
-.sources-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
-@media (max-width: 860px) { .sources-grid { grid-template-columns: minmax(0, 1fr); } }
-.sources-grid .wide { grid-column: 1 / -1; }
-.sources-grid .refs-list { border-top: none; padding-top: 0; font-size: .82rem; }
-.how-list { margin: 0; padding-left: 1.2rem; font-size: .84rem; line-height: 1.5; }
-.how-list li { margin-bottom: .3rem; }
-.zone-context { margin-bottom: .6rem; font-size: .85rem; }
-.zone-context ul { margin: .2rem 0 0; padding-left: 1.2rem; }
-.zone-context li { margin-bottom: .2rem; line-height: 1.45; }
-.zone-context a { color: var(--silver); }
-
-/* ---- zoning refresh ---- */
-.refresh-panel fieldset { border: 1px solid var(--border); border-radius: 6px; padding: .5rem .75rem .65rem; margin: 0 0 .6rem; }
-.refresh-panel legend { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; padding: 0 .3rem; }
-.refresh-panel label.radio { display: flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--text); margin: .15rem 0; }
-.refresh-panel label.field { display: flex; flex-direction: column; gap: .2rem; margin-top: .4rem; font-size: .78rem; }
-.refresh-panel label.field input { font-size: .82rem; }
-.refresh-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: 0 .75rem; }
-@media (max-width: 700px) { .refresh-grid { grid-template-columns: minmax(0, 1fr); } }
-.refresh-run { border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; margin-bottom: .4rem; }
-.refresh-run .zl-top { flex-wrap: wrap; }
-.refresh-progress { margin-top: .5rem; }
-.refresh-progress .bar { height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: .3rem; overflow: hidden; }
-.refresh-progress .bar > div { height: 100%; background: var(--orange); transition: width .4s; }
-.refresh-diff { margin-top: .5rem; }
-.refresh-diff .zoning-h { margin-top: .7rem; }
-.refresh-diff table.facts td { font-size: .82rem; }
-.refresh-history { margin-top: .75rem; font-size: .82rem; }
-.refresh-history summary { cursor: pointer; color: var(--muted); }
 
 /* ---- block funding: the card on the block page and the review over the map ---- */
 .funding-card {

@@ -7,7 +7,6 @@ import FundingWorkspace from "./blocks/FundingWorkspace.jsx";
 import useBlockFunding, { fundingStatus } from "./blocks/useBlockFunding.js";
 import PathwaysView from "./pathways/PathwaysView.jsx";
 import PipelinesView from "./pipelines/PipelinesView.jsx";
-import ZoningView from "./zoning/ZoningView.jsx";
 
 function BlocksView() {
   const [blocks, setBlocks] = useState([]);
@@ -123,9 +122,9 @@ function BlocksView() {
   );
 }
 
-const VIEWS = ["blocks", "pipelines", "pathways", "zoning"];
+const VIEWS = ["blocks", "pipelines", "pathways"];
 
-// The open tab lives in the URL hash (#zoning, #zoning/table) so a view can be linked to.
+// The open tab lives in the URL hash (#pipelines) so a view can be linked to.
 function viewFromHash() {
   const v = window.location.hash.slice(1).split("/")[0];
   return VIEWS.includes(v) ? v : "blocks";
@@ -156,9 +155,6 @@ export default function App() {
           <button className="tab" aria-selected={view === "pathways"} onClick={() => setView("pathways")}>
             Pathways
           </button>
-          <button className="tab" aria-selected={view === "zoning"} onClick={() => setView("zoning")}>
-            Zoning
-          </button>
         </nav>
         <div className="spacer" />
         <span className="meta" style={{ color: "var(--faint)", fontSize: ".72rem" }}>{API_BASE}</span>
@@ -167,7 +163,6 @@ export default function App() {
       {view === "blocks" && <BlocksView />}
       {view === "pipelines" && <PipelinesView />}
       {view === "pathways" && <PathwaysView />}
-      {view === "zoning" && <ZoningView />}
     </>
   );
 }
