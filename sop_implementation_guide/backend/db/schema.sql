@@ -385,7 +385,8 @@ CREATE TABLE IF NOT EXISTS implementation_plans (
     rec_label        TEXT,
     pathway_key      TEXT NOT NULL,
     template_version TEXT,
-    -- [{title, owner, waits_on, time, filled_by, note, edited}], in order
+    -- [{id, title, how, actor, owner, time, depends_on, depends_mode, condition,
+    --   filled_by, edited}], in order (older rows: {title, owner, waits_on, time ...})
     steps            JSONB NOT NULL,
     status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'final')),
     reviewed_by      TEXT,
@@ -397,6 +398,48 @@ CREATE TABLE IF NOT EXISTS implementation_plans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_plans_block_id ON implementation_plans(block_id);
+
+
+-- ---------------------------------------------------------------
+-- IMPLEMENTATION PLAN REVISIONS  (added Nov 22 2026)
+--
+-- The audit trail of a plan. An SME's edits are saved as a draft; nothing
+-- else reads a draft until someone approves it, and only then is
+-- implementation_plans (what the block page reads) updated.
+-- Every draft saved, approval and discarded draft is one append-only row here,
+-- with the steps as they stood and what changed against the approved version
+-- (or the playbook, before the first approval).
+--
+-- Run this section once in the Supabase SQL editor. It is safe to run again.
+-- ---------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS implementation_plan_revisions (
+    id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    block_id         BIGINT REFERENCES blocks(id) ON DELETE CASCADE,
+    rec_id           BIGINT REFERENCES block_recommendations(id) ON DELETE CASCADE,
+    rec_label        TEXT,
+    -- 1, 2, 3 ... per (block, recommendation).
+    revision         INT NOT NULL,
+    action           TEXT NOT NULL CHECK (action IN ('draft', 'approved', 'discarded')),
+    -- [{id, title, how, actor, owner, time, depends_on, depends_mode, condition,
+    --   filled_by, edited}], in order. NULL on a discarded draft.
+    steps            JSONB,
+    -- {added, changed, removed, count} against the approved steps at the time.
+    changes          JSONB,
+    -- The approved revision a draft started from; NULL = the playbook.
+    base_revision    INT,
+    pathway_key      TEXT,
+    template_version TEXT,
+    made_by          TEXT NOT NULL,
+    notes            TEXT,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (block_id, rec_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_revisions_rec ON implementation_plan_revisions(block_id, rec_id, revision DESC);
+
+-- The approved revision now in implementation_plans.
+ALTER TABLE implementation_plans ADD COLUMN IF NOT EXISTS revision INT;
 
 
 -- ---------------------------------------------------------------

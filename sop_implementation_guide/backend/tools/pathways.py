@@ -28,6 +28,10 @@ Every step carries references: what a live source cited, the reference a
 reviewer should check for an unconnected source, and the template version or
 the reviewer who set the wording. A step never renders without one.
 
+Each step is a node in a graph (tools/plan_graph.py): who does it (an actor),
+how, how long, and which steps it waits on. Steps saved before that existed
+are upgraded on read.
+
 Funding and zoning are re-attached on every read, including for a plan someone
 already saved. The saved plan holds the reviewer's wording of the steps; the
 findings are live, so a signal approved or a zone looked up after the plan was
@@ -41,24 +45,32 @@ from pathlib import Path
 from supabase import Client
 
 from backend.repositories.pathway_templates import PathwayTemplateRepository, TemplateTableMissing
+from backend.tools.plan_graph import ACTORS, estimate, find_cycle, upgrade_steps
 
 TEMPLATES_PATH = Path(__file__).resolve().parent.parent / "data" / "pathways.json"
 
 # The step fields a reviewer can set. Anything else in a saved step (attached
 # funding, computed status) is derived on read and never stored.
-STEP_FIELDS = ("title", "owner", "waits_on", "time", "filled_by", "note", "edited")
+STEP_FIELDS = ("id", "title", "how", "actor", "owner", "time", "depends_on", "depends_mode",
+               "condition", "filled_by", "note", "edited")
 
 # A template step has no `edited` flag: it is what every plan starts from.
-TEMPLATE_STEP_FIELDS = ("title", "owner", "waits_on", "time", "filled_by", "note")
+TEMPLATE_STEP_FIELDS = tuple(f for f in STEP_FIELDS if f != "edited")
 
 PATHWAY_FIELDS = ("key", "name", "who", "branch")
 
 KEY_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
+def _upgrade_doc(doc: dict) -> dict:
+    """Every pathway's steps with ids, actors and structured dependencies."""
+    doc["pathways"] = [{**p, "steps": upgrade_steps(p.get("steps") or [])} for p in doc.get("pathways") or []]
+    return doc
+
+
 def load_file_templates() -> dict:
     with open(TEMPLATES_PATH, encoding="utf-8") as f:
-        return json.load(f)
+        return _upgrade_doc(json.load(f))
 
 
 def load_templates(db: Client | None = None) -> dict:
@@ -89,7 +101,7 @@ def load_templates(db: Client | None = None) -> dict:
         "status": doc.get("status") or "",
         # Always from the file: these describe what the code can automate.
         "filled_by": file_doc["filled_by"],
-        "pathways": doc.get("pathways") or [],
+        "pathways": _upgrade_doc({"pathways": doc.get("pathways")})["pathways"],
         "rec_types": doc.get("rec_types") or {},
         "source": "app",
         "storage_ready": True,
@@ -113,8 +125,13 @@ def clean_template_step(step: dict) -> dict:
             out[k] = v
     out.setdefault("title", "")
     out.setdefault("filled_by", "template")
-    for k in ("owner", "waits_on", "time"):
+    for k in ("how", "owner", "time"):
         out.setdefault(k, "")
+    out["depends_on"] = [d for d in out.get("depends_on") or [] if isinstance(d, str)]
+    if out.get("depends_mode") != "any":
+        out.pop("depends_mode", None)
+    if out.get("actor") not in ACTORS:
+        out.pop("actor", None)
     return out
 
 
@@ -139,7 +156,10 @@ def normalize_templates(doc: dict, sources: dict) -> tuple[dict, list[str]]:
         seen.add(key)
         if not name:
             errors.append(f"Playbook {i} ('{key}') needs a name.")
-        steps = [clean_template_step(s) for s in p.get("steps") or []]
+        steps = upgrade_steps([clean_template_step(s) for s in p.get("steps") or []])
+        loop = find_cycle(steps)
+        if loop:
+            errors.append(f"'{label}': these steps wait on each other in a loop: {'; '.join(loop)}.")
         if not steps:
             errors.append(f"'{label}' has no steps.")
         for n, s in enumerate(steps, start=1):
@@ -174,6 +194,15 @@ def clean_step(step: dict) -> dict:
     out.setdefault("title", "")
     out.setdefault("filled_by", "template")
     out["edited"] = bool(step.get("edited"))
+    return out
+
+
+def clean_steps(steps: list[dict]) -> list[dict]:
+    """A reviewer's steps, ready to store: cleaned, upgraded, and checked for loops."""
+    out = upgrade_steps([clean_step(s) for s in steps])
+    loop = find_cycle(out)
+    if loop:
+        raise ValueError(f"These steps wait on each other in a loop: {'; '.join(loop)}.")
     return out
 
 
@@ -296,7 +325,7 @@ def build_plan(
     }
 
     if saved:
-        steps = saved.get("steps") or []
+        steps = upgrade_steps(saved.get("steps") or [])
     elif pathway:
         steps = [clean_step(s) for s in pathway["steps"]]
     else:
@@ -322,6 +351,8 @@ def build_plan(
         "updated_at": saved.get("updated_at") if saved else None,
         "finalized_at": saved.get("finalized_at") if saved else None,
         "funding_count": len(funding),
+        # Rough total along the longest chain of steps, in weeks.
+        "estimate": estimate(steps),
         "zoning_summary": zoning["summary"] if zoning else None,
         # The whole finding and funding list, for the recommendation's own Zoning
         # and Funding views; the steps below carry the same data where it applies.

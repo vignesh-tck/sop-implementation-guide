@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { call, money, num } from "../api.js";
 import { OUTCOME, References, ZoningFinding } from "../zoning/ZoningParts.jsx";
 import PlanView, { FundingList } from "./PlanView.jsx";
+import PlanAudit from "./plan/PlanAudit.jsx";
+import { estimateText } from "./plan/graph.js";
 
 // One recommendation, stepped into from the block's list. Everything here is
 // about this recommendation alone: zoning in particular, since a public garden
@@ -11,13 +13,13 @@ import PlanView, { FundingList } from "./PlanView.jsx";
 
 const TABS = [
   ["plan", "Implementation plan"],
+  ["audit", "Audit"],
   ["zoning", "Zoning"],
   ["funding", "Funding"],
   ["sources", "Sources"],
 ];
 
 const TILE_CLASS = { by_right: "ok", special_exception: "cond", prohibited: "no" };
-const PLAN_STATUS = { template: "Template", draft: "Draft", final: "Final" };
 
 function ZoningTile({ z, onClick }) {
   let value = "Not looked up", sub = "Run the zoning lookup", cls = "none";
@@ -48,12 +50,15 @@ function FundingTile({ funding, onClick }) {
 }
 
 function PlanTile({ plan, onClick }) {
-  const cls = plan.status === "final" ? "ok" : plan.status === "draft" ? "edited" : "none";
+  const approved = plan.status === "final";
+  const cls = plan.draft ? "edited" : approved ? "ok" : "none";
+  const est = estimateText(plan.estimate);
+  const sub = [est && `~${est}`, plan.draft ? "draft waiting" : approved ? plan.reviewed_by : "not reviewed"].filter(Boolean).join(" · ");
   return (
     <button type="button" className={"tile " + cls} onClick={onClick}>
       <span className="tile-k">Implementation plan</span>
-      <span className="tile-v">{plan.template_version || "—"}</span>
-      <span className="tile-s">{PLAN_STATUS[plan.status] || plan.status}{plan.reviewed_by ? ` · ${plan.reviewed_by}` : ""}</span>
+      <span className="tile-v">{approved ? `Approved${plan.revision ? ` v${plan.revision}` : ""}` : "From playbook"}</span>
+      <span className="tile-s">{sub}</span>
     </button>
   );
 }
@@ -156,6 +161,10 @@ export default function RecommendationView({
               onSaved={(p) => { setPlan(p); onChanged?.(); }}
               onFunding={onOpenFunding}
             />
+          )}
+
+          {tab === "audit" && (
+            <PlanAudit blockId={blockId} recId={recId} refreshKey={`${plan.revision}-${plan.draft?.revision}`} />
           )}
 
           {tab === "zoning" && (

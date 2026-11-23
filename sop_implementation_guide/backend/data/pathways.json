@@ -1,7 +1,7 @@
 {
   "version": "v0-draft",
   "updated": "2026-11-17",
-  "status": "Draft. Owners and times are a strawman from general practice, not yet reviewed by an SME.",
+  "status": "Draft. Who does each step, how, and how long are a strawman from general practice, not yet reviewed by an SME.",
 
   "filled_by": {
     "template":      {"label": "Template",             "kind": "template", "live": true,  "note": "Fixed wording from this template; the same on every block until an SME edits it."},
@@ -32,15 +32,15 @@
       "who": "Property owner",
       "branch": "Is the condition a code violation the City can enforce, or an improvement beyond code that needs an incentive?",
       "steps": [
-        {"title": "Identify the property owners on the block", "owner": "City planning staff", "waits_on": "", "time": "1–2 wk", "filled_by": "parcel"},
-        {"title": "Decide the path: code violation or voluntary improvement", "owner": "Code enforcement + planning", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "template"},
-        {"title": "Inspect and issue a notice of violation; owner corrects", "owner": "Code enforcement", "waits_on": "If a violation", "time": "1–3 mo", "filled_by": "template"},
-        {"title": "Find incentives: façade grant or loan, storefront program", "owner": "Economic development staff", "waits_on": "If voluntary", "time": "2–4 wk", "filled_by": "funding"},
-        {"title": "Meet the owners; each decides whether to take part", "owner": "Economic development staff", "waits_on": "After 4", "time": "1–2 mo", "filled_by": "template"},
-        {"title": "Apply for the chosen program (the City or the owner, per program rules)", "owner": "City or owner", "waits_on": "If an owner joins", "time": "Program deadline", "filled_by": "template"},
-        {"title": "Design review of the façade change, if design rules apply", "owner": "Planning staff or review board", "waits_on": "After 5", "time": "1–2 mo", "filled_by": "policy"},
-        {"title": "Building or sign permit", "owner": "Permitting office", "waits_on": "After 7", "time": "2–6 wk", "filled_by": "template"},
-        {"title": "Work done and inspected; incentive paid on completion", "owner": "Owner; City verifies", "waits_on": "After 8", "time": "1–6 mo", "filled_by": "program_terms"}
+        {"id": "s1", "title": "Identify the property owners on the block", "how": "Pull the owner and mailing address of each parcel fronting the block from the state property records (SDAT) or the county's parcel map.", "actor": "city", "owner": "City planning staff", "time": "1–2 wk", "depends_on": [], "filled_by": "parcel"},
+        {"id": "s2", "title": "Decide the path: code violation or voluntary improvement", "how": "Compare each building's condition with the property maintenance code: what the code requires can be enforced; anything beyond it needs an owner who wants to do it.", "actor": "city", "owner": "Code enforcement + planning", "time": "1–2 wk", "depends_on": ["s1"], "filled_by": "template"},
+        {"id": "s3", "title": "Inspect and issue a notice of violation; owner corrects", "how": "Code enforcement inspects, sends the owner a notice with a deadline to correct, then re-inspects. Cases that stay open move to a citation.", "actor": "city", "owner": "Code enforcement", "time": "1–3 mo", "depends_on": ["s2"], "condition": "Code violation", "filled_by": "template"},
+        {"id": "s4", "title": "Find incentives: façade grant or loan, storefront program", "how": "The funding agent matches façade grants, loans and storefront programs to this recommendation. Staff keep the ones worth offering to owners.", "actor": "agent", "owner": "Economic development staff", "time": "2–4 wk", "depends_on": ["s2"], "condition": "Voluntary improvement", "filled_by": "funding"},
+        {"id": "s5", "title": "Meet the owners; each decides whether to take part", "how": "Staff contact each owner with the incentives on offer and the owner's share of the cost. Each owner decides whether to take part.", "actor": "city", "owner": "Economic development staff", "time": "1–2 mo", "depends_on": ["s4"], "filled_by": "template"},
+        {"id": "s6", "title": "Apply for the chosen program (the City or the owner, per program rules)", "how": "The owner (or the City, if the program requires it) applies with photos, the planned work and a contractor's quote.", "actor": "builder", "owner": "City or owner", "time": "Program deadline", "depends_on": ["s5"], "condition": "An owner takes part", "filled_by": "template"},
+        {"id": "s7", "title": "Design review of the façade change, if design rules apply", "how": "If the block is under design standards, staff or the review board check materials, signs and colours before any permit.", "actor": "city", "owner": "Planning staff or review board", "time": "1–2 mo", "depends_on": ["s5"], "filled_by": "policy"},
+        {"id": "s8", "title": "Building or sign permit", "how": "The owner's contractor files drawings for a building or sign permit; the permitting office reviews and issues it.", "actor": "other", "owner": "Permitting office", "time": "2–6 wk", "depends_on": ["s7"], "filled_by": "template"},
+        {"id": "s9", "title": "Work done and inspected; incentive paid on completion", "how": "The owner's contractor does the work. The City inspects it and pays the incentive against receipts once it is complete.", "actor": "builder", "owner": "Owner; City verifies", "time": "1–6 mo", "depends_on": ["s8"], "filled_by": "program_terms"}
       ]
     },
     {
@@ -49,15 +49,15 @@
       "who": "Owner or developer",
       "branch": "Is the use allowed by right, by special exception, or not at all without rezoning? Reductions mostly happen when a site redevelops.",
       "steps": [
-        {"title": "Look up the zone of each parcel on the block", "owner": "Planning staff", "waits_on": "", "time": "Days", "filled_by": "zoning"},
-        {"title": "Check whether the use is allowed: by right, special exception, or not allowed", "owner": "Planning staff", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "zoning"},
-        {"title": "Check what the area master plan says for the site", "owner": "Planning staff", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "policy"},
-        {"title": "If not allowed by right: special exception hearing, or rezoning / text amendment", "owner": "Zoning Hearing Examiner or District Council (confirm)", "waits_on": "If not by right", "time": "Special exception 4–9 mo; rezoning 9–18 mo", "filled_by": "template"},
-        {"title": "Test the market: a willing owner or developer, and demand", "owner": "Economic development staff", "waits_on": "Alongside 2–4", "time": "2–6 mo", "filled_by": "template"},
-        {"title": "Line up incentives to close any financing gap (tax credits, state programs)", "owner": "Economic development staff", "waits_on": "If there is a gap", "time": "Varies", "filled_by": "funding"},
-        {"title": "Developer applies for site plan approval", "owner": "Developer; Planning Board (M-NCPPC)", "waits_on": "After 4–6", "time": "3–9 mo", "filled_by": "template"},
-        {"title": "Permits: building and stormwater, plus a state access permit on state routes", "owner": "Permitting office; MD SHA", "waits_on": "After 7", "time": "2–6 mo", "filled_by": "road_owner"},
-        {"title": "Construction", "owner": "Developer", "waits_on": "After 8", "time": "12–24 mo", "filled_by": "template"}
+        {"id": "s1", "title": "Look up the zone of each parcel on the block", "how": "The zoning lookup reads the zones fronting the block from the county zoning map.", "actor": "agent", "owner": "Planning staff", "time": "Days", "depends_on": [], "filled_by": "zoning"},
+        {"id": "s2", "title": "Check whether the use is allowed: by right, special exception, or not allowed", "how": "The lookup checks this use against the Zoning Ordinance use tables (§27-5101) for each zone: by right, special exception, or prohibited.", "actor": "agent", "owner": "Planning staff", "time": "1–2 wk", "depends_on": ["s1"], "filled_by": "zoning"},
+        {"id": "s3", "title": "Check what the area master plan says for the site", "how": "Staff read the 2022 Bowie-Mitchellville and Vicinity Master Plan for the site's planned land use and any strategy that calls for this use.", "actor": "city", "owner": "Planning staff", "time": "1–2 wk", "depends_on": ["s1"], "filled_by": "policy"},
+        {"id": "s4", "title": "If not allowed by right: special exception hearing, or rezoning / text amendment", "how": "The applicant files for a special exception, heard by the Zoning Hearing Examiner, or asks the District Council to rezone or amend the text. Both need public notice and a hearing.", "actor": "other", "owner": "Zoning Hearing Examiner or District Council (confirm)", "time": "Special exception 4–9 mo; rezoning 9–18 mo", "depends_on": ["s2"], "condition": "Not allowed by right", "filled_by": "template"},
+        {"id": "s5", "title": "Test the market: a willing owner or developer, and demand", "how": "Economic development staff look for a willing owner or developer and check demand: comparable projects, rents, and how well the site fits.", "actor": "city", "owner": "Economic development staff", "time": "2–6 mo", "depends_on": ["s1"], "filled_by": "template"},
+        {"id": "s6", "title": "Line up incentives to close any financing gap (tax credits, state programs)", "how": "The funding agent matches tax credits and state programs to this recommendation; staff work out which close the gap.", "actor": "agent", "owner": "Economic development staff", "time": "Varies", "depends_on": ["s5"], "condition": "Financing gap", "filled_by": "funding"},
+        {"id": "s7", "title": "Developer applies for site plan approval", "how": "The developer submits a detailed site plan. Planning Board (M-NCPPC) staff review it and the Board decides at a hearing.", "actor": "builder", "owner": "Developer; Planning Board (M-NCPPC)", "time": "3–9 mo", "depends_on": ["s4", "s5", "s6"], "filled_by": "template"},
+        {"id": "s8", "title": "Permits: building and stormwater, plus a state access permit on state routes", "how": "Building and stormwater permits from the county; on a state route, an access permit from MD SHA for driveways and frontage work.", "actor": "other", "owner": "Permitting office; MD SHA", "time": "2–6 mo", "depends_on": ["s7"], "filled_by": "road_owner"},
+        {"id": "s9", "title": "Construction", "how": "The developer builds, with county inspections along the way and a use and occupancy permit at the end.", "actor": "builder", "owner": "Developer", "time": "12–24 mo", "depends_on": ["s8"], "filled_by": "template"}
       ]
     },
     {
@@ -66,18 +66,18 @@
       "who": "City or county parks agency",
       "branch": "Is the site City land, county parkland (M-NCPPC) or private land? Is it construction, or programming like a farmers market?",
       "steps": [
-        {"title": "Pick a site and confirm who controls it", "owner": "City planning or parks staff", "waits_on": "", "time": "2–4 wk", "filled_by": "parcel"},
-        {"title": "Secure the site: purchase, lease or easement", "owner": "City", "waits_on": "If not City-owned", "time": "6–12 mo", "filled_by": "template"},
-        {"title": "Check zoning allows park use on the parcel", "owner": "Planning staff", "waits_on": "After 1", "time": "1–2 wk", "filled_by": "zoning"},
-        {"title": "Collect policy to cite: parks plan, master plan, health goals", "owner": "Planning staff", "waits_on": "Before 7", "time": "1–2 wk", "filled_by": "policy"},
-        {"title": "Community input on the concept", "owner": "City parks staff", "waits_on": "After 1", "time": "1–3 mo", "filled_by": "template"},
-        {"title": "Concept design and cost estimate", "owner": "City parks staff or consultant", "waits_on": "After 5", "time": "2–3 mo", "filled_by": "template"},
-        {"title": "Apply for state or federal parks grants", "owner": "City", "waits_on": "After 6", "time": "Program deadline", "filled_by": "funding"},
-        {"title": "If awarded: council accepts the grant; notify the planning committee", "owner": "City Council", "waits_on": "If awarded", "time": "1–2 mo", "filled_by": "template"},
-        {"title": "Final design approval, within the program's deadline", "owner": "City; funding agency", "waits_on": "After 8", "time": "2–6 mo", "filled_by": "program_terms"},
-        {"title": "Permits: site, grading, stormwater", "owner": "Permitting office", "waits_on": "After 9", "time": "1–3 mo", "filled_by": "template"},
-        {"title": "Bid and award the construction contract", "owner": "City procurement", "waits_on": "After 10", "time": "2–3 mo", "filled_by": "template"},
-        {"title": "Build, then grant close-out and a maintenance plan", "owner": "Contractor; City", "waits_on": "After 11", "time": "3–9 mo", "filled_by": "program_terms"}
+        {"id": "s1", "title": "Pick a site and confirm who controls it", "how": "Staff shortlist sites on or near the block and check land records for who owns each: the City, M-NCPPC, or a private owner.", "actor": "city", "owner": "City planning or parks staff", "time": "2–4 wk", "depends_on": [], "filled_by": "parcel"},
+        {"id": "s2", "title": "Secure the site: purchase, lease or easement", "how": "Negotiate a purchase, lease or easement with the owner. Council approves any purchase.", "actor": "city", "owner": "City", "time": "6–12 mo", "depends_on": ["s1"], "condition": "Site not City-owned", "filled_by": "template"},
+        {"id": "s3", "title": "Check zoning allows park use on the parcel", "how": "The zoning lookup checks that the parcel's zone allows a park or this use.", "actor": "agent", "owner": "Planning staff", "time": "1–2 wk", "depends_on": ["s1"], "filled_by": "zoning"},
+        {"id": "s4", "title": "Collect policy to cite: parks plan, master plan, health goals", "how": "Gather the parks plan, master plan and health goals that call for this, with page numbers, to cite in grant applications.", "actor": "city", "owner": "Planning staff", "time": "1–2 wk", "depends_on": ["s1"], "filled_by": "policy"},
+        {"id": "s5", "title": "Community input on the concept", "how": "Public meetings and a survey on what the space should hold. The results shape the concept.", "actor": "city", "owner": "City parks staff", "time": "1–3 mo", "depends_on": ["s1"], "filled_by": "template"},
+        {"id": "s6", "title": "Concept design and cost estimate", "how": "Staff or a consultant draw a concept plan and cost estimate, detailed enough to apply for grants.", "actor": "city", "owner": "City parks staff or consultant", "time": "2–3 mo", "depends_on": ["s5"], "filled_by": "template"},
+        {"id": "s7", "title": "Apply for state or federal parks grants", "how": "Staff apply to the programs the funding agent matched, using the concept, the cost estimate and the policy citations.", "actor": "city", "owner": "City", "time": "Program deadline", "depends_on": ["s4", "s6"], "filled_by": "funding"},
+        {"id": "s8", "title": "If awarded: council accepts the grant; notify the planning committee", "how": "Council votes to accept the grant and any local match, and the planning committee is told.", "actor": "city", "owner": "City Council", "time": "1–2 mo", "depends_on": ["s7"], "condition": "Grant awarded", "filled_by": "template"},
+        {"id": "s9", "title": "Final design approval, within the program's deadline", "how": "Finish the design and get the funding agency's sign-off before the program's deadline.", "actor": "city", "owner": "City; funding agency", "time": "2–6 mo", "depends_on": ["s8"], "filled_by": "program_terms"},
+        {"id": "s10", "title": "Permits: site, grading, stormwater", "how": "Site, grading and stormwater permits from the county.", "actor": "other", "owner": "Permitting office", "time": "1–3 mo", "depends_on": ["s9"], "filled_by": "template"},
+        {"id": "s11", "title": "Bid and award the construction contract", "how": "City procurement puts the work out to bid and council awards the contract.", "actor": "city", "owner": "City procurement", "time": "2–3 mo", "depends_on": ["s10"], "filled_by": "template"},
+        {"id": "s12", "title": "Build, then grant close-out and a maintenance plan", "how": "The contractor builds it. The City closes out the grant and sets a maintenance plan and budget.", "actor": "builder", "owner": "Contractor; City", "time": "3–9 mo", "depends_on": ["s11"], "filled_by": "program_terms"}
       ]
     },
     {
@@ -86,14 +86,14 @@
       "who": "Road owner",
       "branch": "Is the road state (MD SHA), county or City? Signs and markings move fast; signals need a warrant study and take much longer.",
       "steps": [
-        {"title": "Confirm who owns the road", "owner": "City staff", "waits_on": "", "time": "Days", "filled_by": "road_owner"},
-        {"title": "Request an engineering study: a crossing study, or a warrant analysis for signals and stop signs", "owner": "Road owner", "waits_on": "After 1", "time": "2–6 mo", "filled_by": "template"},
-        {"title": "Road owner approves the treatment", "owner": "Road owner", "waits_on": "If the study supports it", "time": "1–2 mo", "filled_by": "template"},
-        {"title": "Find funding: maintenance budget for markings, grants for signals", "owner": "City or road owner", "waits_on": "After 3", "time": "Program deadline", "filled_by": "funding"},
-        {"title": "Agreement or permit, if the City pays for or builds on a road it doesn't own", "owner": "City + road owner", "waits_on": "If not a City road", "time": "1–3 mo", "filled_by": "road_owner"},
-        {"title": "Design to the Maryland MUTCD", "owner": "Road owner or City engineer", "waits_on": "After 4", "time": "1–6 mo", "filled_by": "template"},
-        {"title": "Install", "owner": "Road owner or contractor", "waits_on": "After 6", "time": "Weeks for markings; 3–6 mo for signals", "filled_by": "template"},
-        {"title": "Agree who maintains it", "owner": "Road owner + City", "waits_on": "At handover", "time": "", "filled_by": "template"}
+        {"id": "s1", "title": "Confirm who owns the road", "how": "Check whether the road is a City street, a county road or a state route (MD SHA), from the road ownership maps.", "actor": "city", "owner": "City staff", "time": "Days", "depends_on": [], "filled_by": "road_owner"},
+        {"id": "s2", "title": "Request an engineering study: a crossing study, or a warrant analysis for signals and stop signs", "how": "Ask the road owner for a crossing study, or a warrant analysis under the MUTCD for a signal or stop sign: counts, speeds and crash history.", "actor": "other", "owner": "Road owner", "time": "2–6 mo", "depends_on": ["s1"], "filled_by": "template"},
+        {"id": "s3", "title": "Road owner approves the treatment", "how": "The road owner reviews the study and approves a treatment, or says why not.", "actor": "other", "owner": "Road owner", "time": "1–2 mo", "depends_on": ["s2"], "condition": "Study supports it", "filled_by": "template"},
+        {"id": "s4", "title": "Find funding: maintenance budget for markings, grants for signals", "how": "The funding agent matches safety and transportation grants. Markings usually come out of the road owner's maintenance budget.", "actor": "agent", "owner": "City or road owner", "time": "Program deadline", "depends_on": ["s3"], "filled_by": "funding"},
+        {"id": "s5", "title": "Agreement or permit, if the City pays for or builds on a road it doesn't own", "how": "If the City pays for or builds on a county or state road, sign an agreement or get a permit from the road owner.", "actor": "city", "owner": "City + road owner", "time": "1–3 mo", "depends_on": ["s3"], "condition": "Not a City road", "filled_by": "road_owner"},
+        {"id": "s6", "title": "Design to the Maryland MUTCD", "how": "Signs, markings or signal plans are designed to the Maryland MUTCD.", "actor": "other", "owner": "Road owner or City engineer", "time": "1–6 mo", "depends_on": ["s4", "s5"], "filled_by": "template"},
+        {"id": "s7", "title": "Install", "how": "The road owner's crews or a contractor install it.", "actor": "other", "owner": "Road owner or contractor", "time": "Weeks for markings; 3–6 mo for signals", "depends_on": ["s6"], "filled_by": "template"},
+        {"id": "s8", "title": "Agree who maintains it", "how": "Put in writing who maintains the signs, markings or signal, and who pays.", "actor": "city", "owner": "Road owner + City", "time": "At handover", "depends_on": ["s7"], "filled_by": "template"}
       ]
     },
     {
@@ -102,15 +102,15 @@
       "who": "Road owner",
       "branch": "Who owns the road? Is the item capital work, a furnishing, a service an operator runs (bus stops, bike share), or a business permit (outdoor dining)?",
       "steps": [
-        {"title": "Confirm the road owner and the space available in the right-of-way", "owner": "City staff", "waits_on": "", "time": "1–4 wk", "filled_by": "road_owner"},
-        {"title": "Collect policy to cite: complete streets, bike and pedestrian plans", "owner": "Planning staff", "waits_on": "Before 4", "time": "1–2 wk", "filled_by": "policy"},
-        {"title": "Get into a capital budget, or a small-works budget for furnishings", "owner": "Public works + finance", "waits_on": "Next budget cycle", "time": "Up to 12 mo", "filled_by": "template"},
-        {"title": "Apply for transportation or streetscape grants", "owner": "City", "waits_on": "After 1", "time": "Program deadline", "filled_by": "funding"},
-        {"title": "If awarded: council accepts; federal money adds environmental review", "owner": "City Council; MD SHA for federal aid", "waits_on": "If awarded", "time": "1–12 mo", "filled_by": "program_terms"},
-        {"title": "Design, utility coordination and ADA compliance", "owner": "City engineer or consultant", "waits_on": "After 3 or 5", "time": "3–9 mo", "filled_by": "template"},
-        {"title": "Permits: right-of-way permit; street trees may need a state roadside tree permit", "owner": "Road owner; MD DNR (confirm)", "waits_on": "After 6", "time": "1–3 mo", "filled_by": "road_owner"},
-        {"title": "Bid and build", "owner": "City; contractor", "waits_on": "After 7", "time": "3–12 mo", "filled_by": "template"},
-        {"title": "Agree who maintains benches, trees and lights", "owner": "City + road owner", "waits_on": "At handover", "time": "", "filled_by": "template"}
+        {"id": "s1", "title": "Confirm the road owner and the space available in the right-of-way", "how": "Check who owns the road and measure the space in the right-of-way for sidewalks, trees, lights or furnishings.", "actor": "city", "owner": "City staff", "time": "1–4 wk", "depends_on": [], "filled_by": "road_owner"},
+        {"id": "s2", "title": "Collect policy to cite: complete streets, bike and pedestrian plans", "how": "Gather the complete streets, bike and pedestrian plans that call for this, with page numbers, to cite in applications.", "actor": "city", "owner": "Planning staff", "time": "1–2 wk", "depends_on": ["s1"], "filled_by": "policy"},
+        {"id": "s3", "title": "Get into a capital budget, or a small-works budget for furnishings", "how": "Ask for the project in the City's capital improvement program, or a small-works line for furnishings such as benches.", "actor": "city", "owner": "Public works + finance", "time": "Next budget cycle (up to 12 mo)", "depends_on": ["s1"], "filled_by": "template"},
+        {"id": "s4", "title": "Apply for transportation or streetscape grants", "how": "Staff apply to the transportation and streetscape programs the funding agent matched.", "actor": "city", "owner": "City", "time": "Program deadline", "depends_on": ["s1", "s2"], "filled_by": "funding"},
+        {"id": "s5", "title": "If awarded: council accepts; federal money adds environmental review", "how": "Council accepts the grant. Federal money adds an environmental review, run with MD SHA.", "actor": "city", "owner": "City Council; MD SHA for federal aid", "time": "1–12 mo", "depends_on": ["s4"], "condition": "Grant awarded", "filled_by": "program_terms"},
+        {"id": "s6", "title": "Design, utility coordination and ADA compliance", "how": "The City engineer or a consultant designs it, coordinates with utilities, and checks ADA compliance.", "actor": "city", "owner": "City engineer or consultant", "time": "3–9 mo", "depends_on": ["s3", "s5"], "depends_mode": "any", "filled_by": "template"},
+        {"id": "s7", "title": "Permits: right-of-way permit; street trees may need a state roadside tree permit", "how": "A right-of-way permit from the road owner. Street trees may also need a state roadside tree permit.", "actor": "other", "owner": "Road owner; MD DNR (confirm)", "time": "1–3 mo", "depends_on": ["s6"], "filled_by": "road_owner"},
+        {"id": "s8", "title": "Bid and build", "how": "The City bids the work and a contractor builds it.", "actor": "builder", "owner": "City; contractor", "time": "3–12 mo", "depends_on": ["s7"], "filled_by": "template"},
+        {"id": "s9", "title": "Agree who maintains benches, trees and lights", "how": "Put in writing who maintains the benches, trees and lights, and who pays.", "actor": "city", "owner": "City + road owner", "time": "At handover", "depends_on": ["s8"], "filled_by": "template"}
       ]
     },
     {
@@ -119,15 +119,15 @@
       "who": "Road owner",
       "branch": "Who owns the road? Lane reductions need traffic analysis and public engagement; driveway reductions usually wait for redevelopment.",
       "steps": [
-        {"title": "Confirm who owns the road", "owner": "City staff", "waits_on": "", "time": "Days", "filled_by": "road_owner"},
-        {"title": "Traffic and parking study: volumes for lane cuts; width and sight lines for parking", "owner": "Road owner", "waits_on": "After 1", "time": "3–6 mo", "filled_by": "template"},
-        {"title": "Collect policy to cite: complete streets, road diet guidance", "owner": "Planning staff", "waits_on": "Before 4", "time": "1–2 wk", "filled_by": "policy"},
-        {"title": "Public engagement with businesses and residents", "owner": "City", "waits_on": "After 2", "time": "1–3 mo", "filled_by": "template"},
-        {"title": "Road owner approves", "owner": "Road owner", "waits_on": "After 2 and 4", "time": "1–2 mo", "filled_by": "template"},
-        {"title": "Time it with scheduled resurfacing, or fund it separately", "owner": "Road owner; City", "waits_on": "After 5", "time": "Next resurfacing", "filled_by": "funding"},
-        {"title": "Striping and signing plan", "owner": "Road owner or engineer", "waits_on": "After 6", "time": "1–3 mo", "filled_by": "template"},
-        {"title": "Restripe and sign", "owner": "Road owner", "waits_on": "After 7", "time": "1–4 wk", "filled_by": "template"},
-        {"title": "Driveways: consolidate with owners, usually at redevelopment", "owner": "City + owners", "waits_on": "Ties to land use and development", "time": "At redevelopment", "filled_by": "template"}
+        {"id": "s1", "title": "Confirm who owns the road", "how": "Check whether the road is a City street, a county road or a state route (MD SHA), from the road ownership maps.", "actor": "city", "owner": "City staff", "time": "Days", "depends_on": [], "filled_by": "road_owner"},
+        {"id": "s2", "title": "Traffic and parking study: volumes for lane cuts; width and sight lines for parking", "how": "The road owner studies traffic volumes for a lane reduction, or width and sight lines for parking.", "actor": "other", "owner": "Road owner", "time": "3–6 mo", "depends_on": ["s1"], "filled_by": "template"},
+        {"id": "s3", "title": "Collect policy to cite: complete streets, road diet guidance", "how": "Gather the complete streets and road diet guidance that supports this, to cite to the road owner and the public.", "actor": "city", "owner": "Planning staff", "time": "1–2 wk", "depends_on": ["s1"], "filled_by": "policy"},
+        {"id": "s4", "title": "Public engagement with businesses and residents", "how": "Meetings with the businesses and residents on the block about what changes and why.", "actor": "city", "owner": "City", "time": "1–3 mo", "depends_on": ["s2", "s3"], "filled_by": "template"},
+        {"id": "s5", "title": "Road owner approves", "how": "The road owner approves the change, using the study and what the public said.", "actor": "other", "owner": "Road owner", "time": "1–2 mo", "depends_on": ["s2", "s4"], "filled_by": "template"},
+        {"id": "s6", "title": "Time it with scheduled resurfacing, or fund it separately", "how": "Fold the change into the next scheduled resurfacing, which costs least, or fund it on its own.", "actor": "other", "owner": "Road owner; City", "time": "Next resurfacing", "depends_on": ["s5"], "filled_by": "funding"},
+        {"id": "s7", "title": "Striping and signing plan", "how": "An engineer draws the striping and signing plan.", "actor": "other", "owner": "Road owner or engineer", "time": "1–3 mo", "depends_on": ["s6"], "filled_by": "template"},
+        {"id": "s8", "title": "Restripe and sign", "how": "The road owner's crews restripe and sign the road.", "actor": "other", "owner": "Road owner", "time": "1–4 wk", "depends_on": ["s7"], "filled_by": "template"},
+        {"id": "s9", "title": "Driveways: consolidate with owners, usually at redevelopment", "how": "Driveways are consolidated with the owners, usually when a site redevelops. See the land use and development playbook.", "actor": "builder", "owner": "City + owners", "time": "At redevelopment", "depends_on": ["s5"], "condition": "Site redevelops", "filled_by": "template"}
       ]
     }
   ],

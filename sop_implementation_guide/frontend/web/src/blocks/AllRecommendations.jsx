@@ -1,9 +1,12 @@
 import { num } from "../api.js";
+import { estimateText } from "./plan/graph.js";
 
 // The block's recommendations, from GET /blocks/{id}/plans, ranked by predicted
 // gain. This is the block's front page: one row per recommendation and nothing
 // else, so picking one is the obvious next move. Each row's dot is that
 // recommendation's own zoning answer, so what can be built shows before opening.
+// Plans show as they were approved: a draft waiting for approval is flagged,
+// but its steps and time estimate don't show here until someone approves it.
 
 export const ZONING_DOT = {
   by_right: { cls: "ok", text: "Zoning: permitted by right" },
@@ -23,6 +26,9 @@ export default function AllRecommendations({ recommendations, onSelect }) {
   if (!recommendations) return null;
   if (!recommendations.length) return <div className="card assess">No recommendations on this block.</div>;
   const sorted = rankRecs(recommendations);
+  const approved = recommendations.filter((r) => r.plan_status === "final").length;
+  const waiting = recommendations.filter((r) => r.draft_pending).length;
+  const playbook = recommendations.filter((r) => r.pathway_key && r.plan_status !== "final").length;
 
   return (
     <div className="rec-list-wrap">
@@ -31,6 +37,11 @@ export default function AllRecommendations({ recommendations, onSelect }) {
         <span className="legend-dots" aria-hidden="true">
           <span className="zdot ok" /> by right <span className="zdot cond" /> conditional <span className="zdot none" /> not checked
         </span>
+      </div>
+      <div className="plans-summary" title="Implementation plans on this block. Only approved plans count as reviewed.">
+        <span className="ok-text"><b>{approved}</b> plan{approved === 1 ? "" : "s"} approved</span>
+        {waiting > 0 && <span className="edited-text"><b>{waiting}</b> draft{waiting === 1 ? "" : "s"} waiting for approval</span>}
+        {playbook > 0 && <span className="assess"><b>{playbook}</b> still the playbook's</span>}
       </div>
       <ol className="rec-list">
         {sorted.map((r) => {
@@ -46,8 +57,9 @@ export default function AllRecommendations({ recommendations, onSelect }) {
                   <span className="rec-dim">
                     {r.dimension || "—"}
                     {r.funding_count > 0 && <> · <span className="ok-text">{r.funding_count} funding</span></>}
-                    {r.plan_status === "final" && <> · <span className="ok-text">plan final</span></>}
-                    {r.plan_status === "draft" && <> · <span className="edited-text">plan draft</span></>}
+                    {r.plan_status === "final" && <> · <span className="ok-text">plan approved</span></>}
+                    {r.draft_pending && <> · <span className="edited-text" title={`Draft by ${r.draft_by}`}>draft waiting</span></>}
+                    {estimateText(r.estimate) && <> · ~{estimateText(r.estimate)}</>}
                   </span>
                 </span>
                 {r.predicted_score_increase != null && (

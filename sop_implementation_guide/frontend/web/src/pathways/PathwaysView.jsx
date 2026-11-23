@@ -1,12 +1,39 @@
 import { useEffect, useState } from "react";
 import { call } from "../api.js";
+import PlanCanvas from "../blocks/plan/PlanCanvas.jsx";
+import { ACTORS, ACTOR_KEYS } from "../blocks/plan/actors.jsx";
+import { afterInput, nextId, numbers, parseAfter, topoOrder, wouldLoop } from "../blocks/plan/graph.js";
 
-// Edit the pathway templates every implementation plan starts from: each
-// pathway's steps, and which recommendation types belong to it. A save adds a
-// new version; older versions stay restorable. Plans nobody has saved follow
-// the new template at once; saved plans keep their own steps.
+// Edit the playbooks every implementation plan starts from: each playbook's
+// steps (who does each, how, how long, what it waits on), drawn as a canvas
+// above the table, and which recommendation types belong to it. A save adds a
+// new version; older versions stay restorable. Plans nobody has approved
+// follow the new version at once; approved plans keep their own steps.
 
-const NEW_STEP = { title: "", owner: "", waits_on: "", time: "", filled_by: "template" };
+const NEW_STEP = { title: "", how: "", actor: "city", owner: "", time: "", depends_on: [], filled_by: "template" };
+
+// "After" as step numbers ("2, 4" or "3 or 5"), applied when the field is left,
+// so typing "3 o" on the way to "3 or 5" doesn't rewire anything.
+function AfterInput({ step, steps, onCommit }) {
+  const shown = afterInput(step, numbers(steps));
+  const [text, setText] = useState(shown);
+  useEffect(() => setText(shown), [shown]);
+  const commit = () => {
+    const next = parseAfter(text, steps, step.id);
+    const cleared = steps.map((x) => (x.id === step.id ? { ...x, depends_on: [] } : x));
+    if (next.depends_on.some((d) => wouldLoop(cleared, d, step.id))) {
+      setText(shown);
+      window.alert("That would make steps wait on each other in a loop.");
+      return;
+    }
+    if (afterInput({ ...step, ...next }, numbers(steps)) !== shown) onCommit(next);
+    else setText(shown);
+  };
+  return (
+    <input value={text} placeholder="start" title="Step numbers this one waits on, e.g. 2, 4 or 3 or 5"
+           onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && commit()} />
+  );
+}
 const REVIEWER_KEY = "sop.pathways.reviewer";
 
 const editable = (d) => ({
@@ -83,6 +110,29 @@ export default function PathwaysView() {
     changeSteps((steps) => steps.map((s, j) => (j === i ? { ...s, [field]: value } : s)));
   }
 
+  function changeAfter(i, next) {
+    changeSteps((steps) => topoOrder(steps.map((s, j) => (j === i ? { ...s, ...next } : s))));
+  }
+
+  function addStep() {
+    changeSteps((steps) => {
+      const last = steps[steps.length - 1];
+      return [...steps, { ...NEW_STEP, id: nextId(steps), depends_on: last ? [last.id] : [] }];
+    });
+  }
+
+  // Steps after a removed one take over what it waited on, so the chain stays joined.
+  function removeStep(i) {
+    changeSteps((steps) => {
+      const gone = steps[i];
+      return steps.filter((_, j) => j !== i).map((s) => (
+        (s.depends_on || []).includes(gone.id)
+          ? { ...s, depends_on: [...new Set([...(s.depends_on || []).filter((d) => d !== gone.id), ...(gone.depends_on || [])])] }
+          : s
+      ));
+    });
+  }
+
   function moveStep(i, delta) {
     changeSteps((steps) => {
       const j = i + delta;
@@ -106,7 +156,7 @@ export default function PathwaysView() {
     const name = newName.trim();
     if (!name) return;
     const key = slug(name, draft.pathways.map((p) => p.key));
-    edit((d) => ({ ...d, pathways: [...d.pathways, { key, name, who: "", branch: "", steps: [{ ...NEW_STEP }] }] }));
+    edit((d) => ({ ...d, pathways: [...d.pathways, { key, name, who: "", branch: "", steps: [{ ...NEW_STEP, id: "s1" }] }] }));
     setSelectedKey(key);
     setNewName("");
   }
@@ -225,18 +275,33 @@ export default function PathwaysView() {
                   </label>
                 </div>
 
+                <details className="pathway-canvas" open>
+                  <summary>Canvas</summary>
+                  <PlanCanvas steps={pathway.steps} />
+                </details>
+
                 <div className="table-wrap">
                   <table className="plan-table">
                     <thead>
-                      <tr><th>#</th><th>Step</th><th>Owner</th><th>Waits on</th><th>Time</th><th>Source</th><th /></tr>
+                      <tr><th>#</th><th>Step and how it is done</th><th>Who</th><th>Who exactly</th><th>After</th><th>Only if</th><th>Time</th><th>Source</th><th /></tr>
                     </thead>
                     <tbody>
                       {pathway.steps.map((s, i) => (
-                        <tr key={i}>
+                        <tr key={s.id || i}>
                           <td className="n">{i + 1}</td>
-                          <td><textarea rows={2} value={s.title || ""} onChange={(e) => changeStep(i, "title", e.target.value)} /></td>
+                          <td>
+                            <textarea rows={2} value={s.title || ""} placeholder="What has to happen" onChange={(e) => changeStep(i, "title", e.target.value)} />
+                            <textarea rows={2} value={s.how || ""} placeholder="How it is done" className="how" onChange={(e) => changeStep(i, "how", e.target.value)} />
+                          </td>
+                          <td>
+                            <select value={ACTORS[s.actor] ? s.actor : "other"} onChange={(e) => changeStep(i, "actor", e.target.value)}
+                                    title={ACTORS[s.actor]?.desc}>
+                              {ACTOR_KEYS.map((k) => <option key={k} value={k}>{ACTORS[k].label}</option>)}
+                            </select>
+                          </td>
                           <td><input value={s.owner || ""} onChange={(e) => changeStep(i, "owner", e.target.value)} /></td>
-                          <td><input value={s.waits_on || ""} onChange={(e) => changeStep(i, "waits_on", e.target.value)} /></td>
+                          <td className="after"><AfterInput step={s} steps={pathway.steps} onCommit={(next) => changeAfter(i, next)} /></td>
+                          <td><input value={s.condition || ""} placeholder="always" onChange={(e) => changeStep(i, "condition", e.target.value)} /></td>
                           <td><input value={s.time || ""} onChange={(e) => changeStep(i, "time", e.target.value)} /></td>
                           <td>
                             <select value={s.filled_by || "template"} onChange={(e) => changeStep(i, "filled_by", e.target.value)}
@@ -249,7 +314,7 @@ export default function PathwaysView() {
                           <td className="row-actions">
                             <button type="button" title="Move up" onClick={() => moveStep(i, -1)} disabled={i === 0}>↑</button>
                             <button type="button" title="Move down" onClick={() => moveStep(i, 1)} disabled={i === pathway.steps.length - 1}>↓</button>
-                            <button type="button" title="Remove step" onClick={() => changeSteps((st) => st.filter((_, j) => j !== i))}>✕</button>
+                            <button type="button" title="Remove step" onClick={() => removeStep(i)}>✕</button>
                           </td>
                         </tr>
                       ))}
@@ -259,10 +324,11 @@ export default function PathwaysView() {
                 <div className="kv plan-meta">
                   Source is where a step's content comes from: an agent, a lookup, or the template's own wording.
                   A source marked "not built" shows as Needs SME on every plan until it exists.
-                  "Waits on" refers to step numbers, so check it after you move or remove a step.
+                  "After" is the step numbers a step waits on ("2, 4", or "3 or 5" for whichever is first); links follow a
+                  step when you move it. "Only if" makes a step a branch that happens in some cases.
                 </div>
                 <div className="btn-row">
-                  <button onClick={() => changeSteps((st) => [...st, { ...NEW_STEP }])}>+ Add step</button>
+                  <button onClick={addStep}>+ Add step</button>
                   <span className="spacer" />
                   <button onClick={removePathway}>Delete playbook</button>
                 </div>

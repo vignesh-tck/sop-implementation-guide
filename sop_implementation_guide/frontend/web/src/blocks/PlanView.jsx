@@ -1,80 +1,51 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { call, deadlineLabel, money, num, scoreColour } from "../api.js";
 import { Cites, Outcome, References, SmeQuestions, ZoningFinding, zoningAnswer } from "../zoning/ZoningParts.jsx";
+import PlanCanvas from "./plan/PlanCanvas.jsx";
+import StepInspector from "./plan/StepInspector.jsx";
+import { ACTORS, ActorChip, ActorLegend } from "./plan/actors.jsx";
+import {
+  afterText, changeSummary, diffSteps, estimateText, marksFrom, nextId, numbers, topoOrder, wouldLoop,
+} from "./plan/graph.js";
 
-// The steps to get one recommendation done, as an accordion. A closed step is
-// one line: what, who, how long. An open step leads with its verdict, then the
-// facts behind it, with the full ordinance text and sources one click further.
-// Steps waiting on an SME open on their own; so does step 1, so the plan never
-// opens as a wall of closed rows.
+// The implementation plan for one recommendation: a flowchart of its steps
+// (who does each, how, how long, what it waits on), or the same steps as a
+// list. Clicking a step opens it beside the canvas with whatever the agents
+// found for it.
+//
+// What everyone reads is the approved plan, or the playbook's until someone
+// approves one. An SME's edits are saved as a draft, drawn with what they
+// change, and only become the plan once someone approves them. The Audit tab
+// (PlanAudit) shows every draft and approval.
 //
 // The plan is loaded by the parent (RecommendationView), which also shows it in
-// the Zoning, Funding and Sources tabs; saving hands the new plan back up.
+// the Zoning, Funding and Sources tabs; every save hands the new plan back up.
 
-const NEW_STEP = { title: "", owner: "", waits_on: "", time: "", filled_by: "template", edited: true };
+const NAME_KEY = "sop.pathways.reviewer"; // shared with the Playbooks tab
+const VIEW_KEY = "sop.plan.view";
 
-export function statusLine(plan) {
-  if (plan.status === "final") return `Final — reviewed by ${plan.reviewed_by}`;
-  if (plan.status === "draft") return "Draft — saved, not finalized";
-  return "Template — not reviewed yet";
+function readPref(key, fallback) {
+  try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+function writePref(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* a per-viewer convenience only */ }
 }
 
 // Whether a step is waiting on the SME: a lookup that left questions open, or a
-// source that isn't built yet. Once the reviewer edits or finalises, it isn't.
+// source that isn't built yet. Once the reviewer edits or approves, it isn't.
 export function needsSme(s, plan) {
   if (s.edited || plan.status === "final") return false;
   if (s.zoning) return s.zoning_detail === "full" && (s.input_status === "partial" || s.input_status === "needs_sme");
   return s.input_status === "needs_sme";
 }
 
-// Where a step's content comes from. A live agent's findings are labelled with
-// that agent; a source that isn't built yet falls to the SME; anything else is
-// the template's wording until the SME edits or confirms it.
-function SourceTags({ s, plan }) {
-  const final = plan.status === "final";
-  if (s.zoning) {
-    const resolved = s.input_status === "attached" || s.input_status === "partial";
-    return (
-      <>
-        {s.input_status === "missing" ? (
-          <span className="tag derived" title="Run python -m scripts.sync_block_zoning">{s.source_label} · not run</span>
-        ) : (
-          <span className={"tag " + (resolved ? "ok" : "derived")} title={s.source_note}>{s.source_label}</span>
-        )}
-        {(s.input_status === "partial" || s.input_status === "needs_sme") && !(s.edited || final) && (
-          <span className="tag derived" title="The lookup could not settle part of this; see the questions">Needs SME</span>
-        )}
-        {s.edited ? <span className="tag edited">SME edited</span> : final && <span className="tag ok">SME confirmed</span>}
-      </>
-    );
-  }
-  if (s.input_status === "needs_sme") {
-    return s.edited || final ? (
-      <span className="tag ok" title={`Supplied by the reviewer. ${s.source_note || ""}`}>SME</span>
-    ) : (
-      <span className="tag derived" title={`No ${s.source_label} yet. ${s.source_note || ""}`}>Needs SME</span>
-    );
-  }
-  return (
-    <>
-      {s.input_status === "attached" && (
-        <span className="tag ok" title={s.source_note}>{s.source_label} · {s.funding.length}</span>
-      )}
-      {s.input_status === "missing" && (
-        <span className="tag derived" title="Run funding analysis for this block, then approve the fits you want kept">
-          {s.source_label} · none approved yet
-        </span>
-      )}
-      {s.edited ? (
-        <span className="tag edited">SME edited</span>
-      ) : final ? (
-        <span className="tag ok">SME confirmed</span>
-      ) : (
-        <span className="tag" title="Draft template wording, not yet reviewed by an SME">Template</span>
-      )}
-    </>
-  );
-}
+// What a step's card shows in its corner: the one thing worth seeing at a glance.
+const badgeFor = (plan) => (s) => ({
+  sme: needsSme(s, plan),
+  zoning: s.zoning && s.input_status !== "missing" ? s.zoning.best || "unknown" : null,
+  funding: s.funding && s.input_status === "attached" ? s.funding.length : null,
+});
 
 export function FundingList({ funding, withNarrative = false }) {
   const total = funding.reduce((t, f) => t + (f.planned_amount > 0 ? Number(f.planned_amount) : 0), 0);
@@ -215,40 +186,78 @@ function StepBody({ s, plan, onJump, onFunding }) {
       )}
       {waiting && <SmeAsk s={s} />}
       {s.input_status === "template" && !s.edited && plan.status !== "final" && (
-        <p className="assess">Template wording, not yet reviewed by an SME.</p>
+        <p className="assess">Playbook wording, not yet reviewed by an SME.</p>
       )}
       <StepSources refs={s.references} />
     </>
   );
 }
 
-// What a closed step shows on the right: the one thing worth seeing at a glance.
-function StepMarker({ s, plan }) {
+// What a closed list row shows on the right.
+function StepMarker({ s, plan, mark }) {
+  if (mark?.kind === "new") return <span className="pc-flag new">New</span>;
+  if (mark?.kind === "changed") return <span className="pc-flag changed">Changed</span>;
   if (needsSme(s, plan)) return <span className="tag derived">Needs SME</span>;
   if (s.zoning && s.input_status !== "missing") return <Outcome outcome={s.zoning.best} />;
   if (s.funding && s.input_status === "attached") return <span className="tag ok">{s.funding.length} funding</span>;
   return null;
 }
 
+function Estimate({ est, editing }) {
+  if (editing) return <span className="kv" title="The estimate is worked out when you save">Time estimate updates when you save</span>;
+  const text = estimateText(est);
+  if (!text) return null;
+  const untimed = est.untimed?.length ? ` Step${est.untimed.length > 1 ? "s" : ""} ${est.untimed.join(", ")} ha${est.untimed.length > 1 ? "ve" : "s"} no set time and count as none.` : "";
+  return (
+    <span className="plan-estimate" title={"A rough range along the longest chain of steps. The short end skips steps that only happen in some cases." + untimed}>
+      Roughly <b>{text}</b>{untimed && " *"}
+    </span>
+  );
+}
+
+const when = (t) => (t || "").slice(0, 10);
+
 export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
+  const [view, setView] = useState(() => readPref(VIEW_KEY, "canvas"));
+  const [showing, setShowing] = useState(plan.draft ? "draft" : "approved");
   const [editing, setEditing] = useState(false);
-  const [steps, setSteps] = useState([]);
-  const [reviewer, setReviewer] = useState("");
+  const [buf, setBuf] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [name, setName] = useState(() => readPref(NAME_KEY, ""));
   const [notes, setNotes] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const [promoted, setPromoted] = useState(null);
-  const [open, setOpen] = useState(new Set());
+  const [full, setFull] = useState(false);
+  const [open, setOpen] = useState(new Set([1]));
 
   // A fresh plan (another recommendation, or a save) resets the view.
   useEffect(() => {
     setEditing(false);
-    setSaveError(null);
+    setSelected(null);
+    setError(null);
     setPromoted(null);
-    const start = new Set(plan.steps.map((s, i) => (needsSme(s, plan) ? i + 1 : null)).filter(Boolean));
-    if (plan.steps.length) start.add(1);
-    setOpen(start);
+    setShowing(plan.draft ? "draft" : "approved");
   }, [plan]);
+
+  useEffect(() => writePref(VIEW_KEY, view), [view]);
+  useEffect(() => writePref(NAME_KEY, name), [name]);
+
+  // Escape leaves full screen.
+  useEffect(() => {
+    if (!full) return undefined;
+    const onKey = (e) => e.key === "Escape" && setFull(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
+
+  const draftView = !editing && showing === "draft" && !!plan.draft;
+  const steps = editing ? buf : draftView ? plan.draft.steps : plan.steps;
+  const planLike = useMemo(() => (editing || draftView ? { ...plan, status: "draft" } : plan), [plan, editing, draftView]);
+  const liveChanges = useMemo(() => (editing ? diffSteps(plan.steps, buf, ACTORS) : null), [editing, plan.steps, buf]);
+  const changes = editing ? liveChanges : draftView ? plan.draft.changes : null;
+  const { marks, removed } = useMemo(() => marksFrom(changes), [changes]);
+  const badge = useMemo(() => badgeFor(planLike), [planLike]);
 
   if (!plan.pathway) {
     return (
@@ -259,26 +268,126 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
   }
 
   const rec = plan.rec;
+  const num = numbers(steps);
+  const canSave = plan.storage_ready && plan.history_ready;
 
+  // ── editing ──
   function startEdit() {
-    setSteps(plan.steps.map((s) => ({ ...s })));
-    setReviewer(plan.reviewed_by || "");
-    setNotes(plan.notes || "");
-    setSaveError(null);
+    setBuf((plan.draft?.steps || plan.steps).map((s) => ({ ...s })));
+    setNotes(plan.draft?.notes || "");
+    setSelected(null);
+    setError(null);
+    setView("canvas");
     setEditing(true);
   }
 
-  function change(i, field, value) {
-    setSteps((prev) => prev.map((s, j) => (j === i ? { ...s, [field]: value, edited: true } : s)));
+  function patch(id, fields) {
+    setBuf((b) => {
+      const next = b.map((s) => (s.id === id ? { ...s, ...fields, edited: true } : s));
+      return "depends_on" in fields ? topoOrder(next) : next;
+    });
   }
 
-  function move(i, delta) {
-    setSteps((prev) => {
-      const j = i + delta;
-      if (j < 0 || j >= prev.length) return prev;
-      const next = [...prev];
-      [next[i], next[j]] = [next[j], next[i]];
-      return next;
+  function addAfter(id) {
+    const i = id ? buf.findIndex((s) => s.id === id) : buf.length - 1;
+    const prev = buf[i];
+    const step = {
+      id: nextId(buf), title: "", how: "", actor: prev?.actor || "city", owner: "", time: "",
+      depends_on: prev ? [prev.id] : [], depends_mode: "all", filled_by: "template", edited: true,
+    };
+    const next = [...buf];
+    next.splice(i + 1, 0, step);
+    setBuf(next);
+    setSelected(step.id);
+  }
+
+  // A removed step's followers take over what it waited on, so the chain stays joined.
+  function removeStep(id) {
+    const s = buf.find((x) => x.id === id);
+    if (!window.confirm(`Remove step ${num[id]}${s?.title ? ` ("${s.title}")` : ""}? Steps after it will wait on what it waited on.`)) return;
+    setBuf((b) => topoOrder(b.filter((x) => x.id !== id).map((x) => {
+      if (!(x.depends_on || []).includes(id)) return x;
+      const deps = [...new Set([...(x.depends_on || []).filter((d) => d !== id), ...(s.depends_on || [])])];
+      return { ...x, depends_on: deps, edited: true };
+    })));
+    setSelected(null);
+  }
+
+  function connect(from, to) {
+    const target = buf.find((s) => s.id === to);
+    if (!target || (target.depends_on || []).includes(from)) return;
+    if (wouldLoop(buf, from, to)) {
+      setError(`Step ${num[from]} already waits on step ${num[to]}, so step ${num[to]} can't wait on it.`);
+      return;
+    }
+    setError(null);
+    patch(to, { depends_on: [...(target.depends_on || []), from] });
+  }
+
+  function disconnect(from, to) {
+    const target = buf.find((s) => s.id === to);
+    if (!target || !window.confirm(`Step ${num[to]} no longer waits on step ${num[from]}?`)) return;
+    const deps = (target.depends_on || []).filter((d) => d !== from);
+    patch(to, { depends_on: deps, ...(deps.length < 2 ? { depends_mode: "all" } : {}) });
+  }
+
+  // ── saving ──
+  async function act(method, path, body) {
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await call(method, `/blocks/${blockId}/recommendations/${recId}/plan${path}`, body);
+      onSaved?.(p);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const saveDraft = () => act("PUT", "", { steps: buf, status: "draft", made_by: name, notes });
+  const saveAndApprove = () => {
+    if (!window.confirm("Save and approve? These steps become the plan the block page and everything else read.")) return;
+    act("PUT", "", { steps: buf, status: "final", made_by: name, notes });
+  };
+  const approve = () => {
+    if (!window.confirm(`Approve ${plan.draft.made_by}'s draft? Its steps become the plan the block page and everything else read.`)) return;
+    act("POST", "/approve", { made_by: name });
+  };
+  const discard = () => {
+    if (!window.confirm(`Discard ${plan.draft.made_by}'s draft? The audit trail keeps a record of it.`)) return;
+    act("POST", "/discard", { made_by: name });
+  };
+
+  // An approved plan's steps become the playbook's, so the next block starts
+  // from what the SME settled on rather than the draft guess.
+  async function promote() {
+    const msg = `Make these ${plan.steps.length} steps the playbook for every "${plan.pathway.name}" implementation plan? ` +
+      "Implementation plans already approved keep their own steps.";
+    if (!window.confirm(msg)) return;
+    setError(null);
+    try {
+      const t = await call("PUT", `/pathways/${plan.pathway.key}/steps`, {
+        steps: plan.steps, updated_by: plan.reviewed_by,
+        note: `From the approved plan for ${rec.rec_label} on block ${blockId}`,
+      });
+      setPromoted(`Saved as playbook ${t.version}.`);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  // ── selection ──
+  const selStep = steps.find((s) => s.id === selected) || removed.find((s) => s.id === selected) || null;
+  const selRemoved = !!selStep && !steps.some((s) => s.id === selected);
+
+  function jump(n) {
+    const s = steps[n - 1];
+    if (!s) return;
+    if (view === "canvas") { setSelected(s.id); return; }
+    setOpen((prev) => new Set(prev).add(n));
+    requestAnimationFrame(() => {
+      document.getElementById(`plan-step-${recId}-${n}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
 
@@ -290,48 +399,49 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
     });
   }
 
-  function jump(n) {
-    setOpen((prev) => new Set(prev).add(n));
-    requestAnimationFrame(() => {
-      document.getElementById(`plan-step-${recId}-${n}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }
+  const waiting = editing ? [] : steps.map((s, i) => (needsSme(s, planLike) ? i + 1 : null)).filter(Boolean);
+  const est = draftView ? plan.draft.estimate : plan.estimate;
 
-  async function save(status) {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const p = await call("PUT", `/blocks/${blockId}/recommendations/${recId}/plan`, {
-        steps, status, reviewed_by: reviewer, notes,
-      });
-      setEditing(false);
-      onSaved?.(p);
-    } catch (e) {
-      setSaveError(e.message);
-    } finally {
-      setSaving(false);
-    }
-  }
+  const inspector = selStep && (
+    <StepInspector
+      s={selStep} n={selRemoved ? selStep.n : num[selStep.id]} steps={steps}
+      mark={marks[selStep.id]} removed={selRemoved} editable={editing}
+      onChange={(fields) => patch(selStep.id, fields)}
+      onDelete={() => removeStep(selStep.id)}
+      onAddAfter={() => addAfter(selStep.id)}
+      onSelect={setSelected}
+      onClose={() => setSelected(null)}
+    >
+      {!editing && !selRemoved && <StepBody s={selStep} plan={planLike} onJump={jump} onFunding={onFunding} />}
+    </StepInspector>
+  );
 
-  // A finalised plan's steps become the playbook's template, so the next block
-  // starts from what the SME settled on rather than the draft guess.
-  async function promote() {
-    const msg = `Make these ${plan.steps.length} steps the template for every "${plan.pathway.name}" implementation plan? ` +
-      "Implementation plans already saved keep their own steps.";
-    if (!window.confirm(msg)) return;
-    setSaveError(null);
-    try {
-      const t = await call("PUT", `/pathways/${plan.pathway.key}/steps`, {
-        steps: plan.steps, updated_by: plan.reviewed_by,
-        note: `From the final plan for ${rec.rec_label} on block ${blockId}`,
-      });
-      setPromoted(`Saved as template ${t.version}.`);
-    } catch (e) {
-      setSaveError(e.message);
-    }
-  }
+  const canvas = (fill) => (
+    <div className={"plan-canvas-wrap" + (selStep ? " has-inspector" : "") + (editing ? " editing" : "")}>
+      <PlanCanvas
+        steps={steps} marks={marks} removed={removed} selectedId={selected} onSelect={setSelected}
+        editable={editing} onConnect={connect} onDisconnect={disconnect} badge={badge} fill={fill}
+      />
+      {inspector}
+    </div>
+  );
 
-  const waiting = plan.steps.map((s, i) => (needsSme(s, plan) ? i + 1 : null)).filter(Boolean);
+  const toolbar = (
+    <div className="plan-toolbar">
+      <ActorLegend steps={steps} />
+      <span className="spacer" />
+      {editing && <button type="button" className="pl-bar-btn" onClick={() => addAfter(selected)}>+ Step</button>}
+      {!editing && (
+        <span className="seg" role="group" aria-label="Show the plan as">
+          <button type="button" aria-pressed={view === "canvas"} onClick={() => setView("canvas")}>Canvas</button>
+          <button type="button" aria-pressed={view === "list"} onClick={() => setView("list")}>List</button>
+        </span>
+      )}
+      {view === "canvas" && (
+        <button type="button" className="pl-bar-btn" onClick={() => setFull((f) => !f)}>{full ? "Exit full screen" : "Full screen"}</button>
+      )}
+    </div>
+  );
 
   return (
     <div className="plan">
@@ -339,14 +449,56 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
         Playbook: <b>{plan.pathway.name}</b> · {plan.pathway.who} · {plan.pathway.branch}
       </div>
 
-      {!plan.storage_ready && (
+      <div className="plan-state">
+        {plan.status === "final" ? (
+          <span className="state-chip ok" title="This is the plan the block page and everything else read">
+            ✓ Approved{plan.revision ? ` · version ${plan.revision}` : ""}
+          </span>
+        ) : (
+          <span className="state-chip" title="Nobody has approved a plan for this recommendation yet">From the playbook · not approved yet</span>
+        )}
+        {plan.status === "final" && <span className="kv">by {plan.reviewed_by}{plan.finalized_at ? ` on ${when(plan.finalized_at)}` : ""}</span>}
+        <span className="spacer" />
+        <Estimate est={est} editing={editing} />
+      </div>
+
+      {!canSave && (
         <div className="banner warn">
-          Saving is off until the <code>implementation_plans</code> table exists — run the IMPLEMENTATION PLANS
-          section of <code>backend/db/schema.sql</code> in the Supabase SQL editor. Viewing works.
+          Saving is off until the <code>implementation_plans</code> and <code>implementation_plan_revisions</code> tables
+          exist. Run the IMPLEMENTATION PLANS and IMPLEMENTATION PLAN REVISIONS sections of <code>backend/db/schema.sql</code> in
+          the Supabase SQL editor. Viewing works.
         </div>
       )}
 
-      {!editing && waiting.length > 0 && (
+      {plan.draft && !editing && (
+        <div className="plan-draft-bar">
+          <div>
+            <b>Draft by {plan.draft.made_by}</b>, {when(plan.draft.created_at)}: {changeSummary(plan.draft.changes)}.
+            {" "}Waiting for approval; the block page still shows the {plan.status === "final" ? "approved plan" : "playbook"}.
+            {plan.draft.notes && <div className="assess">“{plan.draft.notes}”</div>}
+          </div>
+          <div className="plan-draft-actions">
+            <span className="seg" role="group" aria-label="Show">
+              <button type="button" aria-pressed={showing === "draft"} onClick={() => setShowing("draft")}>Draft</button>
+              <button type="button" aria-pressed={showing === "approved"} onClick={() => setShowing("approved")}>
+                {plan.status === "final" ? "Approved" : "Playbook"}
+              </button>
+            </span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" aria-label="Your name" />
+            <button type="button" className="primary" onClick={approve} disabled={busy || !name.trim() || !canSave}>Approve</button>
+            <button type="button" onClick={discard} disabled={busy || !name.trim() || !canSave}>Discard</button>
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <div className="plan-attention editing-note">
+          Editing{liveChanges?.count ? ` · ${changeSummary(liveChanges)}` : ""}. Click a step to edit it. Drag from the dot under a
+          step to another step to make that one wait on it; click a line to remove the link.
+        </div>
+      )}
+
+      {waiting.length > 0 && (
         <div className="plan-attention">
           {waiting.length === 1 ? "1 step needs" : `${waiting.length} steps need`} an SME:{" "}
           {waiting.map((n, k) => (
@@ -358,108 +510,99 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
         </div>
       )}
 
-      {editing ? (
-        <ol className="plan-steps">
-          {steps.map((s, i) => (
-            <li key={i} className="plan-step editing">
-              <div className="ps-head">
-                <span className="ps-n">{i + 1}</span>
-                <textarea rows={2} value={s.title || ""} placeholder="What has to happen"
-                  onChange={(e) => change(i, "title", e.target.value)} />
-                <span className="row-actions">
-                  <button type="button" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
-                  <button type="button" title="Move down" onClick={() => move(i, 1)} disabled={i === steps.length - 1}>↓</button>
-                  <button type="button" title="Remove step" onClick={() => setSteps((p) => p.filter((_, j) => j !== i))}>✕</button>
-                </span>
-              </div>
-              <div className="ps-fields">
-                <label>Owner<input value={s.owner || ""} onChange={(e) => change(i, "owner", e.target.value)} /></label>
-                <label>Waits on<input value={s.waits_on || ""} onChange={(e) => change(i, "waits_on", e.target.value)} /></label>
-                <label>Time<input value={s.time || ""} onChange={(e) => change(i, "time", e.target.value)} /></label>
-              </div>
-              <div className="ps-tags"><SourceTags s={s} plan={plan} /></div>
-            </li>
-          ))}
-        </ol>
+      {toolbar}
+
+      {view === "canvas" || editing ? (
+        full ? (
+          <>
+            <div className="plan-canvas-placeholder kv">Showing in full screen. <button type="button" className="link" onClick={() => setFull(false)}>Close it</button></div>
+            {createPortal(
+              <div className="plan-full" role="dialog" aria-label={`Implementation plan: ${rec.rec_label}`}>
+                <div className="plan-full-head">
+                  <b>{rec.rec_label}</b><span className="kv"> · {plan.pathway.name}{draftView ? " · draft" : editing ? " · editing" : ""}</span>
+                  <span className="spacer" />
+                  <ActorLegend steps={steps} />
+                  {editing && <button type="button" className="pl-bar-btn" onClick={() => addAfter(selected)}>+ Step</button>}
+                  <button type="button" className="pl-bar-btn" onClick={() => setFull(false)}>Exit full screen</button>
+                </div>
+                {canvas(true)}
+              </div>,
+              document.body,
+            )}
+          </>
+        ) : canvas(false)
       ) : (
         <ol className="plan-steps">
-          {plan.steps.map((s, i) => {
+          {steps.map((s, i) => {
             const n = i + 1;
             const isOpen = open.has(n);
-            const meta = [s.owner || "No owner yet", s.time, s.waits_on ? `waits on ${s.waits_on}` : "no dependencies"]
-              .filter(Boolean).join(" · ");
             return (
-              <li key={i} id={`plan-step-${recId}-${n}`}
-                className={"plan-step" + (isOpen ? " open" : "") + (needsSme(s, plan) ? " needs-sme" : "")}>
+              <li key={s.id} id={`plan-step-${recId}-${n}`}
+                  className={"plan-step" + (isOpen ? " open" : "") + (needsSme(s, planLike) ? " needs-sme" : "")}>
                 <button type="button" className="ps-toggle" aria-expanded={isOpen} onClick={() => toggle(n)}>
                   <span className="ps-n">{n}</span>
                   <span className="ps-text">
                     <span className="ps-title">{s.title}</span>
-                    <span className="ps-meta">{meta}</span>
+                    <span className="ps-meta">
+                      <ActorChip kind={s.actor} owner={s.owner} /> · {s.time || "No set time"} · {afterText(s, num).toLowerCase()}
+                      {s.condition && <> · only if {s.condition.toLowerCase()}</>}
+                    </span>
                   </span>
-                  {!isOpen && <StepMarker s={s} plan={plan} />}
+                  {!isOpen && <StepMarker s={s} plan={planLike} mark={marks[s.id]} />}
                   <span className="chev" aria-hidden="true">{isOpen ? "⌃" : "›"}</span>
                 </button>
                 {isOpen && (
                   <div className="ps-body">
-                    <StepBody s={s} plan={plan} onJump={jump} onFunding={onFunding} />
-                    <div className="ps-tags"><SourceTags s={s} plan={plan} /></div>
+                    {s.how && <p className="si-how">{s.how}</p>}
+                    <StepBody s={s} plan={planLike} onJump={jump} onFunding={onFunding} />
                   </div>
                 )}
               </li>
             );
           })}
+          {removed.map((s) => (
+            <li key={s.id} className="plan-step removed">
+              <div className="ps-toggle"><span className="ps-n">–</span><span className="ps-text"><span className="ps-title">{s.title}</span>
+                <span className="ps-meta">Removed in this draft (was step {s.n})</span></span></div>
+            </li>
+          ))}
         </ol>
       )}
 
+      {error && <div className="banner err" style={{ marginTop: ".75rem" }}>{error}</div>}
+
       {editing ? (
         <div className="plan-edit">
-          <button type="button" onClick={() => setSteps((p) => [...p, { ...NEW_STEP }])}>+ Add step</button>
           <div className="plan-edit-row">
             <label>
-              Reviewer
-              <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="Name (required to finalize)" />
+              Your name
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Required, for the audit trail" />
             </label>
             <label className="grow">
-              Notes
-              <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything the next reviewer should know" />
+              What you changed and why
+              <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Shown with this draft in the audit trail" />
             </label>
           </div>
-          {saveError && <div className="banner err">Save failed — {saveError}</div>}
           <div className="btn-row">
-            <button onClick={() => save("draft")} disabled={saving || !plan.storage_ready}>Save draft</button>
-            <button className="primary" onClick={() => save("final")} disabled={saving || !plan.storage_ready || !reviewer.trim()}>
-              {saving ? "Saving…" : "Finalize implementation plan"}
-            </button>
-            <button onClick={() => setEditing(false)} disabled={saving}>Cancel</button>
+            <button onClick={saveDraft} disabled={busy || !canSave || !name.trim()}>{busy ? "Saving…" : "Save draft"}</button>
+            <button className="primary" onClick={saveAndApprove} disabled={busy || !canSave || !name.trim()}>Save and approve</button>
+            <button onClick={() => { setEditing(false); setSelected(null); setError(null); }} disabled={busy}>Cancel</button>
           </div>
         </div>
       ) : (
         <div className="btn-row">
           <button className="primary" onClick={startEdit}>
-            {plan.status === "template" ? "Review and edit" : "Edit implementation plan"}
+            {plan.draft ? "Edit the draft" : plan.status === "final" ? "Edit implementation plan" : "Review and edit"}
           </button>
-          {plan.status === "final" && !promoted && (
-            <button onClick={promote} title="Every implementation plan from this playbook that nobody has saved yet will start from these steps">
+          {plan.status === "final" && !plan.draft && !promoted && (
+            <button onClick={promote} title="Every implementation plan from this playbook that nobody has approved yet will start from these steps">
               Use as playbook template
             </button>
           )}
           {plan.notes && <span className="kv">Notes: {plan.notes}</span>}
         </div>
       )}
-      {!editing && saveError && <div className="banner err" style={{ marginTop: ".75rem" }}>{saveError}</div>}
       {promoted && <div className="banner ok" style={{ marginTop: ".75rem" }}>{promoted}</div>}
-
-      <details className="source-legend kv">
-        <summary>What the tags mean</summary>
-        <span className="tag ok">Funding agent</span> found by an agent ·{" "}
-        <span className="tag ok">Zoning lookup</span> looked up on the county map and the use tables ·{" "}
-        <span className="tag">Template</span> draft wording, not yet reviewed ·{" "}
-        <span className="tag edited">SME edited</span> / <span className="tag ok">SME confirmed</span> set by the reviewer ·{" "}
-        <span className="tag derived">Needs SME</span> no agent or lookup supplies this yet, so the reviewer fills it in ·{" "}
-        <Outcome outcome="by_right" /> <Outcome outcome="special_exception" /> <Outcome outcome="prohibited" />{" "}
-        <Outcome outcome="legacy" /> permitted by right, special exception, prohibited, legacy zone
-      </details>
     </div>
   );
 }
