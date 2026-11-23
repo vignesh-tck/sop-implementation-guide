@@ -65,9 +65,18 @@ function DraftBar({ view, act, disabled, onCheck, onAgent, onSelect }) {
   if (!d) {
     const steps = def.steps || [];
     const approved = steps.filter((s) => s.status === "approved").length;
+    const toGo = steps.length - approved;
+    const approveAll = () => window.confirm(
+      `Approve the ${toGo} step${toGo === 1 ? "" : "s"} still waiting, each on its last preview? `
+      + "Steps without a current preview are left for you, with the reason in the chat.") && act("POST", "/steps/approve-all");
     return (
       <div className="ws-bar">
         <span className="ws-chip">Applied · def v{view.definition_version} · {approved}/{steps.length} steps approved</span>
+        {toGo > 0 && (
+          <button disabled={disabled} onClick={approveAll}
+                  title="Approve every step whose last preview ran without errors, in run order. Run the whole pipeline first to preview them all.">
+            Approve all ({toGo})</button>
+        )}
         <button disabled={disabled || !canDesign} title={canDesign ? "Change the steps in a draft" : "Approve the schema and mark the sources final first"}
                 onClick={() => act("POST", "/draft")}>Edit pipeline</button>
         {propChip}

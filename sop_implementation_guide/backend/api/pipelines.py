@@ -283,6 +283,13 @@ def remove_source(pipeline_id: int, source_id: str, db: Client = Depends(get_sup
     return _view(db, pipeline_id)
 
 
+@router.post("/{pipeline_id}/steps/approve-all")
+def approve_all_steps(pipeline_id: int, db: Client = Depends(get_supabase)):
+    _idle(db, pipeline_id)
+    _call(lambda: service.approve_all(db, pipeline_id))
+    return _view(db, pipeline_id)
+
+
 @router.post("/{pipeline_id}/steps/{step_id}/approve")
 def approve_step(pipeline_id: int, step_id: str, db: Client = Depends(get_supabase)):
     _idle(db, pipeline_id)

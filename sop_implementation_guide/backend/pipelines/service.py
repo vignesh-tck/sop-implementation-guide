@@ -821,14 +821,63 @@ def approve_step(db: Client, pipeline_id: int, step_id: str) -> dict:
         raise PipelineError(f"{step_id} failed in its last preview: {out['error']}")
     step["status"] = "approved"
     _save(db, p)
-    gaps = engine.design_gaps(outputs.project(p["definition"], outputs.owner(p["definition"], step_id)))
-    done = all(s.get("status") == "approved" for s in steps)
-    event(db, pipeline_id, f"You approved step {step_id} ({engine.CATALOG[step['type']]['label']})."
-          + ("" if not done else
-             f" The pipeline still has no step for {', '.join(f'`{g}`' for g in gaps)}: add one in a draft."
-             if gaps else " Every step is approved: run the pipeline to see the final output."),
-          level="warn" if done and gaps else "info")
+    done, tail, level = _approved_tail(p, [step_id])
+    event(db, pipeline_id, f"You approved step {step_id} ({engine.CATALOG[step['type']]['label']})." + tail, level=level)
     return step
+
+
+def _approved_tail(p: dict, approved: list[str]) -> tuple[bool, str, str]:
+    """What to add to an approval notice once every step is approved: a gap to fill, or the run to do."""
+    d = p["definition"]
+    if not all(s.get("status") == "approved" for s in d["steps"]):
+        return False, "", "info"
+    gaps = sorted({g for sid in approved for g in engine.design_gaps(outputs.project(d, outputs.owner(d, sid)))})
+    if gaps:
+        return True, f" The pipeline still has no step for {', '.join(f'`{g}`' for g in gaps)}: add one in a draft.", "warn"
+    return True, " Every step is approved: run the pipeline to see the final output.", "info"
+
+
+def approve_all(db: Client, pipeline_id: int) -> dict:
+    """
+    Approve every step that can be, in run order, on the same terms as one at
+    a time: a current preview without errors, and the steps feeding it
+    approved (in this pass or before). A step that cannot be approved is
+    left, and so is every step its records reach. Returns {approved, left:
+    [{step, why}]}.
+    """
+    p = get(db, pipeline_id)
+    steps = {s["id"]: s for s in p["definition"]["steps"]}
+    g = graph.normalise(p["definition"])
+    outs = p["state"].get("outputs") or {}
+    approved, left, blocked = [], [], set()
+    for sid in graph.order(g):
+        s = steps[sid]
+        if s.get("status") == "approved":
+            continue
+        feeding = [x for x in graph.ancestors(g, sid) if x in blocked]
+        out = outs.get(sid)
+        why = (f"waits on {', '.join(feeding)}" if feeding
+               else "no preview with its current settings" if not out
+               else f"its last preview failed: {out['error']}" if out.get("error") else None)
+        if why:
+            blocked.add(sid)
+            left.append({"step": sid, "why": why})
+            continue
+        s["status"] = "approved"
+        approved.append(sid)
+    if not approved:
+        if not left:
+            raise PipelineError("Every step is already approved.")
+        raise PipelineError("No step could be approved: " + "; ".join(f"{x['step']} {x['why']}" for x in left)
+                            + ". Run the whole pipeline to preview every step, then approve them.")
+    _save(db, p)
+    done, tail, level = _approved_tail(p, approved)
+    still = (" Still to approve: " + "; ".join(f"{x['step']} ({x['why']})" for x in left)
+             + ". Run the whole pipeline to preview them." if left else "")
+    event(db, pipeline_id, f"You approved {len(approved)} step{'s' if len(approved) > 1 else ''} at once "
+          f"({', '.join(approved)}), each on its last preview." + still + tail,
+          level="warn" if left or level == "warn" else "info")
+    return {"approved": approved, "left": left}
 
 
 # ── Draft: change the steps, check, apply ────────────────────────────────────
