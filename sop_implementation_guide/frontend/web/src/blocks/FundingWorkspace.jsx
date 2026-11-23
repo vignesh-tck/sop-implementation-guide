@@ -89,9 +89,9 @@ function StepChips({ phase, gold }) {
   return <div className="step-chips">{chip("analyze", "1 · Analyze")}{chip("approve", "2 · Approve")}{chip("gold", "3 · Compute gold")}</div>;
 }
 
-// One program proposed for one recommendation. Editable while the review is
-// open (keep box, fit score); read-only once approved.
-function Match({ f, e, editable, floor, onEdit }) {
+// One program proposed for one recommendation, or added by the reviewer.
+// Editable while the review is open (keep box, fit score); read-only once approved.
+function Match({ f, e, editable, floor, onEdit, onRemove }) {
   const [open, setOpen] = useState(false);
   const dl = deadlineLabel(f.deadline);
   const score = e.fit_score;
@@ -111,7 +111,9 @@ function Match({ f, e, editable, floor, onEdit }) {
           {f.program_name}
           {f.assessment_failed && <span className="warn-text" title="Not assessed by the model; 0.50 is a placeholder"> ⚠</span>}
           <span className="match-due">
-            {f.deadline && <span className={"deadline" + (dl.soon ? " soon" : "")}>due {dl.text}</span>}
+            {f.added_by_reviewer && <span className="added-tag">added by reviewer</span>}
+            {f.added_by_reviewer && (f.deadline || pub) && " · "}
+            {f.deadline &&<span className={"deadline" + (dl.soon ? " soon" : "")}>due {dl.text}</span>}
             {f.deadline && pub && " · "}
             {pub && <>program publishes {pub}</>}
           </span>
@@ -154,8 +156,9 @@ function Match({ f, e, editable, floor, onEdit }) {
             ) : (
               <b style={{ color: scoreColour(score) }}>{num(score, 2)}</b>
             )}
-            {editable && <span className="assess"> · model proposed {num(f.fit_score, 2)}, keep threshold {floor}</span>}
+            {editable && !f.added_by_reviewer && <span className="assess"> · model proposed {num(f.fit_score, 2)}, keep threshold {floor}</span>}
           </div>
+          {f.source_agency && <div className="assess">{f.source_agency}{f.program_type && ` · ${f.program_type}`}</div>}
           {f.narrative && <p>{f.narrative}</p>}
           {f.recommended_action && <p className="assess">Next action: {f.recommended_action}</p>}
           <div className="assess">
@@ -164,27 +167,112 @@ function Match({ f, e, editable, floor, onEdit }) {
             {f.is_extracted && ` · extracted${f.extraction_confidence != null ? ` (confidence ${num(f.extraction_confidence, 2)})` : ""}`}
             {f.application_url && <> · <a href={f.application_url} target="_blank" rel="noopener noreferrer">apply ↗</a></>}
           </div>
+          {editable && f.added_by_reviewer && (
+            <button type="button" className="link small" onClick={onRemove}>Remove this source</button>
+          )}
         </div>
       )}
     </li>
   );
 }
 
+const BLANK_SOURCE = {
+  program_name: "", source_agency: "", program_type: "", amount: "", deadline: "",
+  fit_score: "0.8", reference: "", application_url: "", narrative: "",
+};
+
+// A source the run did not propose, as the reviewer knows it: a local program,
+// a foundation, a capital budget line. Name, amount and a reference are required,
+// so what is added is as checkable as what the model proposed.
+function AddSource({ rec, taken, onAdd }) {
+  const [open, setOpen] = useState(false);
+  const [v, setV] = useState(BLANK_SOURCE);
+  const set = (k) => (ev) => setV((p) => ({ ...p, [k]: ev.target.value }));
+  if (!open) {
+    return <button type="button" className="link small" onClick={() => setOpen(true)}>+ Add a funding source the run missed</button>;
+  }
+  const name = v.program_name.trim();
+  const ref = v.reference.trim();
+  const amount = Number(v.amount);
+  const fit = v.fit_score === "" ? null : Number(v.fit_score);
+  const dup = name && taken.some((t) => t.toLowerCase() === name.toLowerCase());
+  const problem = !name ? "Name the program."
+    : dup ? `${name} is already listed for this recommendation.`
+    : !hasAmount(amount) ? "Enter the amount this recommendation would ask for."
+    : !ref ? "Add a reference: a link or the document it comes from."
+    : fit != null && (Number.isNaN(fit) || fit < 0 || fit > 1) ? "Fit is a number from 0 to 1."
+    : null;
+  const submit = (ev) => {
+    ev.preventDefault();
+    if (problem) return;
+    const isUrl = /^https?:\/\//i.test(ref);
+    onAdd({
+      program_name: name,
+      source_agency: v.source_agency.trim() || null,
+      program_type: v.program_type || null,
+      amount,
+      deadline: v.deadline || null,
+      fit_score: fit,
+      source_url: isUrl ? ref : null,
+      source_name: isUrl ? "Added by reviewer" : ref,
+      application_url: v.application_url.trim() || null,
+      narrative: v.narrative.trim() || null,
+    });
+    setV(BLANK_SOURCE);
+    setOpen(false);
+  };
+  return (
+    <form className="fw-add" onSubmit={submit}>
+      <div className="fw-add-title">Add a funding source for <b>{rec.rec_label}</b></div>
+      <label className="wide">Program *<input value={v.program_name} onChange={set("program_name")} placeholder="e.g. Bowie CIP sidewalk line item" autoFocus /></label>
+      <label>Agency<input value={v.source_agency} onChange={set("source_agency")} placeholder="Who awards it" /></label>
+      <label>Type
+        <select value={v.program_type} onChange={set("program_type")}>
+          <option value="">—</option><option value="federal">Federal</option><option value="state">State</option>
+          <option value="local">Local</option><option value="private">Private / foundation</option>
+        </select>
+      </label>
+      <label>Amount for this recommendation *<input type="number" min="0" step="1000" value={v.amount} onChange={set("amount")} /></label>
+      <label>Deadline<input type="date" value={v.deadline} onChange={set("deadline")} /></label>
+      <label>Fit (0–1)<input type="number" min="0" max="1" step="0.05" value={v.fit_score} onChange={set("fit_score")} /></label>
+      <label className="wide">Reference * <span className="assess">link, or the document and page it comes from</span>
+        <input value={v.reference} onChange={set("reference")} placeholder="https://… or FY27 CIP, p. 42" />
+      </label>
+      <label className="wide">Application link<input value={v.application_url} onChange={set("application_url")} placeholder="https://…" /></label>
+      <label className="wide">Why it fits this recommendation
+        <textarea rows={2} value={v.narrative} onChange={set("narrative")} placeholder="Eligibility, past awards, who to contact" />
+      </label>
+      <div className="fw-add-actions wide">
+        {problem && <span className="assess">{problem}</span>}
+        <button type="button" onClick={() => { setV(BLANK_SOURCE); setOpen(false); }}>Cancel</button>
+        <button type="submit" className="primary" disabled={!!problem}>Add source</button>
+      </div>
+    </form>
+  );
+}
+
 // The programs behind one row. While reviewing: the ones above the threshold or
-// kept, with the weaker ones one click further. After approval: what was kept.
-function MatchList({ row, editable, onEdit }) {
+// kept, with the weaker ones one click further, and a form to add a source the
+// run missed. After approval: what was kept.
+function MatchList({ row, editable, onEdit, onAdd, onRemove }) {
   const [showWeak, setShowWeak] = useState(false);
   const main = editable ? row.fits.filter((x) => x.e.approved || (x.e.fit_score ?? 0) >= row.floor) : row.kept;
   const weak = editable ? row.fits.filter((x) => !main.includes(x)) : [];
   const shown = showWeak ? [...main, ...weak] : main;
-  if (!row.fits.length) return <p className="assess">No programs were assessed for this recommendation.</p>;
+  const add = editable && (
+    <AddSource rec={row.rec} taken={row.fits.map((x) => x.f.program_name)} onAdd={(src) => onAdd(row.rec.rec_id, src)} />
+  );
+  if (!row.fits.length) {
+    return <><p className="assess">No programs were assessed for this recommendation.</p>{add}</>;
+  }
   return (
     <>
       {shown.length ? (
         <ul className="matches">
           {shown.map(({ f, e }) => (
             <Match key={f.program_name} f={f} e={e} editable={editable} floor={row.floor}
-              onEdit={(p) => onEdit(fitKey(row.rec.rec_id, f.program_name), p)} />
+              onEdit={(p) => onEdit(fitKey(row.rec.rec_id, f.program_name), p)}
+              onRemove={() => onRemove(row.rec.rec_id, f.program_name)} />
           ))}
         </ul>
       ) : (
@@ -208,6 +296,7 @@ function MatchList({ row, editable, onEdit }) {
           {showWeak ? "Hide weaker matches" : `Show ${weak.length} weaker match${weak.length > 1 ? "es" : ""}`}
         </button>
       )}
+      {add && <div className="fw-add-link">{add}</div>}
     </>
   );
 }
@@ -312,7 +401,8 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
           </div>
         ) : (
           <div className="banner warn">
-            Check the proposed source on each recommendation, then approve once for the whole block. Open a row to change what is kept.
+            Check the proposed source on each recommendation, then approve once for the whole block. Open a row to change
+            what is kept, or to add a source the run missed.
           </div>
         )
       )}
@@ -363,7 +453,9 @@ export default function FundingWorkspace({ block, s, actions, onClose }) {
                     <tr className="fw-detail">
                       <td />
                       <td colSpan={4}>
-                        <MatchList row={r} editable={phase === "review"} onEdit={(key, p) => actions.setEdit(id, key, p)} />
+                        <MatchList row={r} editable={phase === "review"} onEdit={(key, p) => actions.setEdit(id, key, p)}
+                          onAdd={(recId, src) => actions.addSource(id, recId, src)}
+                          onRemove={(recId, name) => actions.removeSource(id, recId, name)} />
                       </td>
                     </tr>
                   )}

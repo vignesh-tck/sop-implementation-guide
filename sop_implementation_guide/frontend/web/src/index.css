@@ -671,6 +671,16 @@ button.link.small { font-size: .8rem; }
 .match-detail p { margin: .3rem 0; line-height: 1.45; }
 .match-detail a { color: var(--silver); }
 .fw-note-link { margin-top: .8rem; }
+.added-tag { color: var(--orange); font-weight: 600; }
+.fw-add-link { margin-top: .4rem; }
+.fw-add { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem .75rem; margin-top: .6rem; padding: .75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.fw-add .wide { grid-column: 1 / -1; }
+.fw-add-title { grid-column: 1 / -1; font-size: .88rem; }
+.fw-add label { display: flex; flex-direction: column; gap: .2rem; font-size: .76rem; color: var(--muted); }
+.fw-add input, .fw-add select, .fw-add textarea { font: inherit; font-size: .85rem; color: var(--text); }
+.fw-add-actions { display: flex; justify-content: flex-end; align-items: center; gap: .5rem; }
+.fw-add-actions .assess { margin-right: auto; font-size: .8rem; }
+@media (max-width: 640px) { .fw-add { grid-template-columns: 1fr; } }
 .gold-line { margin-top: 1rem; font-size: .88rem; }
 .fw-note { display: flex; flex-direction: column; gap: .3rem; margin-top: .9rem; }
 .fw .card { margin-top: 1rem; }

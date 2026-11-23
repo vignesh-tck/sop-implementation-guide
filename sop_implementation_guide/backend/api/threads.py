@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -44,8 +45,29 @@ def approve(
     Every approved entry needs a positive `amount`: what that recommendation would
     ask the programme for. Approving a source with no figure leaves nothing to
     plan against or total, so the request is refused and nothing is written.
+
+    An entry with `added: true` is a source the reviewer named that the run
+    never proposed. It carries its own details (program_type, source_agency,
+    deadline as YYYY-MM-DD, application_url, narrative) and needs a
+    `program_name` and a reference: `source_url` or `source_name`.
     """
     if fits is not None:
+        bad = []
+        for f in fits:
+            if not (f.get("added") and f.get("approved")):
+                continue
+            name = (f.get("program_name") or "").strip()
+            if not name:
+                bad.append(f"an added source on rec {f.get('rec_id')} has no name")
+            elif not ((f.get("source_url") or "").strip() or (f.get("source_name") or "").strip()):
+                bad.append(f"{name} has no reference")
+            if f.get("deadline"):
+                try:
+                    date.fromisoformat(str(f["deadline"]))
+                except ValueError:
+                    bad.append(f"{name or 'an added source'} has a deadline that is not a date")
+        if bad:
+            raise HTTPException(status_code=422, detail="Added sources: " + "; ".join(bad[:5]))
         missing = []
         for f in fits:
             if not f.get("approved"):

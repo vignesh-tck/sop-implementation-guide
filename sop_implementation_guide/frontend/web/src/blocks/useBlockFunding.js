@@ -176,6 +176,33 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
 
   const setFeedback = useCallback((id, feedback) => patch(id, { feedback }), [patch]);
 
+  // A source the reviewer knows of that the run did not propose. It joins the
+  // recommendation's matches, kept, and is sent with its details on approve.
+  // Held only in this open review until then.
+  const addSource = useCallback((id, recId, src) => {
+    patch(id, (cur) => {
+      if (!cur.review) return {};
+      const recommendations = cur.review.recommendations.map((r) =>
+        r.rec_id === recId ? { ...r, fits: [...(r.fits || []), { ...src, added_by_reviewer: true }] } : r);
+      return {
+        review: { ...cur.review, recommendations },
+        edits: { ...cur.edits, [fitKey(recId, src.program_name)]: {
+          fit_score: src.fit_score, approved: true, edited: false, amount: src.amount } },
+      };
+    });
+  }, [patch]);
+
+  const removeSource = useCallback((id, recId, programName) => {
+    patch(id, (cur) => {
+      if (!cur.review) return {};
+      const recommendations = cur.review.recommendations.map((r) =>
+        r.rec_id === recId ? { ...r, fits: r.fits.filter((f) => !(f.added_by_reviewer && f.program_name === programName)) } : r);
+      const edits = { ...cur.edits };
+      delete edits[fitKey(recId, programName)];
+      return { review: { ...cur.review, recommendations }, edits };
+    });
+  }, [patch]);
+
   // Every row the reviewer saw is reported back, kept or not, so the backend
   // never has to guess whether an absent row was rejected or just missed.
   const approve = useCallback(async (id) => {
@@ -192,6 +219,12 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
           fit_score: score == null || Number.isNaN(score) ? null : Math.max(0, Math.min(1, score)),
           approved: !!e?.approved,
           amount: hasAmount(e?.amount) ? e.amount : null,
+          ...(f.added_by_reviewer ? {
+            added: true,
+            program_type: f.program_type, source_agency: f.source_agency, deadline: f.deadline,
+            application_url: f.application_url, source_url: f.source_url, source_name: f.source_name,
+            narrative: f.narrative,
+          } : {}),
         });
       }
     }
@@ -237,6 +270,6 @@ export default function useBlockFunding({ onProfileComputed } = {}) {
 
   const get = useCallback((id) => (id == null ? null : byBlock[id] || EMPTY), [byBlock]);
 
-  return { get, load, refresh, analyze, approve, computeGold, setEdit, setFeedback,
+  return { get, load, refresh, analyze, approve, computeGold, setEdit, setFeedback, addSource, removeSource,
            resume, view, pin, discard, setRunOptions };
 }

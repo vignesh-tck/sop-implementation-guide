@@ -70,6 +70,7 @@ export function FundingList({ funding, withNarrative = false }) {
             )}
             {f.deadline && <span className={"deadline" + (dl.soon ? " soon" : "")}> · due {dl.text}</span>}
             {amt && <span className="assess"> · {amt}</span>}
+            {f.added_by_reviewer && <span className="assess"> · added by reviewer</span>}
             {withNarrative && f.narrative && <div className="assess">{f.narrative}</div>}
           </li>
         );

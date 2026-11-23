@@ -320,7 +320,51 @@ def apply_feedback(state: FundingState) -> dict:
             )
         final.append(row)
 
+    # Sources the reviewer added that the run never proposed: programmes an SME
+    # knows of that are not in this Funding version. They count for this
+    # block's analysis only; the catalogue itself changes through a pipeline.
+    if decisions is not None:
+        assessed = {(f.get("rec_id"), f.get("program_name")) for f in state["fits"]}
+        recs = {r.get("id"): r for r in state.get("recommendations") or []}
+        for key, d in decisions.items():
+            if key in assessed or not d.get("added") or not d.get("approved"):
+                continue
+            rec = recs.get(key[0])
+            if rec is None or not (d.get("program_name") or "").strip():
+                continue
+            row = added_fit(d, rec)
+            if notes:
+                row["human_notes"] = notes
+            final.append(row)
+
     return {"final_signals": final, "rejected_signals": rejected}
+
+
+def added_fit(d: dict, rec: dict) -> dict:
+    """
+    A reviewer-added source in the shape of an assessed fit. The amount is the
+    reviewer's own figure and the fit score is the one they gave; nothing here
+    came from the model, which added_by_reviewer records.
+    """
+    score = d.get("fit_score")
+    return {
+        "rec_id": rec.get("id"),
+        "rec_label": rec.get("rec_label"),
+        "rec_dimension": rec.get("dimension"),
+        "rec_direction": rec.get("direction"),
+        "program_name": d["program_name"].strip(),
+        "program_type": d.get("program_type") or None,
+        "source_agency": d.get("source_agency") or None,
+        "deadline": d.get("deadline") or None,
+        "application_url": d.get("application_url") or None,
+        "source_name": d.get("source_name") or "Added by reviewer",
+        "source_url": d.get("source_url") or None,
+        "narrative": d.get("narrative") or None,
+        "fit_score": max(0.0, min(1.0, float(score))) if score is not None else None,
+        "planned_amount": float(d["amount"]) if d.get("amount") is not None else None,
+        "amount_basis": "reviewer",
+        "added_by_reviewer": True,
+    }
 
 
 def write_signals(state: FundingState) -> dict:
@@ -375,6 +419,8 @@ def write_signals(state: FundingState) -> dict:
                 "recommended_action": s.get("recommended_action"),
                 "assessment_failed": s.get("assessment_failed", False),
                 "score_adjusted_by_reviewer": s.get("score_adjusted_by_reviewer", False),
+                # TRUE when the reviewer named this source; the run never proposed it.
+                "added_by_reviewer": s.get("added_by_reviewer", False),
                 "rec_dimension": s.get("rec_dimension"),
                 "rec_direction": s.get("rec_direction"),
                 "human_notes": s.get("human_notes"),

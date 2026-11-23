@@ -73,6 +73,8 @@ def _fit_from_signal(signal: dict) -> dict:
         # Provenance of the number itself — a reviewer-corrected score should not
         # read the same as one the model proposed and nobody touched.
         "score_adjusted_by_reviewer": raw.get("score_adjusted_by_reviewer", False),
+        # A source the reviewer added that the run never proposed.
+        "added_by_reviewer": raw.get("added_by_reviewer", False),
         "human_notes": raw.get("human_notes"),
         "thread_id": signal.get("thread_id"),
         "created_at": signal.get("created_at"),
