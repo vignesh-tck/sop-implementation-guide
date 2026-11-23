@@ -1527,13 +1527,62 @@ button.danger { color: var(--red); }
 .plan-canvas-wrap.side > .step-inspector {
   grid-area: 1 / 2; justify-self: stretch; width: auto; margin: .5rem .5rem .5rem 0; max-height: calc(100vh - 6rem);
 }
+/* The Playbooks tab's right-hand panel: the selected step, or the agent's chat. */
+.plan-canvas-wrap.side > .side-panel {
+  grid-area: 1 / 2; position: sticky; top: .5rem; margin: .5rem .5rem .5rem 0; z-index: 5;
+  display: flex; flex-direction: column; height: min(44rem, calc(100vh - 6rem)); min-height: 26rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden;
+}
+.plan-canvas-wrap.proposal { border: 2px dashed color-mix(in srgb, var(--orange) 60%, var(--border)); }
+.side-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.side-tabs button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+  background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: .5rem; font-size: .82rem; color: var(--muted);
+}
+.side-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--orange); }
+.side-panel > .step-inspector {
+  position: static; width: auto; max-height: none; margin: 0; flex: 1; min-height: 0; overflow: auto;
+  border: none; border-top: 3px solid var(--actor); border-radius: 0; box-shadow: none;
+}
+.side-panel > .step-inspector.editing { border-top-color: var(--orange); }
+.si-empty { padding: .75rem .85rem; font-size: .84rem; overflow: auto; }
+.si-empty p { margin: .4rem 0; }
+.si-empty button { margin-top: .4rem; }
 @media (max-width: 900px) {
   .plan-canvas-wrap.side { grid-template-columns: minmax(0, 1fr); }
   .plan-canvas-wrap.side > .step-inspector { grid-area: 1 / 1; justify-self: end; width: min(21rem, calc(100% - 1rem)); margin: .5rem; }
-  .plan-canvas-wrap.side > .si-empty { display: none; }
+  .plan-canvas-wrap.side > .side-panel { grid-area: 1 / 1; justify-self: end; width: min(23rem, calc(100% - 1rem)); margin: .5rem; }
 }
-.si-empty p { margin: .4rem 0; }
-.si-empty button { margin-top: .4rem; }
+
+/* The playbook agent's chat and its proposal. */
+.pb-agent { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pb-agent[hidden] { display: none; }
+.pb-msgs { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: .5rem; padding: .7rem; }
+.pb-msgs .pl-msg { max-width: 100%; font-size: .84rem; }
+.pb-msgs .pl-event { display: flex; align-items: center; justify-content: center; gap: .35rem; }
+.pb-msgs .pl-event.error { color: var(--red); }
+.pb-suggest { display: flex; flex-direction: column; gap: .3rem; margin-top: .5rem; }
+.pb-suggest button { text-align: left; font-weight: 400; font-size: .8rem; padding: .35rem .55rem; background: var(--surface); }
+.pb-suggest button:hover { border-color: var(--orange); }
+.pb-input { flex-shrink: 0; border-top: 1px solid var(--border); padding: .5rem .6rem .6rem; }
+.pb-input textarea { width: 100%; box-sizing: border-box; resize: vertical; font-size: .85rem; }
+.pb-input-row { display: flex; align-items: center; gap: .5rem; margin-top: .35rem; }
+.ask-agent { display: inline-flex; align-items: center; gap: .4rem; color: var(--orange); border-color: color-mix(in srgb, var(--orange) 45%, var(--border)); }
+.pb-proposal {
+  margin-bottom: .75rem; padding: .6rem .75rem; border-radius: 8px; font-size: .84rem;
+  border: 2px dashed color-mix(in srgb, var(--orange) 60%, var(--border)); background: color-mix(in srgb, var(--orange) 6%, var(--surface));
+}
+.pb-proposal-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.pb-proposal-head b { color: var(--orange); }
+.pb-changes { list-style: none; margin: .45rem 0 0; padding: 0; max-height: 9.5rem; overflow: auto; }
+.pb-changes li { padding: .1rem 0; }
+.pb-changes button.link { text-align: left; font-weight: 400; color: var(--text); }
+.pb-op { display: inline-block; width: 1.1rem; text-align: center; font-weight: 700; }
+.pb-op.new { color: var(--teal); }
+.pb-op.changed { color: var(--orange); }
+.pb-op.gone { color: var(--red); }
+.pb-op.moved { color: var(--silver); }
+.pathway-list .name .pc-flag { margin-left: .4rem; vertical-align: middle; }
 .plan-canvas-wrap.editing { border-color: var(--orange); }
 .pc-flow { position: relative; width: 100%; min-height: 12rem; }
 .plan-canvas-wrap.has-inspector:not(.side) .pc-flow { min-height: 32rem; }
@@ -1662,3 +1711,5 @@ button.danger { color: var(--red); }
 .pathway-canvas > summary { cursor: pointer; font-weight: 600; font-size: .82rem; }
 .plan-table textarea.how { margin-top: .3rem; font-size: .8rem; color: var(--muted); }
 .plan-table td.after input { min-width: 4.5rem; width: 5rem; }
+
+.pathways-top { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }

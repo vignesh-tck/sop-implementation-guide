@@ -72,6 +72,11 @@ export function topoOrder(steps) {
   return out;
 }
 
+function links(s) {
+  const deps = [...(s.depends_on || [])].sort();
+  return deps.join(",") + (s.depends_mode === "any" && deps.length > 1 ? "|any" : "");
+}
+
 function field(s, key, num, actors) {
   if (key === "after") return afterText(s, num);
   if (key === "actor") return actors?.[s.actor]?.label || s.actor || "";
@@ -88,7 +93,9 @@ export function diffSteps(base, steps, actors) {
     if (!old) { added.push({ id: s.id, n: nNum[s.id], title: s.title, actor: s.actor }); continue; }
     const fields = DIFF_FIELDS
       .map(([key, label]) => ({ field: key, label, before: field(old, key, bNum, actors), after: field(s, key, nNum, actors) }))
-      .filter((f) => f.before !== f.after);
+      // Links compare by id: a step inserted earlier renumbers the rest
+      // without changing what any of them waits on.
+      .filter((f) => (f.field === "after" ? links(old) !== links(s) : f.before !== f.after));
     if (fields.length) changed.push({ id: s.id, n: nNum[s.id], title: s.title, fields });
   }
   const removed = base.filter((s) => !nNum[s.id]).map((s) => ({ ...s, n: bNum[s.id] }));

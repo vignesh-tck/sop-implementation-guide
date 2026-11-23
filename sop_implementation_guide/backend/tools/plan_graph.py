@@ -247,6 +247,11 @@ def after_text(step: dict, num: dict[str, int]) -> str:
     return "After " + joiner.join(str(n) for n in deps)
 
 
+def _links(step: dict) -> tuple:
+    deps = sorted(step.get("depends_on") or [])
+    return tuple(deps), (step.get("depends_mode") == "any" and len(deps) > 1)
+
+
 def _field(step: dict, key: str, num: dict[str, int]) -> str:
     if key == "after":
         return after_text(step, num)
@@ -274,7 +279,10 @@ def diff_steps(base: list[dict], new: list[dict]) -> dict:
         fields = []
         for key, label in DIFF_FIELDS:
             before, after = _field(old, key, base_num), _field(s, key, new_num)
-            if before != after:
+            # Links compare by id: a step inserted earlier renumbers the rest
+            # without changing what any of them waits on.
+            same = (_links(old) == _links(s)) if key == "after" else before == after
+            if not same:
                 fields.append({"field": key, "label": label, "before": before, "after": after})
         if fields:
             changed.append({"id": s["id"], "n": new_num[s["id"]], "title": s.get("title") or "", "fields": fields})

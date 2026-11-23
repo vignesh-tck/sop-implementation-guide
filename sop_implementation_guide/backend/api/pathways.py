@@ -8,9 +8,19 @@ for how the templates in force are chosen.
 
 Plans nobody has saved yet follow the templates live. A saved plan keeps its own
 steps, so a template edit never changes a plan a reviewer has already worked on.
+
+The tab's agent (backend/agents/playbook_agent.py) runs here too. A turn can
+take a minute, longer than a proxy may hold a request open, so it runs in a
+background thread: POST /pathways/agent starts it and GET /pathways/agent/{job}
+returns it once done. Jobs live in memory only; the chat itself is held by the
+browser, and nothing the agent does is saved until the planner saves.
 """
 
-from typing import Optional
+import logging
+import threading
+import time
+import uuid
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -20,6 +30,8 @@ from backend.db.session import get_supabase
 from backend.repositories.pathway_templates import PathwayTemplateRepository, TemplateTableMissing
 from backend.repositories.recommendations import BlockRepository
 from backend.tools.pathways import load_file_templates, load_templates, normalize_templates
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pathways", tags=["pathways"])
 
@@ -149,3 +161,64 @@ def restore_version(version: int, body: Restore, db: Client = Depends(get_supaba
         doc = row["doc"]
         label = f"v{version}"
     return _save(db, current, doc, updated_by, f"Restored {label}")
+
+
+# ── The playbook agent ───────────────────────────────────────────────────────
+
+class AgentTurn(BaseModel):
+    text: str
+    # The conversation so far, exactly as the last turn returned it.
+    messages: list[dict[str, Any]] = []
+    # The planner's playbooks as open in the editor: {status, pathways, rec_types}.
+    draft: dict[str, Any]
+    # The agent's pending proposal, if any, so a follow-up builds on it.
+    proposal: Optional[dict[str, Any]] = None
+    selected: Optional[str] = None
+
+
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+JOB_TTL = 3600
+
+
+def _run_agent(job: str, body: AgentTurn, sources: dict, labels: list[str]) -> None:
+    from backend.agents import playbook_agent
+
+    try:
+        result = playbook_agent.run_turn(body.messages, body.text, body.draft, body.proposal, body.selected,
+                                         sources, labels)
+        update = {"status": "done", "result": result}
+    except Exception as e:  # noqa: BLE001 — reported in the chat, never lost in a thread
+        log.exception("playbook agent turn failed")
+        update = {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+    with _JOBS_LOCK:
+        _JOBS[job].update(update)
+
+
+@router.post("/agent")
+def agent_start(body: AgentTurn, db: Client = Depends(get_supabase)):
+    """Start one turn of the playbook agent; poll GET /pathways/agent/{job} for the reply."""
+    if not body.text.strip():
+        raise HTTPException(status_code=422, detail="Say what you would like changed.")
+    templates = load_templates(db)
+    labels = sorted(set(BlockRepository(db).distinct_rec_labels()) | set(templates["rec_types"]))
+    job = uuid.uuid4().hex
+    now = time.time()
+    with _JOBS_LOCK:
+        for k in [k for k, v in _JOBS.items() if now - v["at"] > JOB_TTL]:
+            del _JOBS[k]
+        _JOBS[job] = {"status": "running", "at": now}
+    threading.Thread(target=_run_agent, args=(job, body, templates["filled_by"], labels), daemon=True).start()
+    return {"job": job}
+
+
+@router.get("/agent/{job}")
+def agent_poll(job: str):
+    with _JOBS_LOCK:
+        j = _JOBS.get(job)
+        if not j:
+            raise HTTPException(status_code=404, detail="That agent turn is gone (the server restarted). Send it again.")
+        out = {k: v for k, v in j.items() if k != "at"}
+        if j["status"] != "running":
+            del _JOBS[job]
+    return out
