@@ -65,7 +65,7 @@ function stepSummary(s, linked = false) {
     case "geo_tie": return `fills ${c.field || "geo_scope"}`;
     case "sql": return c.tables?.length && !linked ? `joins ${c.tables.join(", ")}` : cut((c.query || "").replace(/\s+/g, " "), 30);
     case "from_table": return `from ${c.table || "?"}`;
-    case "read_table": return `table ${c.table || "?"}`;
+    case "read_table": return c.source_id ? (linked ? "CSV as a table" : `CSV ${c.source_id}`) : `table ${c.table || "?"}`;
     case "spatial_lookup": return `${c.field || "?"} → ${c.writes || "?"}${c.layers?.length ? ` · layer${c.layers.length > 1 ? "s" : ""} ${c.layers.join(", ")}` : ""}`;
     case "use_table": return c.source_id && !linked ? `from ${c.source_id}` : "use tables";
     default: return "";
@@ -650,6 +650,11 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
   const link = (a, b) => send("POST", "/draft/links", { source: a, target: b });
   const unlink = (a, b) => send("POST", "/draft/unlink", { source: a, target: b });
   const wire = (src, s) => {
+    if (s.type === "read_table") {   // a CSV source read as a table, in place of a Supabase table
+      if (!view.source_tables?.[src.id]) { flash(`${src.id} is not a CSV, so it cannot be read as a table: wire it to an Extract step.`); return null; }
+      if (s.config?.source_id === src.id) { flash(`${s.id} already reads ${src.id}.`); return null; }
+      return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, source_id: src.id, table: null, fields: null } });
+    }
     if (view.catalog[s.type]?.config?.source_id) {   // a step that reads one source itself
       if (s.config?.source_id === src.id) { flash(`${s.id} already reads ${src.id}.`); return null; }
       return send("PATCH", `/draft/steps/${s.id}`, { config: { ...s.config, source_id: src.id } });
@@ -662,7 +667,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     }
     if (s.type !== "extract") {
       const ex = steps.filter((x) => x.type === "extract").map((x) => x.id);
-      flash(`Sources feed Extract steps (or, for a CSV, a SQL step as a table).${ex.length ? ` Wire ${src.id} to ${ex.join(" or ")}.` : " Add an Extract step first."}`);
+      flash(`Sources feed Extract steps (or, for a CSV, a Read table or SQL step as a table).${ex.length ? ` Wire ${src.id} to ${ex.join(" or ")}.` : " Add an Extract step first."}`);
       return null;
     }
     if (reads(s).includes(src.id)) { flash(`${s.id} already reads ${src.id}.`); return null; }

@@ -435,18 +435,32 @@ function ConfigForm({ type, c, set, fields, sources, refTables, srcTables, sqlTy
         </>
       );
     case "read_table": {
-      // Our Supabase tables, as the SQL step names them (db.<table>).
+      // Our Supabase tables, as the SQL step names them (db.<table>), and this pipeline's CSV sources.
       const dbTables = Object.fromEntries(Object.entries(refTables || {}).filter(([k]) => k.startsWith("db."))
         .map(([k, r]) => [k.slice(3), r]));
-      const cols = Object.keys(dbTables[c.table]?.columns || {});
+      const csvs = srcTables || {};
+      const cols = Object.keys((c.source_id ? csvs[c.source_id] : dbTables[c.table])?.columns || {});
       const map = c.fields || {};
       return (
         <>
-          <Row label="Table" hint="One record per row, read only. Filter or join rows in a SQL step after it.">
-            <select value={c.table || ""} onChange={(e) => set({ ...c, table: e.target.value, fields: null })}>
-              {Object.keys(dbTables).map((k) => <option key={k} value={k}>{k}</option>)}
+          <Row label="Table" hint="One record per row, read only, no model: each cell is copied as it is. Filter or join rows in a SQL step after it.">
+            <select value={c.source_id ? `csv:${c.source_id}` : c.table || ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      set(v.startsWith("csv:") ? { ...c, source_id: v.slice(4), table: null, fields: null }
+                        : { ...c, source_id: null, table: v, fields: null });
+                    }}>
+              {Object.keys(csvs).length > 0 && (
+                <optgroup label="CSV sources">
+                  {Object.entries(csvs).map(([k, r]) => <option key={k} value={`csv:${k}`}>{k}{r.label ? `: ${r.label}` : ""}</option>)}
+                </optgroup>
+              )}
+              <optgroup label="Supabase tables">
+                {Object.keys(dbTables).map((k) => <option key={k} value={k}>{k}</option>)}
+              </optgroup>
             </select>
           </Row>
+          {c.source_id && <div className="assess">A CSV's columns are its header row in lower_snake_case. A cell that does not fit its field's type is left blank and reported.</div>}
           <Row label="Fields from columns" hint="A field named like a column fills itself; pick a column for the others.">
             <table className="pl-loadmap-table">
               <tbody>

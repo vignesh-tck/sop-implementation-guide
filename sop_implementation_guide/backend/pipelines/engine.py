@@ -541,11 +541,16 @@ def source_tables(ids: list[str], sources: list[dict] | None,
 
 
 def source_columns(src: dict) -> dict[str, str] | None:
-    """A CSV source's columns, from its saved copy; None if it is not a CSV or cannot be read."""
+    """A CSV source's columns, from its saved copy's header row; None if it is not a CSV or cannot be read."""
     try:
-        return source_tables([src["id"]], [src])[src["id"]][0]
-    except PipelineError:
+        doc = fetch_source(src)
+        if not is_csv(doc, src):
+            return None
+        # Only the header is parsed: a CSV is fetched whole, and this runs for every view of the pipeline.
+        header = next((r for r in csv.reader(io.StringIO(doc.get("text") or "")) if any(c.strip() for c in r)), None)
+    except (PipelineError, csv.Error):
         return None
+    return {n: "VARCHAR" for n in _column_names(header)} if header else None
 
 
 # ── Typed parsing ────────────────────────────────────────────────────────────

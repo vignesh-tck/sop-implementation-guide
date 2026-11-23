@@ -165,7 +165,24 @@ def _table(name: Any) -> dict:
     return {"name": name, **found[name]}
 
 
+def _csv_source(sources: list[dict] | None, sid: Any) -> dict:
+    src = next((s for s in sources or [] if s["id"] == sid), None)
+    if not src:
+        raise PipelineError(f"read_table.source_id must name a CSV source of this pipeline ({sid!r} is not one).")
+    return src
+
+
 def _read_validate(c: dict, fields: list[dict], sources: list[dict] | None) -> dict:
+    if c.get("source_id"):   # a CSV source, read as a table: no model, one record per row
+        src = _csv_source(sources, c["source_id"])
+        cols = engine.source_columns(src)
+        if cols is None:
+            raise PipelineError(f"{src['id']} is not a CSV, or could not be read, so it cannot be read as a table: "
+                                "read it with an Extract step.")
+        c["table"] = None
+        c["fields"] = _columns_map(c.get("fields"), list(cols), fields, "read_table")
+        return c
+    c.pop("source_id", None)
     t = _table(c.get("table"))
     c["table"] = t["name"]
     c["fields"] = _columns_map(c.get("fields"), list(t["columns"]), fields, "read_table")
@@ -174,11 +191,65 @@ def _read_validate(c: dict, fields: list[dict], sources: list[dict] | None) -> d
 
 def _read_io(step: dict, fields: list[dict]) -> dict:
     c = step.get("config") or {}
-    return {"rows": "creates", "writes": list((c.get("fields") or {}).keys()), "reads": f"table {c.get('table')}"}
+    return {"rows": "creates", "writes": list((c.get("fields") or {}).keys()),
+            "reads": c.get("source_id") or f"table {c.get('table')}"}
+
+
+_BOOL = {"yes": True, "y": True, "true": True, "t": True, "1": True, "no": False, "n": False, "false": False, "f": False, "0": False}
+
+
+def _cell(f: dict, v: str | None) -> tuple[Any, bool]:
+    """A CSV cell (always text) as the field's type. (value, read): read is False when it does not fit the type."""
+    v = (v or "").strip()
+    if not v:
+        return None, True
+    if f["type"] in engine.PARSERS:
+        value = engine.PARSERS[f["type"]](v)
+    elif f["type"] == "boolean":
+        value = _BOOL.get(v.lower())
+    elif f["type"] == "url":
+        value = v if v.lower().startswith(("http://", "https://")) else None
+    else:
+        value, warn = engine._normalise(f, v)
+        return value, warn is None
+    return value, value is not None
+
+
+def _read_csv(step: dict, records: list[dict], fields: list[dict], ctx: dict) -> tuple[list[dict], list[str]]:
+    c = step["config"]
+    src = _csv_source(ctx["sources"], c["source_id"])
+    label = src.get("label") or src["id"]
+    if ctx.get("say"):
+        ctx["say"](f"Reading {label} as a table")
+    doc = ctx["source_doc"](src["id"])
+    columns, body, notes = engine.source_table(doc)
+    names = list(columns)
+    by_name = {f["name"]: f for f in fields}
+    new, unread = [], {}
+    for n, row in enumerate(body, 1):
+        rec = {"id": f"{src['id']}-row{n}", "values": {}, "prov": {},
+               "source_id": src["id"], "source_url": doc.get("final_url") or src.get("url")}
+        for field, col in c["fields"].items():
+            cell = row[names.index(col)]
+            v, ok = _cell(by_name[field], cell)
+            if not ok:
+                unread.setdefault(field, []).append(n)
+                v = None
+            engine._set(rec, field, v, "derived", step["id"], note=f"{label}, row {n}, column {col}"
+                        + ("" if ok else f"; {cell!r} is not a {by_name[field]['type']}, so left blank"))
+        new.append(rec)
+    warnings = [f"{len(new)} row(s) from {label}"] + [f"{label}: {x}" for x in notes]
+    for field, rows in unread.items():
+        warnings.append(f"{len(rows)} value(s) in column {c['fields'][field]} are not a {by_name[field]['type']} and were "
+                        f"left blank in {field} (rows {', '.join(map(str, rows[:6]))}{' …' if len(rows) > 6 else ''}): "
+                        "change the field's type, or convert the column in a SQL step.")
+    return records + new, warnings
 
 
 def _read_run(step: dict, records: list[dict], fields: list[dict], ctx: dict) -> tuple[list[dict], list[str]]:
     c = step["config"]
+    if c.get("source_id"):
+        return _read_csv(step, records, fields, ctx)
     t = _table(c["table"])
     if ctx.get("say"):
         ctx["say"](f"Reading table {t['name']}")
@@ -204,12 +275,16 @@ def _read_run(step: dict, records: list[dict], fields: list[dict], ctx: dict) ->
 engine.CATALOG["read_table"] = {
     "label": "Read table",
     "model": False, "kinds": [KIND], "starts": True,
-    "description": "Start records from one of our Supabase tables, one record per row (read only; the app's tables and "
-                   "gp_ tables alike). Fields named like a column are filled from it, marked derived; map others in "
-                   "fields. To filter rows or join a table to other records, use a sql step (tables are db.<table> "
-                   "there). A plain run reuses the saved rows while the step is unchanged: re-run fresh to read the "
-                   "table again.",
-    "config": {"table": "str: a table name (the state's db_tables lists them with their columns)",
+    "description": "Start records from one of our Supabase tables, or from a CSV source of this pipeline, one record "
+                   "per row (read only; the app's tables and gp_ tables alike). No model reads it: each cell is "
+                   "copied as it is, converted to the field's type (a cell that does not fit is left blank and "
+                   "reported). Fields named like a column are filled from it, marked derived; map others in fields. "
+                   "A CSV's columns are its header row in lower_snake_case. Prefer this to Extract for a CSV whose "
+                   "columns are already the data; use Extract only for free text inside cells. To filter rows or "
+                   "join a table to other records, use a sql step (tables are db.<table> there). A plain run reuses "
+                   "the saved rows while the step is unchanged: re-run fresh to read the table again.",
+    "config": {"table": "str: a table name (the state's db_tables lists them with their columns); omit with source_id",
+               "source_id": "optional str: a CSV source id (e.g. s2), read instead of a table",
                "fields": "optional object {field: column}; fields named like a column map themselves"},
     "validate": _read_validate, "io": _read_io, "run": _read_run,
 }
@@ -541,6 +616,10 @@ Sources: web pages, PDFs, CSVs, JSON and text files (paste URLs; uploads arrive 
 Supabase tables, listed in the state under db_tables with their columns. A pipeline may use tables only, with
 no sources at all: then the planner can mark the (empty) sources final straight away.
 - read_table starts records from a table, one per row (fields named like a column fill themselves).
+  With config.source_id it reads a CSV source instead (columns under source_tables in the state): use
+  this, not Extract, when the CSV's columns already are the data, since every cell is copied with no
+  model. Use Extract on a CSV only to read free text inside its cells, and give that Extract step
+  source_ids that leave out a CSV read_table reads, or its rows come in twice.
 - A sql step can join any table as a reference table named db.<table> (list it in config.tables, e.g.
   "db.blocks", and write FROM records r JOIN db.blocks b ON ...). run_sql takes the same names.
 - Tables are read only. A gp_ table one of the general pipelines wrote can be read like any other.

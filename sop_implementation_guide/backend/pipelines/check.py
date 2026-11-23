@@ -158,9 +158,18 @@ def check(kind: str, d: dict) -> dict:
             warn(readers[sid][0], f"{sid} is joined as a table by {', '.join(js)} and also extracted by {', '.join(readers[sid])}"
                  + (f" ({', '.join(everything)} read{'s' if len(everything) == 1 else ''} every source: set its sources if it should not read {sid})"
                     if everything else "") + ".")
-    unread = [x["id"] for x in sources if x["id"] not in readers and x["id"] not in joined]
+    # A CSV source read_table reads as a table: extracting it as well would make every row twice.
+    tabled = {(s.get("config") or {}).get("source_id"): s["id"] for s in steps
+              if s["type"] == "read_table" and (s.get("config") or {}).get("source_id")}
+    for sid, t in tabled.items():
+        if sid in readers:
+            everything = [r for r in readers[sid] if not (by_id[r].get("config") or {}).get("source_ids")]
+            warn(readers[sid][0], f"{sid} is read as a table by {t} and also extracted by {', '.join(readers[sid])}, so its "
+                 "rows would come in twice" + (f" ({', '.join(everything)} read{'s' if len(everything) == 1 else ''} every "
+                                               f"source: set its sources so it skips {sid})" if everything else "") + ".")
+    unread = [x["id"] for x in sources if x["id"] not in readers and x["id"] not in joined and x["id"] not in tabled]
     if unread and any(s["type"] == "extract" for s in steps):
-        warn(None, f"No Extract step reads {', '.join(unread)}, and no SQL step joins it.")
+        warn(None, f"No Extract step reads {', '.join(unread)}, and no SQL or Read table step uses it.")
 
     # port schemas, in run order, and merges
     ports: dict[str, dict] = {}
