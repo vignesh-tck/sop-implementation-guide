@@ -4,7 +4,7 @@ import { call, deadlineLabel, money, num, scoreColour } from "../api.js";
 import { Cites, OUTCOME, Outcome, References, SmeQuestions, ZoningFinding, zoningAnswer } from "../zoning/ZoningParts.jsx";
 import PlanCanvas from "./plan/PlanCanvas.jsx";
 import StepInspector from "./plan/StepInspector.jsx";
-import { ACTORS, ActorChip, ActorLegend } from "./plan/actors.jsx";
+import { ACTORS, ActorChip, ActorLegend, actorOf } from "./plan/actors.jsx";
 import { afterText, changeSummary, diffSteps, estimateText, marksFrom, numbers } from "./plan/graph.js";
 import { useStepEdits } from "./plan/useStepEdits.js";
 
@@ -22,7 +22,6 @@ import { useStepEdits } from "./plan/useStepEdits.js";
 // the Zoning, Funding and Sources tabs; every save hands the new plan back up.
 
 const NAME_KEY = "sop.pathways.reviewer"; // shared with the Playbooks tab
-const VIEW_KEY = "sop.plan.view";
 
 function readPref(key, fallback) {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
@@ -247,7 +246,8 @@ function Estimate({ est, editing }) {
 const when = (t) => (t || "").slice(0, 10);
 
 export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZoning }) {
-  const [view, setView] = useState(() => readPref(VIEW_KEY, "canvas"));
+  // Always opens as the list, every step collapsed; the canvas is a click away.
+  const [view, setView] = useState("list");
   const [showing, setShowing] = useState(plan.draft ? "draft" : "approved");
   const [editing, setEditing] = useState(false);
   const [buf, setBuf] = useState([]);
@@ -257,7 +257,9 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZ
   const [error, setError] = useState(null);
   const [promoted, setPromoted] = useState(null);
   const [full, setFull] = useState(false);
-  const [open, setOpen] = useState(new Set([1]));
+  const [open, setOpen] = useState(new Set());
+  // The list can show one actor's steps; the canvas always shows them all.
+  const [actorFilter, setActorFilter] = useState(null);
   const edits = useStepEdits(buf, setBuf, { onError: setError });
   const { selected, setSelected } = edits;
 
@@ -268,9 +270,10 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZ
     setError(null);
     setPromoted(null);
     setShowing(plan.draft ? "draft" : "approved");
+    setOpen(new Set());
+    setActorFilter(null);
   }, [plan]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => writePref(VIEW_KEY, view), [view]);
   useEffect(() => writePref(NAME_KEY, name), [name]);
 
   // Escape leaves full screen.
@@ -365,6 +368,8 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZ
     const s = steps[n - 1];
     if (!s) return;
     if (view === "canvas") { setSelected(s.id); return; }
+    // A step the filter hides can't be scrolled to, so show them all.
+    if (actorFilter && actorOf(s) !== actorFilter) setActorFilter(null);
     setOpen((prev) => new Set(prev).add(n));
     requestAnimationFrame(() => {
       document.getElementById(`plan-step-${recId}-${n}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -407,9 +412,10 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZ
     </div>
   );
 
+  const listing = view === "list" && !editing;
   const toolbar = (
     <div className="plan-toolbar">
-      <ActorLegend steps={steps} />
+      {listing ? <ActorLegend steps={steps} active={actorFilter} onPick={setActorFilter} /> : <ActorLegend steps={steps} />}
       <span className="spacer" />
       {editing && <button type="button" className="pl-bar-btn" onClick={() => edits.addAfter(selected)}>+ Step</button>}
       {!editing && (
@@ -516,6 +522,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZ
         <ol className="plan-steps">
           {steps.map((s, i) => {
             const n = i + 1;
+            if (actorFilter && actorOf(s) !== actorFilter) return null;
             const isOpen = open.has(n);
             return (
               <li key={s.id} id={`plan-step-${recId}-${n}`}
@@ -541,7 +548,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZ
               </li>
             );
           })}
-          {removed.map((s) => (
+          {!actorFilter && removed.map((s) => (
             <li key={s.id} className="plan-step removed">
               <div className="ps-toggle"><span className="ps-n">–</span><span className="ps-text"><span className="ps-title">{s.title}</span>
                 <span className="ps-meta">Removed in this draft (was step {s.n})</span></span></div>

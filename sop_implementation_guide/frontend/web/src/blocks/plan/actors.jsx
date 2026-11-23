@@ -79,17 +79,27 @@ export function ActorChip({ kind, owner }) {
   );
 }
 
-// Who does how many steps, for the top of a plan.
-export function ActorLegend({ steps }) {
+export const actorOf = (s) => (ACTORS[s.actor] ? s.actor : "other");
+
+// Who does how many steps, for the top of a plan. With onPick, each chip is a
+// filter: clicking one shows only that actor's steps, clicking it again shows all.
+export function ActorLegend({ steps, active = null, onPick }) {
   const count = Object.fromEntries(ACTOR_KEYS.map((k) => [k, 0]));
-  for (const s of steps) count[ACTORS[s.actor] ? s.actor : "other"]++;
+  for (const s of steps) count[actorOf(s)]++;
   return (
     <span className="actor-legend">
-      {ACTOR_KEYS.filter((k) => count[k]).map((k) => (
-        <span key={k} className={"actor-chip actor-" + k} title={ACTORS[k].desc}>
-          <ActorIcon kind={k} size={14} />{ACTORS[k].label} <b>{count[k]}</b>
-        </span>
-      ))}
+      {ACTOR_KEYS.filter((k) => count[k]).map((k) => {
+        const body = <><ActorIcon kind={k} size={14} />{ACTORS[k].label} <b>{count[k]}</b></>;
+        return onPick ? (
+          <button key={k} type="button" className={"actor-chip actor-" + k + (active === k ? " on" : "")}
+                  aria-pressed={active === k} title={active === k ? "Show all steps" : `Show only ${ACTORS[k].label} steps`}
+                  onClick={() => onPick(active === k ? null : k)}>
+            {body}
+          </button>
+        ) : (
+          <span key={k} className={"actor-chip actor-" + k} title={ACTORS[k].desc}>{body}</span>
+        );
+      })}
     </span>
   );
 }
