@@ -583,6 +583,69 @@ def assist(action: str, doc: dict, playbook: str, step_id: str, variant: str | N
     return structured_call(prompt, schema, max_tokens=2000, model=FAST_MODEL, effort="low")
 
 
+# ── Do a playbook's recommendation types belong in it? ───────────────────────
+
+def check_fit(doc: dict, playbook: str, labels: list[str]) -> dict:
+    """
+    For each recommendation type routed to one playbook: does its steps' work
+    fit it, or would another playbook serve it better? Also which unmapped
+    types belong here. One call on the faster model; the browser turns every
+    move into a suggestion to accept or reject.
+    """
+    rec_types = doc.get("rec_types") or {}
+    pathways = doc.get("pathways") or []
+    p = next((x for x in pathways if x["key"] == playbook), None)
+    if not p:
+        raise ValueError("That playbook is not in the draft.")
+    mine = sorted(l for l, k in rec_types.items() if k == playbook)
+    unmapped = sorted(l for l in labels if l not in rec_types)
+    if not mine and not unmapped:
+        return {"types": [], "add": []}
+
+    def outline(x: dict) -> dict:
+        return {"key": x["key"], "name": x.get("name"), "who": x.get("who"), "deciding_question": x.get("branch"),
+                "steps": [{k: s.get(k) for k in ("title", "how", "owner") if s.get(k)} for s in x.get("steps") or []]}
+
+    others = [{**outline(x), "recommendation_types": sorted(l for l, k in rec_types.items() if k == x["key"])}
+              for x in pathways if x["key"] != playbook]
+    keys = [x["key"] for x in pathways if x["key"] != playbook]
+    prompt = (
+        "You help a city planner in Bowie, Maryland (Prince George's County) route State of Place block "
+        "recommendation types to playbooks: the standard steps a city follows to get one kind of change done. Every "
+        "block's plan for a recommendation starts from its playbook, so a type belongs where the steps actually get "
+        "that change done (the right permits, owners and approvals).\n\n"
+        f"The playbook: {json.dumps(outline(p))}\n"
+        f"Recommendation types routed to it: {json.dumps(mine)}\n\n"
+        f"The other playbooks: {json.dumps(others)}\n\n"
+        f"Recommendation types no playbook covers yet: {json.dumps(unmapped)}\n\n"
+        "1. For every type routed to this playbook, say whether it fits. Mark it as not fitting only when another "
+        "playbook clearly serves it better; then set move_to to that playbook's key. A type that fits gets "
+        "move_to \"\".\n"
+        "2. List any uncovered types whose work this playbook's steps would get done (often none).\n"
+        "Each reason is one plain sentence under 15 words naming the step or permit that decides it, "
+        "e.g. \"No step here covers sign permits.\""
+    )
+    schema = {
+        "type": "object", "additionalProperties": False, "required": ["types", "add"],
+        "properties": {
+            "types": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False, "required": ["label", "fits", "move_to", "reason"],
+                "properties": {"label": {"type": "string", "enum": mine or [""]}, "fits": {"type": "boolean"},
+                               "move_to": {"type": "string", "enum": ["", *keys]}, "reason": {"type": "string"}}}},
+            "add": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False, "required": ["label", "reason"],
+                "properties": {"label": {"type": "string", "enum": unmapped or [""]}, "reason": {"type": "string"}}}},
+        },
+    }
+    out = structured_call(prompt, schema, max_tokens=4000, model=FAST_MODEL, effort="low")
+    types = [t for t in out.get("types") or [] if t["label"] in mine]
+    for t in types:
+        if t["fits"] or t["move_to"] not in keys:
+            t["fits"], t["move_to"] = True, ""
+    add = [a for a in out.get("add") or [] if a["label"] in unmapped]
+    return {"types": types, "add": add}
+
+
 # ── Drafting a whole playbook ────────────────────────────────────────────────
 
 DRAFT_PROMPT = """You are drafting a new playbook for the City of Bowie, Maryland (Prince George's County): the

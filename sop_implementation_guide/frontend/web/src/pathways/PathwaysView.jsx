@@ -7,6 +7,7 @@ import { numbers } from "../blocks/plan/graph.js";
 import { useStepEdits } from "../blocks/plan/useStepEdits.js";
 import AssistantPanel, { EMPTY_CHAT } from "./AssistantPanel.jsx";
 import NewPlaybookDialog from "./NewPlaybookDialog.jsx";
+import RecTypes from "./RecTypes.jsx";
 import { FLOW_PROMPTS, StepToolbar, TextSuggestion, ValueChip } from "./StepAI.jsx";
 import {
   applyOps, canvasMarks, dependents, describe, findGaps, pendingOps, similarSteps, suggestionOps, withRequired,
@@ -112,6 +113,8 @@ export default function PathwaysView() {
   const [multiAsk, setMultiAsk] = useState("");
   const [dialog, setDialog] = useState(false);
   const [focus, setFocus] = useState(null);
+  // The last Check fit of a playbook's recommendation types: {key, busy, checked, moves, error}.
+  const [fit, setFit] = useState(null);
   const assistant = useRef(null);
 
   const stepEdits = useStepEdits(
@@ -202,7 +205,8 @@ export default function PathwaysView() {
   // Types in the data with no pathway, plus any this edit has just unmapped.
   const allLabels = [...new Set([...data.unmapped_rec_labels, ...Object.keys(data.rec_types), ...Object.keys(draft.rec_types)])].sort();
   const unmapped = allLabels.filter((l) => !draft.rec_types[l]);
-  const pendingFor = (key) => pending.filter((o) => o.playbook === key);
+  // A suggested move of a recommendation type counts for the playbook it leaves too.
+  const pendingFor = (key) => pending.filter((o) => o.playbook === key || o.from === key);
   const here = pendingFor(selectedKey);
   const gaps = findGaps(pathway);
 
@@ -254,7 +258,7 @@ export default function PathwaysView() {
   // ── suggestions ──
   function addSuggestions(target, reasons, base = draft) {
     setSugg((s) => ({ base, target, reasons: { ...(s?.reasons || {}), ...reasons }, rejected: [] }));
-    const touched = [...new Set(suggestionOps(base, target, {}).map((o) => o.playbook).filter(Boolean))];
+    const touched = [...new Set(suggestionOps(base, target, {}).flatMap((o) => [o.playbook, o.from]).filter(Boolean))];
     if (touched.length && !touched.includes(selectedKey)) setSelectedKey(touched[0]);
   }
 
@@ -282,6 +286,12 @@ export default function PathwaysView() {
   }
 
   function show(op) {
+    if (op.kind === "map_rec") {
+      // The type's row, under the canvas of the playbook it is in now.
+      setSelectedKey(op.from && preview.pathways.some((p) => p.key === op.from) ? op.from : op.to);
+      setTimeout(() => document.querySelector(`[data-rec="${CSS.escape(op.label)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), 50);
+      return;
+    }
     const id = op.step_id || op.to || null;
     setSelectedKey(op.playbook);
     if (id) setFocus({ key: op.playbook, id });
@@ -291,6 +301,31 @@ export default function PathwaysView() {
     const list = here.filter((o) => o.step_id === stepId || o.to === stepId);
     if (yes) acceptAll(list);
     else discardAll(list);
+  }
+
+  // Check fit: the assistant's moves come back as suggestions like any other.
+  async function checkFit() {
+    const key = selectedKey;
+    setFit({ key, busy: true });
+    try {
+      const r = await call("POST", "/pathways/fit", { working: preview, playbook: key });
+      const target = { ...preview, rec_types: { ...preview.rec_types } };
+      const reasons = {};
+      for (const t of r.types) {
+        if (t.fits) continue;
+        target.rec_types[t.label] = t.move_to;
+        reasons[`rec:${t.label}`] = t.reason;
+      }
+      for (const a of r.add) {
+        target.rec_types[a.label] = key;
+        reasons[`rec:${a.label}`] = a.reason;
+      }
+      const moves = Object.keys(reasons).length;
+      if (moves) addSuggestions(target, reasons);
+      setFit({ key, busy: false, checked: r.types.length, moves });
+    } catch (e) {
+      setFit({ key, busy: false, error: e.message });
+    }
   }
 
   // ── the assistant ──
@@ -611,25 +646,10 @@ export default function PathwaysView() {
                   <button onClick={removePathway} disabled={!draftPathway}>Delete playbook</button>
                 </div>
 
-                <h4 className="recs-head">Recommendation types in this playbook</h4>
-                <ul className="pathway-recs">
-                  {recsFor(pathway.key).map((label) => (
-                    <li key={label}>
-                      <span>{label}</span>
-                      <select value={pathway.key} disabled={!draft.rec_types[label] || draft.rec_types[label] !== pathway.key}
-                              onChange={(e) => mapRec(label, e.target.value)} title="Move to another playbook">
-                        {preview.pathways.map((p) => <option key={p.key} value={p.key}>{p.name || p.key}</option>)}
-                        <option value="">No playbook</option>
-                      </select>
-                    </li>
-                  ))}
-                </ul>
-                {unmapped.length > 0 && draftPathway && (
-                  <select value="" onChange={(e) => e.target.value && mapRec(e.target.value, pathway.key)}>
-                    <option value="">+ Add an unmapped recommendation type…</option>
-                    {unmapped.map((l) => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                )}
+                <RecTypes
+                  pathway={pathway} draft={draft} preview={preview} pending={pending} unmapped={unmapped}
+                  fit={fit} onCheck={checkFit} onMap={mapRec} onAccept={accept} onReject={reject}
+                />
               </div>
             )}
 

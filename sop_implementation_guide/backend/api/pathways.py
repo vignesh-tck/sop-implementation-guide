@@ -196,6 +196,11 @@ class AssistRequest(BaseModel):
     previous: Optional[str] = None
 
 
+class FitRequest(BaseModel):
+    working: dict[str, Any]
+    playbook: str
+
+
 class DraftRequest(BaseModel):
     purpose: str
     working: dict[str, Any]
@@ -305,5 +310,17 @@ def assist(body: AssistRequest):
 
     try:
         return playbook_agent.assist(body.action, body.working, body.playbook, body.step_id, body.variant, body.previous)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post("/fit")
+def fit(body: FitRequest, db: Client = Depends(get_supabase)):
+    """Check whether each recommendation type in a playbook belongs there, and which unmapped ones do."""
+    from backend.agents import playbook_agent
+
+    _, labels = _context(db)
+    try:
+        return playbook_agent.check_fit(body.working, body.playbook, labels)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
