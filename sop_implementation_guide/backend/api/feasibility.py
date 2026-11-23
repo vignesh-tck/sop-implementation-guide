@@ -5,7 +5,8 @@ A recommendation can be assessed once its implementation plan is approved and th
 funding analysis and zoning review (see backend/agents/feasibility.py). A run takes 30-60 s, so it goes in
 the background: POST starts it, and the recommendation's GET shows it running, then awaiting review. The
 SME accepts the score or sets another with a note (POST /feasibility/{id}/review); that makes it current and
-recomputes the block's gold profile, whose feasibility_score is the best current assessment.
+recomputes the block's gold profile, whose feasibility_score is the best current assessment. Or the SME sends
+it back with their own input (POST /feasibility/{id}/rework), and a new run reworks the judgement.
 """
 
 from typing import Literal, Optional
@@ -97,6 +98,20 @@ def review(
                                           body.cost_low, body.cost_high, body.note))
     profile = orchestrator.compute_gold_for_block(a["block_id"], db=db)
     return {"assessment": a, "profile": profile}
+
+
+class Rework(BaseModel):
+    guidance: str
+    made_by: str
+
+
+@router.post("/feasibility/{assessment_id}/rework")
+def rework(assessment_id: int, body: Rework, db: Client = Depends(get_supabase)):
+    """
+    Send an assessment back with the SME's input. A new run reads the input and this assessment and reworks the
+    judgement; it waits for review like any other. The current assessment stays current until the rework is approved.
+    """
+    return _guard(lambda: feasibility.rework(db, assessment_id, body.guidance, body.made_by))
 
 
 @router.post("/feasibility/{assessment_id}/discard")

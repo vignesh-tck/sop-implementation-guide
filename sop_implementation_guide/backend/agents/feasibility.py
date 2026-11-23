@@ -22,6 +22,14 @@ feasibility_score becomes the best current score (orchestrator.compute_gold_for_
 
 Each assessment records the inputs it read (plan revision, funding and zoning
 runs), so one whose inputs have changed since shows as stale.
+
+The SME can send an assessment back with their own input ("the plan means
+depave and landscape, not redevelopment", "the owner has applied for a
+permit"). The rework is a new run that reads the same evidence plus the SME's
+input, cited like any other reference, and the earlier assessment, and says
+what changed. SME input is kept in the run's `inputs.guidance` and carries
+forward to later runs of the same recommendation, since what the SME knows
+stays true when the plan or funding changes.
 """
 
 from __future__ import annotations
@@ -167,8 +175,11 @@ def _fits(db: Client, ctx: dict, rec_id: int) -> list[dict]:
     return sorted(fits, key=lambda f: f.get("fit_score") or 0.0, reverse=True)
 
 
-def build_evidence(db: Client, ctx: dict, rec: dict) -> dict:
-    """{facts, references, funding_total}: everything the model may rely on, each fact tagged with its reference."""
+def build_evidence(db: Client, ctx: dict, rec: dict, guidance: list[dict] | None = None) -> dict:
+    """
+    {facts, references, funding_total}: everything the model may rely on, each fact tagged with its reference.
+    guidance: the SME's input for this recommendation, oldest first ([{text, by, at}]).
+    """
     block, refs = ctx["block"], _Refs()
     templates = load_templates(db)
     pathway = pathway_for(rec.get("rec_label"), templates) or {}
@@ -258,6 +269,12 @@ def build_evidence(db: Client, ctx: dict, rec: dict) -> dict:
                     "No funding source was approved for this recommendation.",
         },
     }
+    if guidance:
+        facts["sme_input"] = [
+            {"ref": refs.add(f"SME input from {g.get('by') or 'the SME'}", detail=f"{(g.get('at') or '')[:10]}: {g['text']}"),
+             "from": g.get("by"), "date": (g.get("at") or "")[:10], "text": g["text"]}
+            for g in guidance
+        ]
     return {"facts": facts, "references": refs.items, "funding_total": round(total, 2)}
 
 
@@ -290,8 +307,10 @@ SCHEMA = {
             "properties": {"text": {"type": "string"}, "refs": _REFS}}},
         "raise_score": {"type": "array", "items": {"type": "string"}},
         "sme_questions": {"type": "array", "items": {"type": "string"}},
+        "what_changed": {"type": "string"},
     },
 }
+SCHEMA["required"].append("what_changed")
 
 PROMPT = """You are judging whether one recommended street improvement on one block in Bowie, Maryland (Prince George's County) is likely to get done. City planners and a subject-matter expert (SME) will review your judgement.
 
@@ -318,12 +337,28 @@ Work through it in this order.
 4. Score from 0 to 100: how likely this recommendation is to get done on this block within the plan's slowest estimate, given all of the above. As a rough guide: 70 or more, the funding plausibly covers most of the cost and nothing blocks it; 50-69, workable but with a real gap or hurdle; 30-49, a major gap or hurdle; under 30, unlikely unless something changes. Funding adequacy weighs most.
 
 Give one factor for each of: funding, zoning, timeline, dependencies, need.
-
+{rework}
 Rules:
 - Cite the references behind a claim as [R3] in the prose fields, and list them in that item's `refs`. Use only ids from the references list. Cite nothing for your own estimates or general knowledge.
 - Do not invent programs, amounts, dates, ordinances or facts about the block. If something you need is not in the evidence, say it is unknown and, if it matters, ask it as an SME question.
 - predicted_score_increase is the model's predicted gain. Do not say whether it is on the overall index or on one dimension.
 - Write plainly and briefly. headline: one sentence. rationale: 3-5 sentences. Each factor note: one sentence. risks: at most 3. raise_score: at most 3 concrete changes. sme_questions: at most 3, only what the evidence cannot settle, naming specifics."""
+
+SME_INPUT = """
+The SME's input. The SME has told you what they know (`sme_input` in the evidence, each with its reference). Treat it as the most reliable information about this block and this project: where it changes the scope, the cost, who owns or pays, the funding or the timing, follow it, and cite it like any other reference. Do not reopen what it settles with an SME question. If it conflicts with a sourced fact, say so plainly rather than choosing silently.
+"""
+
+PREVIOUS = """
+This is a rework. Your earlier assessment of this recommendation, which the SME sent back with their input:
+<previous_assessment>
+{previous}
+</previous_assessment>
+Rework it in the light of the SME's input: keep what still holds, change what the input changes. In `what_changed`, say in one or two sentences what changed from the earlier assessment and why (score, cost, factors), citing the SME's input.
+"""
+
+NO_PREVIOUS = """
+In `what_changed`, give an empty string: this is a first assessment.
+"""
 
 _CITE = re.compile(r"\[(R\d+(?:\s*,\s*R\d+)*)\]")
 
@@ -340,10 +375,31 @@ def _clean_refs(refs: list, known: set[str]) -> list[str]:
     return [r for r in dict.fromkeys(refs or []) if r in known]
 
 
-def judge(evidence: dict) -> dict:
-    """Ask the model for its assessment, then tidy it: clamp the score, order the factors, keep only real references."""
-    prompt = PROMPT.format(evidence=json.dumps(evidence["facts"], indent=1, default=str),
-                           references=json.dumps(evidence["references"], indent=1))
+def _previous_for_prompt(prev: dict) -> dict:
+    """The parts of an earlier assessment the rework needs: what it concluded, and how the SME decided on it."""
+    p = prev.get("proposed") or {}
+    return {
+        "score": prev.get("proposed_score"), "headline": p.get("headline"), "cost_estimate": p.get("cost_estimate"),
+        "funding_coverage": (p.get("funding_coverage") or {}).get("summary"),
+        "factors": [{k: f.get(k) for k in ("key", "rating", "note")} for f in p.get("factors") or []],
+        "rationale": p.get("rationale"), "sme_questions": p.get("sme_questions"),
+        "sme_decision": prev.get("decision"),
+    }
+
+
+def judge(evidence: dict, previous: dict | None = None) -> dict:
+    """
+    Ask the model for its assessment, then tidy it: clamp the score, order the factors, keep only real references.
+    previous: the assessment being reworked, if this is a rework.
+    """
+    rework = (SME_INPUT if evidence["facts"].get("sme_input") else "") + (
+        PREVIOUS.format(previous=json.dumps(_previous_for_prompt(previous), indent=1, default=str)) if previous
+        else NO_PREVIOUS)
+    # replace, not format: the rework text holds JSON braces.
+    prompt = PROMPT.format(
+        evidence=json.dumps(evidence["facts"], indent=1, default=str),
+        references=json.dumps(evidence["references"], indent=1),
+        rework="{rework}").replace("{rework}", rework)
     out = structured_call(prompt, SCHEMA, max_tokens=16000, model=MODEL, effort="high")
     known = {r["id"] for r in evidence["references"]}
 
@@ -370,6 +426,7 @@ def judge(evidence: dict) -> dict:
                   for r in (out.get("risks") or [])[:3]],
         "raise_score": [s for s in (out.get("raise_score") or [])[:3] if s],
         "sme_questions": [q for q in (out.get("sme_questions") or [])[:3] if q],
+        "what_changed": _clean_text(out.get("what_changed"), known) if previous else None,
     }
 
 
@@ -385,15 +442,15 @@ def coverage(total: float, low: float, high: float) -> dict:
 
 # ── Runs ─────────────────────────────────────────────────────────────────────
 
-def _run(assessment_id: int, block_id: int, rec_id: int) -> None:
+def _run(assessment_id: int, block_id: int, rec_id: int, guidance: list[dict], base_id: int | None) -> None:
     """Background: gather the evidence, ask the model, and leave the assessment in_review (or failed)."""
     db = get_supabase()
     repo = FeasibilityRepository(db)
     try:
         ctx = context(db, block_id)
-        evidence = build_evidence(db, ctx, ctx["recs"][rec_id])
+        evidence = build_evidence(db, ctx, ctx["recs"][rec_id], guidance)
         repo.update(assessment_id, {"evidence": evidence})
-        proposed = judge(evidence)
+        proposed = judge(evidence, repo.get(base_id) if base_id else None)
         repo.finish(assessment_id, {"status": "in_review", "proposed": proposed,
                                     "proposed_score": proposed["score"], "band": proposed["band"]})
     except Exception as e:  # noqa: BLE001 — the run records its own failure for the user
@@ -401,10 +458,23 @@ def _run(assessment_id: int, block_id: int, rec_id: int) -> None:
         repo.finish(assessment_id, {"status": "failed", "error": str(e)[:1000]})
 
 
-def start(db: Client, block_id: int, rec_ids: list[int] | None = None, created_by: str | None = None) -> dict:
+def _carried(rows: list[dict]) -> list[dict]:
+    """
+    The SME input a new run of a recommendation starts with: that of its current assessment, or of a newer one
+    awaiting review or failed. Input on an assessment the SME discarded is not carried.
+    """
+    row = next((a for a in rows if a.get("current") or a["status"] in ("in_review", "failed")), None)
+    return list(((row or {}).get("inputs") or {}).get("guidance") or [])
+
+
+def start(db: Client, block_id: int, rec_ids: list[int] | None = None, created_by: str | None = None,
+          guidance: str | None = None, base_id: int | None = None) -> dict:
     """
     Assess the given recommendations (every ready one on the block when omitted). Each run goes in the background;
     one not ready, or already running, is skipped with the reason. Returns {started, skipped}.
+
+    guidance and base_id make it a rework: the SME's input is added to what the base assessment carried, and the
+    model sees the base assessment. Without them, a run still carries the recommendation's earlier SME input.
     """
     ctx = context(db, block_id)
     repo = FeasibilityRepository(db)
@@ -426,11 +496,19 @@ def start(db: Client, block_id: int, rec_ids: list[int] | None = None, created_b
             skipped.append({"rec_id": rec_id, "rec_label": rec.get("rec_label"),
                             "missing": [{"key": "running", "text": "An assessment is already running."}]})
             continue
+        if base_id:
+            notes = list(((repo.get(base_id) or {}).get("inputs") or {}).get("guidance") or [])
+        else:
+            notes = _carried(repo.for_block(block_id, rec_id, limit=20))
+        if guidance:
+            notes.append({"text": guidance.strip(), "by": (created_by or "").strip() or None,
+                          "at": datetime.now(timezone.utc).isoformat()})
         repo.discard_open(block_id, rec_id)
         row = repo.create({"block_id": block_id, "rec_id": rec_id, "rec_label": rec.get("rec_label"),
-                           "status": "running", "inputs": inputs_for(ctx, rec_id), "model": MODEL,
+                           "status": "running", "model": MODEL,
+                           "inputs": {**inputs_for(ctx, rec_id), "guidance": notes, "reworks": base_id},
                            "created_by": (created_by or "").strip() or None})
-        _pool.submit(_run, row["id"], block_id, rec_id)
+        _pool.submit(_run, row["id"], block_id, rec_id, notes, base_id)
         started.append({"rec_id": rec_id, "rec_label": rec.get("rec_label"), "assessment_id": row["id"]})
     return {"block_id": block_id, "started": started, "skipped": skipped}
 
@@ -502,6 +580,27 @@ def review(db: Client, assessment_id: int, action: str, approved_by: str, score:
         decision["coverage"] = coverage(total, new_cost["low"], new_cost["high"])
     repo.make_current(a, {"score": final, "band": band_for(final), "decision": decision, "approved_by": who})
     return repo.get(assessment_id)
+
+
+def rework(db: Client, assessment_id: int, guidance: str, made_by: str) -> dict:
+    """
+    Send an assessment back with the SME's input: a new run reads it (and this assessment) and reworks the judgement.
+    The base may be awaiting review (it is replaced) or the current one (it stays current until the rework is approved).
+    """
+    text, who = (guidance or "").strip(), (made_by or "").strip()
+    if not text:
+        raise FeasibilityError("Say what the agent should know or reconsider.")
+    if not who:
+        raise FeasibilityError("Say who you are: your input is recorded with your name and cited in the assessment.")
+    a = FeasibilityRepository(db).get(assessment_id)
+    if not a:
+        raise FeasibilityError(f"Assessment {assessment_id} not found.")
+    if not (a["status"] == "in_review" or a.get("current")):
+        raise FeasibilityError(f"Assessment #{assessment_id} is {a['status']}; rework one awaiting review or the current one.")
+    out = start(db, a["block_id"], [a["rec_id"]], who, guidance=text, base_id=assessment_id)
+    if not out["started"]:
+        raise FeasibilityError(" ".join(m["text"] for s in out["skipped"] for m in s["missing"]) or "Could not start the rework.")
+    return out
 
 
 def discard(db: Client, assessment_id: int) -> dict:

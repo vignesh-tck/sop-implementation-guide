@@ -124,6 +124,14 @@ function Readiness({ missing, onOpen }) {
   );
 }
 
+// Share of the cost the funding asked would cover. Past 100% it says so, rather than "covers 5749%".
+function coverText(cov) {
+  if (!cov.funding_total) return "no approved funding";
+  if (cov.share_low != null && cov.share_low >= 1) return "more than the estimated cost";
+  const hi = cov.share_high != null && cov.share_high >= 1 ? "100%+" : pct(cov.share_high);
+  return `covers ${pct(cov.share_low)}${hi !== pct(cov.share_low) ? `–${hi}` : ""} of the cost`;
+}
+
 function CostAndFunding({ a }) {
   const p = a.proposed || {};
   const cost = a.decision?.cost || p.cost_estimate || {};
@@ -144,7 +152,7 @@ function CostAndFunding({ a }) {
         <div>
           <div className="tile-k">Approved funding asked</div>
           <b>{money(total)}</b>
-          <div className="assess">covers {pct(cov.share_low)}{cov.share_high !== cov.share_low ? `–${pct(cov.share_high)}` : ""} of the cost</div>
+          <div className="assess">{coverText(cov)}</div>
         </div>
       </div>
       <div className="feas-bar" title="Approved funding as a share of the estimated cost (low to high)">
@@ -157,6 +165,70 @@ function CostAndFunding({ a }) {
   );
 }
 
+// The SME input an assessment read, cited in it like any other source.
+function SmeInput({ guidance }) {
+  if (!guidance?.length) return null;
+  return (
+    <div className="feas-input">
+      <div className="zoning-h">Your input this assessment used</div>
+      <ul>
+        {guidance.map((g, i) => (
+          <li key={i}>“{g.text}” <span className="assess">— {g.by || "SME"}, {when(g.at)}</span></li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// Send an assessment back with what the agent got wrong or should know; a new run reworks it.
+function ReworkBox({ a, name, setName, onStarted, current }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function send() {
+    setBusy(true); setError(null);
+    try {
+      await call("POST", `/feasibility/${a.id}/rework`, { guidance: text.trim(), made_by: name.trim() });
+      setText(""); setOpen(false); onStarted();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  if (!open) {
+    return (
+      <div className="btn-row">
+        <button type="button" onClick={() => setOpen(true)}>Rework with your input</button>
+        <span className="assess">Tell the agent what it got wrong or should know, and it reworks the assessment.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="plan-draft-bar feas-review">
+      <div>
+        <b>What should the agent know or reconsider?</b> For example the real scope (“depave and landscape, not
+        redevelopment”), the owner's position, a cost you know, or funding it missed. Your input is cited in the
+        rework and kept for later runs of this recommendation.
+        {current && " The approved score stays in force until you approve the rework."}
+      </div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} autoFocus
+                placeholder="Your input for the agent" aria-label="Your input for the agent" />
+      <div className="plan-edit-row">
+        <label>Your name
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Required" />
+        </label>
+      </div>
+      {error && <div className="banner err">{error}</div>}
+      <div className="btn-row">
+        <button type="button" className="primary" onClick={send} disabled={busy || !text.trim() || !name.trim()}>
+          {busy ? "Starting…" : "Rework"}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function Assessment({ a }) {
   const p = a.proposed || {};
   const score = a.score ?? a.proposed_score;
@@ -164,6 +236,9 @@ function Assessment({ a }) {
   const refs = (a.evidence?.references || []).map((r) => ({ label: r.label, url: r.url, detail: r.detail }));
   return (
     <div className="feas">
+      {p.what_changed && (
+        <div className="banner ok feas-changed"><b>Reworked with your input.</b> <Cited text={p.what_changed} /></div>
+      )}
       <div className="feas-head">
         <div className={"feas-score " + (band.cls || "")}>
           <b>{score}</b><span>/ 100</span>
@@ -177,6 +252,8 @@ function Assessment({ a }) {
           {a.decision?.action === "accept" && a.decision.note && <div className="assess">“{a.decision.note}”</div>}
         </div>
       </div>
+
+      <SmeInput guidance={a.inputs?.guidance} />
 
       <CostAndFunding a={a} />
 
@@ -349,6 +426,7 @@ export default function FeasibilityView({ blockId, recId, f, error, reload, onOp
           <Assessment a={open} />
           <ReviewForm a={open} stale={f.open_stale || []} name={name} setName={setName}
                       onDone={(profile) => { reload(); if (profile) onApproved?.(profile); }} />
+          <ReworkBox a={open} name={name} setName={setName} onStarted={reload} />
         </>
       )}
 
@@ -359,6 +437,7 @@ export default function FeasibilityView({ blockId, recId, f, error, reload, onOp
               assessed. The score still counts until a new assessment is approved.</div>
           )}
           <Assessment a={f.current} />
+          {ready && <ReworkBox a={f.current} name={name} setName={setName} onStarted={reload} current />}
           {ready && assessButton("Assess again")}
         </>
       )}

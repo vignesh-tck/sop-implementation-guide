@@ -2153,3 +2153,8 @@ sup.cite a:hover { text-decoration: underline; }
 .feas-review .plan-edit-row { margin-top: 0; }
 .feas-review .btn-row { margin-top: 0; }
 .feas-review .seg { align-self: flex-start; }
+.feas-input { margin: -.3rem 0 .9rem; padding: .5rem .7rem; border-left: 3px solid var(--orange); background: color-mix(in srgb, var(--orange) 6%, transparent); border-radius: 0 6px 6px 0; }
+.feas-input ul { margin: .2rem 0 0; padding-left: 1.1rem; }
+.feas-input li { margin: .2rem 0; line-height: 1.4; }
+.feas-review textarea { width: 100%; font-family: inherit; font-size: .85rem; }
+.feas-changed { line-height: 1.45; }
