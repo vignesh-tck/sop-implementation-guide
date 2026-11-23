@@ -919,6 +919,9 @@ main.view.pl-view {
 .pl-node-title { font-weight: 600; font-size: .86rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-node-sub { font-size: .74rem; color: var(--muted); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-node-meta { font-size: .7rem; color: var(--faint); }
+/* The sources a step reads: their wires are drawn only while it is selected or hovered */
+.pl-node-reads { display: flex; align-items: center; gap: .2rem; width: 100%; overflow: hidden; white-space: nowrap; font-size: .68rem; color: var(--muted); }
+.pl-node-reads code { font-size: .64rem; padding: 0 .25rem; border-radius: 3px; color: var(--teal); background: color-mix(in srgb, var(--teal) 12%, var(--surface)); }
 
 /* right-click menu */
 .pl-menu {

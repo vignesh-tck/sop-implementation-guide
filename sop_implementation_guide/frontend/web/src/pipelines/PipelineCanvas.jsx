@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dagre from "@dagrejs/dagre";
 import {
-  Background, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
+  Background, ConnectionLineType, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider,
   useNodesState, useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -21,15 +22,24 @@ import { draftPortText, isMulti, nodeOutput, outputList, outputNode, portText, s
 //
 // Wires: step → step feeds the target (several wires into one step merge
 // their records); step → Output feeds the final output; source → Extract
-// makes that Extract step read the source. Node positions are saved in the
-// definition's layout, which is display only.
+// makes that Extract step read the source. Wires from sources are drawn only
+// while their step or source is selected or hovered (the step shows the sources
+// it reads as chips), since they would otherwise cross the whole canvas.
+//
+// Layout: dagre lays the graph out left to right, ordering each column to keep
+// wires from crossing. A node the planner drags keeps its place, saved in the
+// definition's layout (display only); Tidy drops those and lays it all out again.
 //
 // A pipeline can have several Output nodes (output, output:o2 ...), each with its
 // own schema; every branch ends in one of them. A source wired to a step that
 // reads one source itself (a map lookup, the use tables) sets that step's source.
 
-const COL = 230;    // auto-layout spacing for nodes with no saved position
+const COL = 230;    // spacing for proposed nodes, placed beside the laid-out graph
 const ROW = 90;
+const NODE_W = 164; // a node's size for the layout (.pl-node is 10.25rem wide); generous in height
+const NODE_H = 96;
+const SOURCE_WIRES = new Set(["source", "table", "reads"]);   // drawn on demand
+const WIRE_PATH = { borderRadius: 10, offset: 18 };           // right-angled wires
 const ROW_H = 28;   // a row in the sources box or a Parse box
 const HEAD_H = 32;
 
@@ -39,11 +49,12 @@ function cut(v, n = 28) {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-// One line saying what a step does, from its config.
-function stepSummary(s) {
+// One line saying what a step does, from its config. linked: the sources it
+// reads show as chips on the node, so the line leaves them out.
+function stepSummary(s, linked = false) {
   const c = s.config || {};
   switch (s.type) {
-    case "extract": return c.source_ids?.length ? `from ${c.source_ids.join(", ")}` : "from all sources";
+    case "extract": return linked ? "" : c.source_ids?.length ? `from ${c.source_ids.join(", ")}` : "from all sources";
     case "parse": return `${c.field} as ${c.as}`;
     case "map_values": return `${c.field}: ${Object.keys(c.mapping || {}).length} mappings`;
     case "set_value": return `${c.field} = ${cut(c.value, 16)}`;
@@ -52,10 +63,10 @@ function stepSummary(s) {
     case "research": return c.fields?.length ? `fills ${c.fields.join(", ")}` : "fills blank fields";
     case "llm_fill": return `fills ${c.field}`;
     case "geo_tie": return `fills ${c.field || "geo_scope"}`;
-    case "sql": return c.tables?.length ? `joins ${c.tables.join(", ")}` : cut((c.query || "").replace(/\s+/g, " "), 30);
+    case "sql": return c.tables?.length && !linked ? `joins ${c.tables.join(", ")}` : cut((c.query || "").replace(/\s+/g, " "), 30);
     case "from_table": return `from ${c.table || "?"}`;
     case "spatial_lookup": return `${c.field || "?"} → ${c.writes || "?"}${c.layers?.length ? ` · layer${c.layers.length > 1 ? "s" : ""} ${c.layers.join(", ")}` : ""}`;
-    case "use_table": return c.source_id ? `from ${c.source_id}` : "use tables";
+    case "use_table": return c.source_id && !linked ? `from ${c.source_id}` : "use tables";
     default: return "";
   }
 }
@@ -91,6 +102,11 @@ function Box({ data, children, inputs, outputs }) {
       </span>
       <span className="pl-node-title">{data.title}</span>
       {data.sub && <span className="pl-node-sub">{data.sub}</span>}
+      {data.reads?.map((r) => (
+        <span key={r.how} className="pl-node-reads" title={`${r.how} ${r.ids.length ? r.ids.join(", ") : "all sources"}: select the step to see the wires`}>
+          {r.how} {r.ids.length ? r.ids.map((id) => <code key={id}>{id}</code>) : "all sources"}
+        </span>
+      ))}
       {data.meta && <span className="pl-node-meta">{data.meta}</span>}
       {data.errs?.length > 0 && <span className="pl-node-err" aria-label={`${data.errs.length} problem(s)`}>!</span>}
       {children}
@@ -311,50 +327,86 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     ...(gaps.length ? ["gaps"] : []), "output", ...extraOuts.map((o) => outputNode(o.id)),
   ], [boxed, sources, steps, runs, gaps.length, extraOuts]);
 
-  const positions = useMemo(() => {
+  // The node a step is drawn in: its own, or its Parse box.
+  const boxOf = useCallback((sid) => (runOf[sid] ? `parse:${runOf[sid].head}` : `step:${sid}`), [runOf]);
+
+  // Where dagre puts every node, top-left corners. Only the step → step and
+  // step → Output wires shape it: the source wires are drawn on demand, so the
+  // sources box is just kept left of the steps that read no other step.
+  const auto = useMemo(() => {
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: "LR", nodesep: 28, ranksep: 66 });
+    g.setDefaultEdgeLabel(() => ({}));
+    const size = {};
+    const put = (id, w, h) => { size[id] = { w, h }; g.setNode(id, { width: w, height: h }); };
+    const start = boxed ? "srcbox" : "sources";
+    put(start, boxed ? 196 : NODE_W, boxed ? srcH : NODE_H);
+    for (const r of runs) put(`parse:${r[0]}`, 190, HEAD_H + r.length * ROW_H + 6);
+    for (const s of steps) if (!runOf[s.id]) put(`step:${s.id}`, NODE_W, NODE_H);
+    if (!steps.length) put("steps", NODE_W, NODE_H);
+    if (gaps.length) put("gaps", NODE_W, NODE_H);
+    const outs = ["output", ...extraOuts.map((o) => outputNode(o.id))];
+    outs.forEach((id) => put(id, NODE_W, NODE_H));
+    const wire = (a, b) => { if (a !== b && g.hasNode(a) && g.hasNode(b)) g.setEdge(a, b); };
+    for (const s of steps) {
+      const ins = model.inputs[s.id] || [];
+      ins.forEach((i) => wire(boxOf(i), boxOf(s.id)));
+      if (!ins.length) wire(start, boxOf(s.id));
+    }
+    if (!steps.length) { wire(start, "steps"); wire("steps", "output"); }
+    const ends = model.outputFrom.filter((i) => steps.some((s) => s.id === i)).map(boxOf);
+    if (gaps.length) { ends.forEach((e) => wire(e, "gaps")); wire("gaps", "output"); }
+    else ends.forEach((e) => wire(e, "output"));
+    for (const o of extraOuts) for (const i of model.outputsFrom[o.id] || []) if (steps.some((s) => s.id === i)) wire(boxOf(i), outputNode(o.id));
+    dagre.layout(g);
     const pos = {};
-    if (boxed) {
-      pos.srcbox = layout.srcbox || { x: -30, y: -srcH / 2 };
-      sources.forEach((s, i) => { pos[`src:${s.id}`] = { x: 6, y: HEAD_H + i * ROW_H }; });   // inside the box
-    } else pos.sources = layout.sources || { x: 0, y: 0 };
-    // Depth in the graph, a run of Parse steps counting as one.
-    const depth = {};
-    for (const sid of model.order) {
-      const r = runOf[sid];
-      depth[sid] = r && r.k > 0 ? depth[(model.inputs[sid] || [])[0]] : Math.max(-1, ...(model.inputs[sid] || []).map((i) => depth[i] ?? -1)) + 1;
-    }
-    for (const s of steps) if (depth[s.id] == null) depth[s.id] = 0;
-    const cols = {};
-    for (const s of steps) if (!runOf[s.id] || runOf[s.id].k === 0) (cols[depth[s.id]] ||= []).push(s.id);
-    for (const [c, ids] of Object.entries(cols)) {
-      ids.forEach((sid, i) => {
-        const key = runOf[sid] ? `parse:${sid}` : `step:${sid}`;
-        pos[key] = layout[key] || { x: (Number(c) + 1) * COL, y: (i - (ids.length - 1) / 2) * ROW * 1.3 - (runOf[sid] ? (HEAD_H + runOf[sid].n * ROW_H) / 2 - 30 : 0) };
-      });
-    }
-    for (const r of runs) r.forEach((sid, k) => { pos[`step:${sid}`] = { x: 6, y: HEAD_H + k * ROW_H }; });
-    const last = steps.length ? Math.max(...Object.values(depth)) + 1 : 1;
-    if (!steps.length) pos.steps = layout.steps || { x: COL, y: 0 };
-    if (gaps.length) pos.gaps = layout.gaps || { x: (last + 1) * COL, y: 0 };
-    pos.output = layout.output || { x: (last + 1 + (gaps.length ? 1 : 0)) * COL, y: 0 };
-    extraOuts.forEach((o, i) => { pos[outputNode(o.id)] = layout[outputNode(o.id)] || { x: pos.output.x, y: pos.output.y + (i + 1) * ROW * 1.6 }; });
-    // Proposed nodes: new sources under the sources box, new steps in a row below the graph.
-    if (prop) {
-      const bottom = Math.max(ROW, ...Object.entries(pos).filter(([k]) => !k.startsWith("src:") && !runOf[k.slice(5)]).map(([k, v]) => v.y + (k === "srcbox" ? srcH : 70)));
-      const base = boxed ? pos.srcbox : pos.sources;
-      prop.sources.forEach((x, i) => { pos[`prop:src:${x.id}`] = { x: base.x, y: (boxed ? base.y + srcH : base.y + 70) + 24 + i * 64 }; });
-      const pd = {};
-      const pIn = Object.fromEntries(prop.all.map((s) => [s.id, s.inputs || []]));
-      const depthOf = (sid, guard = 0) => {
-        if (pd[sid] != null) return pd[sid];
-        if (depth[sid] != null && !prop.steps.some((x) => x.id === sid)) return depth[sid];
-        pd[sid] = guard > 50 ? 0 : Math.max(-1, ...(pIn[sid] || []).map((i) => depthOf(i, guard + 1))) + 1;
-        return pd[sid];
-      };
-      prop.steps.forEach((x, i) => { pos[`prop:step:${x.id}`] = { x: (depthOf(x.id) + 1) * COL, y: bottom + 40 + (i % 2) * 10 }; });
+    for (const id of g.nodes()) { const n = g.node(id); pos[id] = { x: Math.round(n.x - size[id].w / 2), y: Math.round(n.y - size[id].h / 2) }; }
+    // An output nothing feeds yet waits in the last column, under the rest.
+    const unfed = outs.filter((id) => !g.inEdges(id)?.length);
+    const placed = Object.keys(pos).filter((id) => !unfed.includes(id));
+    if (unfed.length && placed.length) {
+      const right = Math.max(...placed.map((id) => pos[id].x));
+      let below = Math.max(...placed.map((id) => pos[id].y + size[id].h)) + 40;
+      for (const id of unfed) { pos[id] = { x: right, y: below }; below += NODE_H + 28; }
     }
     return pos;
-  }, [boxed, srcH, sources, layout, model, steps, runs, runOf, gaps.length, prop, extraOuts]);
+  }, [boxed, srcH, runs, runOf, boxOf, steps, model, gaps.length, extraOuts]);
+
+  const positions = useMemo(() => {
+    const pos = {};
+    const at = (id) => layout[id] || auto[id] || { x: 0, y: 0 };
+    if (boxed) {
+      pos.srcbox = at("srcbox");
+      sources.forEach((s, i) => { pos[`src:${s.id}`] = { x: 6, y: HEAD_H + i * ROW_H }; });   // inside the box
+    } else pos.sources = at("sources");
+    for (const s of steps) if (!runOf[s.id]) pos[`step:${s.id}`] = at(`step:${s.id}`);
+    for (const r of runs) {
+      pos[`parse:${r[0]}`] = at(`parse:${r[0]}`);
+      r.forEach((sid, k) => { pos[`step:${sid}`] = { x: 6, y: HEAD_H + k * ROW_H }; });   // inside the box
+    }
+    if (!steps.length) pos.steps = at("steps");
+    if (gaps.length) pos.gaps = at("gaps");
+    pos.output = at("output");
+    extraOuts.forEach((o) => { pos[outputNode(o.id)] = at(outputNode(o.id)); });
+    // Proposed nodes: new sources under the sources box, new steps in a row below
+    // the graph, each a column right of the steps it takes.
+    if (prop) {
+      const bottom = Math.max(ROW, ...Object.entries(pos).filter(([k]) => !k.startsWith("src:") && !runOf[k.slice(5)])
+        .map(([k, v]) => v.y + (k === "srcbox" ? srcH : k.startsWith("parse:") ? HEAD_H + runOf[k.slice(6)].n * ROW_H : NODE_H)));
+      const base = boxed ? pos.srcbox : pos.sources;
+      prop.sources.forEach((x, i) => { pos[`prop:src:${x.id}`] = { x: base.x, y: (boxed ? base.y + srcH : base.y + 70) + 24 + i * 64 }; });
+      const px = {};
+      const isNew = new Set(prop.steps.map((x) => x.id));
+      const pIn = Object.fromEntries(prop.all.map((s) => [s.id, s.inputs || []]));
+      const xOf = (sid, guard = 0) => {
+        if (!isNew.has(sid)) return pos[boxOf(sid)]?.x ?? base.x;
+        if (px[sid] == null) px[sid] = guard > 50 ? base.x : Math.max(base.x, ...(pIn[sid] || []).map((i) => xOf(i, guard + 1))) + COL;
+        return px[sid];
+      };
+      prop.steps.forEach((x, i) => { pos[`prop:step:${x.id}`] = { x: xOf(x.id), y: bottom + 40 + (i % 2) * 10 }; });
+    }
+    return pos;
+  }, [boxed, srcH, sources, layout, auto, steps, runs, runOf, boxOf, gaps.length, prop, extraOuts]);
 
   // ── what to draw ───────────────────────────────────────────────────────────
   const status = useMemo(() => {
@@ -437,9 +489,15 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         }, { parentId: `parse:${r.head}`, extent: "parent", draggable: false, deletable: editable, connectable: editable, style: { width: 178 } });
         return;
       }
+      // The sources it reads, as chips: their wires show when it is selected or hovered.
+      const linked = [];
+      if (s.type === "extract") linked.push({ how: "reads", ids: s.config?.source_ids?.length ? s.config.source_ids : [] });
+      const joins = s.type === "sql" ? (s.config?.tables || []).filter((x) => sources.some((y) => y.id === x)) : [];
+      if (joins.length) linked.push({ how: "joins", ids: joins });
+      if (s.config?.source_id && sources.some((x) => x.id === s.config.source_id)) linked.push({ how: "reads", ids: [s.config.source_id] });
       add(id, "step", {
-        kind: s.id, n: model.order.indexOf(s.id) + 1, title: cat.label || s.type, sub: stepSummary(s), stepKind: cat.model ? "model" : "rule",
-        running: running === s.id, connectable: editable, meta, inTip, outTip,
+        kind: s.id, n: model.order.indexOf(s.id) + 1, title: cat.label || s.type, sub: stepSummary(s, linked.length > 0), stepKind: cat.model ? "model" : "rule",
+        reads: linked.length ? linked : null, running: running === s.id, connectable: editable, meta, inTip, outTip,
         draft: inDraft ? s.draft_state : null, errs: problems.errors[id], prop: propState,
       }, { deletable: editable, connectable: editable });
     });
@@ -483,7 +541,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       const done = !inDraft && status[source] === "ok" && status[target] !== "bad";
       const lit = highlight?.has(source) && highlight?.has(target);
       es.push({
-        id: `${kind}:${source}>${target}`, source, target, data: { kind }, animated: busy,
+        id: `${kind}:${source}>${target}`, source, target, data: { kind }, animated: busy, type: "smoothstep", pathOptions: WIRE_PATH,
         className: `pl-wire ${kind}${done ? " done" : ""}${lit ? " lit" : ""}`, deletable: false, reconnectable: false,
         markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: lit ? "#6055C9" : done ? TEAL : FAINT }, ...extra,
       });
@@ -517,7 +575,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       const ghost = (a, b) => {
         if (has.has(`${a}>${b}`) || inBox(a, b)) return;
         has.add(`${a}>${b}`);
-        es.push({ id: `prop:${a}>${b}`, source: a, target: b, data: { kind: "prop" }, className: "pl-wire prop", deletable: false,
+        es.push({ id: `prop:${a}>${b}`, source: a, target: b, data: { kind: "prop" }, className: "pl-wire prop", deletable: false, type: "smoothstep", pathOptions: WIRE_PATH,
                   reconnectable: false, selectable: false, markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#6055C9" } });
       };
       const allSrc = prop.allSources.map((x) => x.id);
@@ -543,7 +601,15 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
     });
   }, [base, setNodes]);
   const [selEdges, setSelEdges] = useState([]);
-  const shownEdges = useMemo(() => edges.map((e) => ({ ...e, selected: selEdges.includes(e.id) })), [edges, selEdges]);
+  const [hover, setHover] = useState(null);
+  const shownEdges = useMemo(() => edges.map((e) => {
+    const selected = selEdges.includes(e.id);
+    // A source wire shows while either end is selected or hovered, the sources box
+    // is hovered, or a trace runs along it.
+    const hidden = SOURCE_WIRES.has(e.data?.kind) && !selected && hover !== "srcbox" && !/lit/.test(e.className)
+      && ![sel, hover].some((x) => x && (x === e.source || x === e.target));
+    return { ...e, selected, hidden };
+  }), [edges, selEdges, sel, hover]);
   const onEdgesChange = useCallback((changes) => {
     for (const c of changes) if (c.type === "select") setSelEdges((cur) => (c.selected ? [...new Set([...cur, c.id])] : cur.filter((x) => x !== c.id)));
   }, []);
@@ -728,7 +794,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       inDraft && { label: "Check results", run: onShowCheck },
       "-",
       { label: "Fit to view", run: () => flow.fitView({ padding: 0.18, maxZoom: 1, duration: 200 }) },
-      { label: "Tidy layout", run: tidy, ...(Object.keys(layout).length ? {} : off("Nothing has been moved")) },
+      { label: "Tidy layout", run: tidy, ...(Object.keys(layout).length ? {} : off("Already laid out: nothing has been moved")) },
     ];
     if (m.kind === "edge") {
       const e = edges.find((x) => x.id === m.id);
@@ -806,7 +872,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
                 title={canDesign ? (inDraft ? `Add a step at the end, feeding ${outName("output")}` : "Opens a draft") : designWhy}>+ Step</button>
         {(view.targets || []).length > 1 && <AddOutput view={view} disabled={disabled} send={send} />}
         <span className="pl-toolbar-sep" />
-        <button title="Put every node back in its default place" disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
+        <button title={Object.keys(layout).length ? "Lay the whole pipeline out again, undoing nodes you moved" : "Already laid out: nothing has been moved"}
+                disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>
       </div>
       {trace && (
         <div className="pl-trace-chip"><span className="pl-node-dot" /> Tracing <b>{trace}</b>
@@ -830,6 +897,8 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
             : openMenu(e, { kind: "node", id: n.id === "srcbox" ? "sources" : real(n.id) }))}
           onEdgeContextMenu={(e, ed) => openMenu(e, { kind: "edge", id: ed.id })}
           onPaneContextMenu={(e) => openMenu(e, { kind: "pane", flow: flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }) })}
+          onNodeMouseEnter={(_e, n) => setHover(real(n.id))}
+          onNodeMouseLeave={() => setHover(null)}
           onPaneClick={() => setMenu(null)}
           onMoveStart={() => setMenu(null)}
           onConnect={connect} isValidConnection={isValidConnection}
@@ -839,7 +908,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
           nodesConnectable={editable} elementsSelectable
           zoomOnScroll={false} preventScrolling={false} zoomOnDoubleClick={false}
           minZoom={0.3} maxZoom={1.6} fitView fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
-          connectionRadius={28} proOptions={{ hideAttribution: true }}
+          connectionLineType={ConnectionLineType.SmoothStep} connectionRadius={28} proOptions={{ hideAttribution: true }}
         >
           <Background gap={16} size={1} />
           <Controls showInteractive={false} position="bottom-left" />
