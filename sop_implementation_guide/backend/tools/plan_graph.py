@@ -43,7 +43,7 @@ _LIVE_AGENT_SOURCES = ("zoning", "funding")
 DIFF_FIELDS = (
     ("title", "Activity"), ("how", "Description"), ("after", "Depends on"), ("condition", "Only if"),
     ("actor", "Primary owner"), ("owner", "Primary owner, exactly"), ("secondary_owner", "Secondary owner"),
-    ("time", "Duration"),
+    ("time", "Duration"), ("source", "Source"),
 )
 
 ACTOR_LABEL = {"agent": "Agent", "city": "City", "builder": "Builder", "other": "Other"}

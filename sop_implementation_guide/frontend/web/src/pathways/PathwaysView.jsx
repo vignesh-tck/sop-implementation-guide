@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { call } from "../api.js";
-import PlanCanvas from "../blocks/plan/PlanCanvas.jsx";
+import PlanCanvas, { showStep } from "../blocks/plan/PlanCanvas.jsx";
 import StepInspector from "../blocks/plan/StepInspector.jsx";
 import { ACTORS } from "../blocks/plan/actors.jsx";
-import { diffSteps, marksFrom } from "../blocks/plan/graph.js";
+import { numbers } from "../blocks/plan/graph.js";
 import { useStepEdits } from "../blocks/plan/useStepEdits.js";
-import PlaybookAgent, { EMPTY_CHAT } from "./PlaybookAgent.jsx";
+import AssistantPanel, { EMPTY_CHAT } from "./AssistantPanel.jsx";
+import NewPlaybookDialog from "./NewPlaybookDialog.jsx";
+import { FLOW_PROMPTS, StepToolbar, TextSuggestion, ValueChip } from "./StepAI.jsx";
+import {
+  applyOps, canvasMarks, dependents, describe, findGaps, pendingOps, similarSteps, suggestionOps, withRequired,
+} from "./suggestions.js";
 
 // Edit the playbooks every implementation plan starts from: each playbook's
 // steps on a canvas (click a step to edit it in the panel beside it; drag
@@ -13,17 +18,20 @@ import PlaybookAgent, { EMPTY_CHAT } from "./PlaybookAgent.jsx";
 // save adds a new version; older versions stay restorable. Plans nobody has
 // approved follow the new version at once; approved plans keep their own steps.
 //
-// The panel's Agent tab is a chat with the playbook agent. Its changes come
-// back as a proposal, drawn here in place of the draft with what it changes
-// marked, until the planner adds it to the draft (then saves as usual) or
-// discards it. The chat and any pending proposal are kept in this browser.
+// The assistant works alongside: the chat in the panel (Ctrl J), Ask AI on a
+// selected step, and New playbook > Draft with AI. Everything it does arrives
+// as separate suggestions (suggestions.js) drawn on the canvas: accept or
+// reject each on its card, in the panel, or all at once. Accepted suggestions
+// join the draft, which is saved as usual. The chat and the pending
+// suggestions are kept in this browser.
 
 const NEW_STEP = { title: "", how: "", actor: "city", owner: "", time: "", depends_on: [], filled_by: "template" };
 const NO_STEPS = [];
 
 const REVIEWER_KEY = "sop.pathways.reviewer";
 const CHAT_KEY = "sop.playbooks.agent.chat";
-const PROPOSAL_KEY = "sop.playbooks.agent.proposal";
+const SUGG_KEY = "sop.playbooks.assistant.suggestions";
+const OLD_PROPOSAL_KEY = "sop.playbooks.agent.proposal";
 
 const editable = (d) => ({
   status: d.status || "",
@@ -54,7 +62,31 @@ function store(key, value) {
   } catch { /* a per-viewer convenience only */ }
 }
 
-const OP_CLASS = { "+": "new", "~": "changed", "-": "gone", "→": "moved" };
+// The pending suggestions on one step, in its panel: accept or reject each.
+function StepSuggestions({ ops, doc, onAccept, onReject }) {
+  if (!ops.length) return null;
+  return (
+    <div className="si-sugg">
+      {ops.map((op) => {
+        const d = describe(op, doc);
+        return (
+          <div key={op.id} className="si-sugg-row">
+            <div>
+              <b>✦ {d.tag}</b> {op.kind === "edit_step"
+                ? op.fields.map((f) => <div key={f.field} className="si-sugg-f">{f.label}: <del>{f.before || "—"}</del> → <ins>{f.after || "—"}</ins></div>)
+                : <span>{d.title}</span>}
+              {op.reason && <div className="sg-why">{op.reason}</div>}
+            </div>
+            <span className="si-sugg-act">
+              <button type="button" className="primary" onClick={() => onAccept(op)}>Accept</button>
+              <button type="button" onClick={() => onReject(op)}>Reject</button>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function PathwaysView() {
   const [data, setData] = useState(null);
@@ -67,13 +99,20 @@ export default function PathwaysView() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [saved, setSaved] = useState(null);
-  const [newName, setNewName] = useState("");
   const [stepError, setStepError] = useState(null);
   const [panel, setPanel] = useState("step");
   const [chat, setChat] = useState(() => readStored(CHAT_KEY, EMPTY_CHAT));
-  const [proposal, setProposal] = useState(() => readStored(PROPOSAL_KEY, null));
-  const [showProposal, setShowProposal] = useState(true);
+  const [mode, setMode] = useState("propose");
   const [agentBusy, setAgentBusy] = useState(false);
+  // The assistant's suggestions: {base, target, reasons, rejected}.
+  const [sugg, setSugg] = useState(() => readStored(SUGG_KEY, null));
+  // A quick action's answer for one step: {stepId, action, values, busy}.
+  const [quick, setQuick] = useState(null);
+  const [multi, setMulti] = useState(() => new Set());
+  const [multiAsk, setMultiAsk] = useState("");
+  const [dialog, setDialog] = useState(false);
+  const [focus, setFocus] = useState(null);
+  const assistant = useRef(null);
 
   const stepEdits = useStepEdits(
     draft?.pathways.find((p) => p.key === selectedKey)?.steps || NO_STEPS,
@@ -89,20 +128,50 @@ export default function PathwaysView() {
 
   // Another playbook (or a reload) starts with no step open.
   const { setSelected: setSelectedStep } = stepEdits;
-  useEffect(() => { setSelectedStep(null); setStepError(null); }, [selectedKey, data, setSelectedStep]);
+  useEffect(() => {
+    setSelectedStep(null);
+    setStepError(null);
+    setQuick(null);
+    setMulti(new Set());
+  }, [selectedKey, data, setSelectedStep]);
 
   useEffect(() => { try { localStorage.setItem(REVIEWER_KEY, reviewer); } catch { /* a per-viewer convenience only */ } }, [reviewer]);
   useEffect(() => store(CHAT_KEY, chat), [chat]);
-  useEffect(() => store(PROPOSAL_KEY, proposal), [proposal]);
+  useEffect(() => store(SUGG_KEY, sugg), [sugg]);
+  useEffect(() => store(OLD_PROPOSAL_KEY, null), []);
 
-  // The playbooks on screen: the agent's proposal while it is shown, else the draft.
-  const viewing = !!proposal && showProposal;
-  const shown = viewing ? proposal.doc : draft;
-  const shownKeys = (shown?.pathways || []).map((p) => p.key).join("|");
+  // Ctrl J (⌘J) opens the assistant.
   useEffect(() => {
-    const keys = shownKeys ? shownKeys.split("|") : [];
-    if (keys.length && !keys.includes(selectedKey)) setSelectedKey(keys[0]);
-  }, [shownKeys, selectedKey]);
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setPanel("agent");
+        setTimeout(() => assistant.current?.focus(), 0);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const ops = useMemo(() => (sugg ? suggestionOps(sugg.base, sugg.target, sugg.reasons) : []), [sugg]);
+  const pending = useMemo(() => (draft ? pendingOps(ops, draft, new Set(sugg?.rejected || [])) : []), [ops, draft, sugg]);
+  // What the canvas draws: the draft with every pending suggestion in it.
+  const preview = useMemo(() => (draft ? applyOps(draft, pending) : null), [draft, pending]);
+
+  const keys = (preview?.pathways || []).map((p) => p.key).join("|");
+  useEffect(() => {
+    const k = keys ? keys.split("|") : [];
+    if (k.length && !k.includes(selectedKey)) setSelectedKey(k[0]);
+  }, [keys, selectedKey]);
+
+  // "Show on canvas": select the step once its playbook is on screen, and scroll to it.
+  useEffect(() => {
+    if (!focus || focus.key !== selectedKey) return;
+    setSelectedStep(focus.id);
+    setPanel("step");
+    showStep(focus.id);
+    setFocus(null);
+  }, [focus, selectedKey, setSelectedStep]);
 
   function apply(d) {
     setData(d);
@@ -121,20 +190,21 @@ export default function PathwaysView() {
   if (!data || !draft) return <main className="view"><div className="pathways-wrap"><div className="card spin">Loading playbooks…</div></div></main>;
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(editable(data));
-  const pathway = shown.pathways.find((p) => p.key === selectedKey) || null;
+  const pathway = preview.pathways.find((p) => p.key === selectedKey) || null;
   const draftPathway = draft.pathways.find((p) => p.key === selectedKey) || null;
-  const { marks, removed } = viewing && pathway
-    ? marksFrom(diffSteps(draftPathway?.steps || [], pathway.steps, ACTORS))
-    : { marks: undefined, removed: undefined };
-  const selStep = pathway?.steps.find((s) => s.id === stepEdits.selected)
-    || removed?.find((s) => s.id === stepEdits.selected) || null;
-  const selRemoved = !!selStep && !pathway?.steps.includes(selStep);
-  const recsFor = (key) => Object.keys(shown.rec_types).filter((l) => shown.rec_types[l] === key).sort();
+  const { marks, removed, edges } = pathway ? canvasMarks(pending, selectedKey, pathway) : { marks: {}, removed: [], edges: {} };
+  const num = numbers(pathway?.steps || []);
+  const selId = stepEdits.selected;
+  const selPreview = pathway?.steps.find((s) => s.id === selId) || removed.find((s) => s.id === selId) || null;
+  const selDraft = draftPathway?.steps.find((s) => s.id === selId) || null;
+  const selOps = pending.filter((o) => o.playbook === selectedKey && (o.step_id === selId || o.to === selId));
+  const recsFor = (key) => Object.keys(preview.rec_types).filter((l) => preview.rec_types[l] === key).sort();
   // Types in the data with no pathway, plus any this edit has just unmapped.
-  const allLabels = [...new Set([...data.unmapped_rec_labels, ...Object.keys(data.rec_types), ...Object.keys(shown.rec_types)])];
-  const unmapped = allLabels.filter((l) => !shown.rec_types[l]).sort();
-  const touched = new Set((proposal?.changes || []).map((c) => c.playbook));
-  const draftKeys = new Set(draft.pathways.map((p) => p.key));
+  const allLabels = [...new Set([...data.unmapped_rec_labels, ...Object.keys(data.rec_types), ...Object.keys(draft.rec_types)])].sort();
+  const unmapped = allLabels.filter((l) => !draft.rec_types[l]);
+  const pendingFor = (key) => pending.filter((o) => o.playbook === key);
+  const here = pendingFor(selectedKey);
+  const gaps = findGaps(pathway);
 
   function edit(fn) {
     setSaved(null);
@@ -154,13 +224,20 @@ export default function PathwaysView() {
     });
   }
 
-  function addPathway() {
-    const name = newName.trim();
-    if (!name) return;
-    const key = slug(name, draft.pathways.map((p) => p.key));
+  function addBlank(name) {
+    const key = slug(name, preview.pathways.map((p) => p.key));
     edit((d) => ({ ...d, pathways: [...d.pathways, { key, name, who: "", branch: "", steps: [{ ...NEW_STEP, id: "s1" }] }] }));
     setSelectedKey(key);
-    setNewName("");
+    setDialog(false);
+  }
+
+  function addCopy(fromKey, name) {
+    const src = draft.pathways.find((p) => p.key === fromKey);
+    if (!src) return;
+    const key = slug(name, preview.pathways.map((p) => p.key));
+    edit((d) => ({ ...d, pathways: [...d.pathways, { ...src, key, name, steps: src.steps.map((s) => ({ ...s })) }] }));
+    setSelectedKey(key);
+    setDialog(false);
   }
 
   function removePathway() {
@@ -172,40 +249,149 @@ export default function PathwaysView() {
       pathways: d.pathways.filter((p) => p.key !== selectedKey),
       rec_types: Object.fromEntries(Object.entries(d.rec_types).filter(([, k]) => k !== selectedKey)),
     }));
-    setSelectedKey(draft.pathways.find((p) => p.key !== selectedKey)?.key ?? null);
   }
 
-  // ── the agent's proposal ──
-  const chatNote = (text) => setChat((c) => ({ ...c, display: [...c.display, { kind: "event", level: "info", text }] }));
+  // ── suggestions ──
+  function addSuggestions(target, reasons, base = draft) {
+    setSugg((s) => ({ base, target, reasons: { ...(s?.reasons || {}), ...reasons }, rejected: [] }));
+    const touched = [...new Set(suggestionOps(base, target, {}).map((o) => o.playbook).filter(Boolean))];
+    if (touched.length && !touched.includes(selectedKey)) setSelectedKey(touched[0]);
+  }
 
-  function onProposal(p, sentDraft) {
-    if (!p) {
-      setProposal(null);
+  function accept(op) {
+    const list = withRequired(op, pending);
+    setSaved(null);
+    setDraft((d) => applyOps(d, list));
+  }
+
+  function reject(op) {
+    const deps = dependents(op, pending);
+    if (deps.length > 1 && !window.confirm(`Rejecting this also rejects ${deps.length - 1} other suggestion(s) that need it. Continue?`)) return;
+    setSugg((s) => ({ ...s, rejected: [...(s?.rejected || []), ...deps.map((d) => d.id)] }));
+  }
+
+  function acceptAll(list) {
+    const all = [...new Map(list.flatMap((o) => withRequired(o, pending)).map((o) => [o.id, o])).values()];
+    setSaved(null);
+    setDraft((d) => applyOps(d, all));
+  }
+
+  function discardAll(list) {
+    const ids = new Set(list.flatMap((o) => dependents(o, pending)).map((o) => o.id));
+    setSugg((s) => ({ ...s, rejected: [...(s?.rejected || []), ...ids] }));
+  }
+
+  function show(op) {
+    const id = op.step_id || op.to || null;
+    setSelectedKey(op.playbook);
+    if (id) setFocus({ key: op.playbook, id });
+  }
+
+  function decide(stepId, yes) {
+    const list = here.filter((o) => o.step_id === stepId || o.to === stepId);
+    if (yes) acceptAll(list);
+    else discardAll(list);
+  }
+
+  // ── the assistant ──
+  function ask(text, asMode = "propose") {
+    setPanel("agent");
+    setTimeout(() => assistant.current?.send(text, asMode), 0);
+  }
+
+  async function runQuick(action, id, variant) {
+    const prev = quick?.stepId === id && quick.action === action ? quick : null;
+    const previous = variant && prev ? JSON.stringify(prev.values) : null;
+    setQuick({ stepId: id, action, values: prev?.values || null, busy: true });
+    setPanel("step");
+    stepEdits.setSelected(id);
+    try {
+      const r = await call("POST", "/pathways/assist", {
+        action, working: preview, playbook: selectedKey, step_id: id, variant: variant || null, previous,
+      });
+      setQuick({ stepId: id, action, values: r, busy: false });
+    } catch (e) {
+      setQuick(null);
+      setStepError(e.message);
+    }
+  }
+
+  function onSelect(id, e) {
+    if (e?.shiftKey && id) {
+      setMulti((m) => {
+        const next = new Set(m.size ? m : selId ? [selId] : []);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
       return;
     }
-    setProposal({ ...p, base: JSON.stringify(sentDraft) });
-    setShowProposal(true);
-    const keys = p.changes.map((c) => c.playbook);
-    if (keys.length && !keys.includes(selectedKey)) setSelectedKey(keys[0]);
+    setMulti(new Set());
+    stepEdits.setSelected(id);
+    if (id) setPanel("step");
+    if (quick && quick.stepId !== id) setQuick(null);
   }
 
-  function addProposal() {
-    if (JSON.stringify(draft) !== proposal.base &&
-        !window.confirm("You changed the playbooks after the agent made this proposal. Adding it replaces those changes " +
-                        "with the agent's version. Add it anyway?")) return;
-    const n = proposal.changes.length;
-    setDraft(editable(proposal.doc));
-    setSaved(null);
-    setNote((v) => v || "Changes proposed by the playbook agent");
-    setProposal(null);
-    chatNote(`You added the agent's proposal to your draft (${n} change${n === 1 ? "" : "s"}). Save to keep it.`);
+  const toolbar = (id) => {
+    const s = draftPathway?.steps.find((x) => x.id === id);
+    if (!s || multi.size > 1) return null;
+    const n = num[id];
+    return (
+      <StepToolbar
+        onEdit={() => setPanel("step")}
+        onDuplicate={() => stepEdits.duplicate(id)}
+        onDelete={() => stepEdits.remove(id)}
+        onQuick={(k) => runQuick(k, id)}
+        onFlow={(k) => ask(FLOW_PROMPTS[k](n, s.title))}
+        onAsk={(t) => ask(`@step ${n} (${s.title}): ${t}`)}
+      />
+    );
+  };
+
+  // ── the step panel's inline suggestions ──
+  const slots = {};
+  if (selDraft && quick?.stepId === selDraft.id) {
+    const v = quick.values || {};
+    if (quick.action === "rewrite" && (v.how || quick.busy)) {
+      slots.how = (
+        <TextSuggestion before={selDraft.how} after={v.how} note={v.note} busy={quick.busy}
+          onKeep={() => { stepEdits.patch(selDraft.id, { how: v.how }); setQuick(null); }}
+          onDiscard={() => setQuick(null)}
+          onVariant={(variant) => runQuick("rewrite", selDraft.id, variant)} />
+      );
+    }
+    if (quick.action === "estimate") {
+      slots.time = quick.busy ? <span className="ai-note"><span className="pl-spin" /> Estimating…</span>
+        : <ValueChip text={v.time} note={v.note} onUse={() => { stepEdits.patch(selDraft.id, { time: v.time }); setQuick(null); }} onDismiss={() => setQuick(null)} />;
+    }
+    if (quick.action === "owners") {
+      if (quick.busy) slots.owner = <span className="ai-note"><span className="pl-spin" /> Suggesting owners…</span>;
+      else {
+        slots.owner = <ValueChip text={`${ACTORS[v.actor]?.label || v.actor} · ${v.owner}`} note={v.note}
+                                 onUse={() => stepEdits.patch(selDraft.id, { actor: v.actor, owner: v.owner })} />;
+        if (v.secondary_owner) {
+          slots.secondary = <ValueChip text={`${v.secondary_owner}?`} onUse={() => { stepEdits.patch(selDraft.id, { secondary_owner: v.secondary_owner }); setQuick(null); }}
+                                       onDismiss={() => setQuick(null)} />;
+        }
+      }
+    }
+  }
+  if (selDraft && !slots.time) {
+    const like = similarSteps(preview, selectedKey, selDraft);
+    if (like.length) {
+      const times = [...new Set(like.map((l) => l.step.time))];
+      slots.time = (
+        <span className="ai-note" title={like.map((l) => `${l.playbook}: ${l.step.title} (${l.step.time})`).join("\n")}>
+          Similar steps in {like.length} other playbook{like.length > 1 ? "s" : ""} take {times.slice(0, 2).join(" or ")}.
+        </span>
+      );
+    }
+  }
+  if (selOps.length) {
+    slots.top = <StepSuggestions ops={selOps} doc={preview} onAccept={accept} onReject={reject} />;
   }
 
-  function discardProposal() {
-    setProposal(null);
-    chatNote("You discarded the agent's proposal.");
-  }
-
+  // ── saving ──
   async function run(fn, done) {
     setSaving(true);
     setSaveError(null);
@@ -233,10 +419,7 @@ export default function PathwaysView() {
   };
 
   const canSave = data.storage_ready && reviewer.trim() && !saving;
-  const selectStep = (id) => {
-    stepEdits.setSelected(id);
-    if (id) setPanel("step");
-  };
+  const isSuggested = (id) => marks[id]?.kind === "suggested" || marks[id]?.kind === "remove";
 
   return (
     <main className="view">
@@ -250,8 +433,8 @@ export default function PathwaysView() {
             </div>
           </div>
           <span className="spacer" />
-          <button type="button" className="ask-agent" onClick={() => setPanel("agent")}>
-            ✦ Ask the agent{agentBusy && <span className="pl-spin" />}
+          <button type="button" className="ask-agent" onClick={() => { setPanel("agent"); setTimeout(() => assistant.current?.focus(), 0); }}>
+            ✦ Assistant{agentBusy ? <span className="pl-spin" /> : <kbd>Ctrl J</kbd>}
           </button>
         </div>
 
@@ -272,25 +455,36 @@ export default function PathwaysView() {
           <aside className="card pathway-list">
             <h4>Playbooks</h4>
             <ul>
-              {shown.pathways.map((p) => (
-                <li key={p.key} aria-selected={p.key === selectedKey} onClick={() => setSelectedKey(p.key)}>
-                  <div className="name">
-                    {p.name || <i>Unnamed</i>}
-                    {viewing && !draftKeys.has(p.key) && <span className="pc-flag new">New</span>}
-                    {viewing && draftKeys.has(p.key) && touched.has(p.key) && <span className="pc-flag changed">Changed</span>}
-                  </div>
-                  <div className="meta">{p.steps.length} steps · {recsFor(p.key).length} rec types</div>
-                </li>
-              ))}
+              {preview.pathways.map((p) => {
+                const n = pendingFor(p.key).length;
+                const isNew = !draft.pathways.some((x) => x.key === p.key);
+                return (
+                  <li key={p.key} aria-selected={p.key === selectedKey} onClick={() => setSelectedKey(p.key)}>
+                    <div className="name">
+                      {p.name || <i>Unnamed</i>}
+                      {isNew && <span className="pc-flag sugg">✦ Suggested</span>}
+                    </div>
+                    <div className="meta">
+                      {p.steps.length} steps · {recsFor(p.key).length} rec types
+                      {n > 0 && <span className="pb-pending">{n} pending</span>}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
             <div className="pathway-new">
-              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New playbook name"
-                disabled={viewing} onKeyDown={(e) => e.key === "Enter" && addPathway()} />
-              <button onClick={addPathway} disabled={viewing || !newName.trim()}>Add</button>
+              <button type="button" onClick={() => setDialog(true)}>+ New</button>
+              <button type="button" className="ai" onClick={() => setDialog(true)}>✦ Draft with AI</button>
             </div>
 
             <h4 className="history-head">History</h4>
             <ul className="pathway-history">
+              {(dirty || pending.length > 0) && (
+                <li className="current">
+                  <b>Draft</b>
+                  {pending.length > 0 ? ` · ${pending.length} suggestion${pending.length > 1 ? "s" : ""} pending` : " · unsaved changes"}
+                </li>
+              )}
               {data.history.map((h, i) => (
                 <li key={h.version}>
                   <b>v{h.version}</b> · {h.updated_by} · {(h.created_at || "").slice(0, 10)}
@@ -306,104 +500,115 @@ export default function PathwaysView() {
           </aside>
 
           <div>
-            {proposal && (
-              <div className="pb-proposal">
-                <div className="pb-proposal-head">
-                  <b>✦ The agent's proposal</b>
-                  <span className="kv">{proposal.changes.length} change{proposal.changes.length === 1 ? "" : "s"}</span>
-                  <span className="spacer" />
-                  <span className="seg" role="group" aria-label="Show">
-                    <button type="button" aria-pressed={showProposal} onClick={() => setShowProposal(true)}>Proposal</button>
-                    <button type="button" aria-pressed={!showProposal} onClick={() => setShowProposal(false)}>Your draft</button>
-                  </span>
-                  <button type="button" className="primary" onClick={addProposal}>Add to draft</button>
-                  <button type="button" onClick={discardProposal}>Discard</button>
-                </div>
-                <ul className="pb-changes">
-                  {proposal.changes.map((c, i) => (
-                    <li key={i}>
-                      <button type="button" className="link" onClick={() => { setShowProposal(true); setSelectedKey(c.playbook); }}>
-                        <span className={"pb-op " + (OP_CLASS[c.op] || "")}>{c.op}</span> {c.text}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
             {!pathway ? (
               <div className="card empty">No playbook selected.</div>
             ) : (
               <div className="card">
-                <h4>
-                  Playbook <code className="assess">{pathway.key}</code>
-                  {viewing && <span className="pc-flag changed" style={{ marginLeft: ".5rem" }}>Showing the agent's proposal</span>}
-                </h4>
-                <div className="pathway-fields">
-                  <label>Name<input value={pathway.name} disabled={viewing} onChange={(e) => changePathway("name", e.target.value)} /></label>
-                  <label>Who does the work<input value={pathway.who} disabled={viewing} onChange={(e) => changePathway("who", e.target.value)} /></label>
-                  <label className="wide">
-                    The deciding question
-                    <textarea rows={2} value={pathway.branch} disabled={viewing} onChange={(e) => changePathway("branch", e.target.value)} />
-                  </label>
-                </div>
+                <h4>Playbook <code className="assess">{pathway.key}</code></h4>
+                {draftPathway ? (
+                  <div className="pathway-fields">
+                    <label>Name<input value={draftPathway.name} onChange={(e) => changePathway("name", e.target.value)} /></label>
+                    <label>Who does the work<input value={draftPathway.who} onChange={(e) => changePathway("who", e.target.value)} /></label>
+                    <label className="wide">
+                      The deciding question
+                      <textarea rows={2} value={draftPathway.branch} onChange={(e) => changePathway("branch", e.target.value)} />
+                    </label>
+                  </div>
+                ) : (
+                  <div className="banner sugg-banner">
+                    ✦ This whole playbook is the assistant's suggestion: <b>{pathway.name}</b>. Accept its steps on the
+                    canvas one by one, or all at once below.
+                  </div>
+                )}
 
-                <div className={"plan-canvas-wrap side" + (viewing ? " proposal" : " editing")}>
+                <div className="plan-canvas-wrap side editing">
                   <PlanCanvas
-                    steps={pathway.steps} marks={marks} removed={removed}
-                    selectedId={stepEdits.selected} onSelect={selectStep}
-                    editable={!viewing} onConnect={stepEdits.connect} onDisconnect={stepEdits.disconnect}
+                    steps={pathway.steps} marks={marks} removed={removed} edgeMarks={edges}
+                    selectedId={selId} onSelect={onSelect} multi={multi}
+                    editable onConnect={stepEdits.connect} onDisconnect={stepEdits.disconnect}
+                    onDecide={decide} toolbar={toolbar}
                   />
+                  <div className="canvas-tools">
+                    <button type="button" onClick={() => stepEdits.addAfter(null)} disabled={!draftPathway}>+ Add step</button>
+                    <button type="button" className="ai" onClick={() => ask("Find gaps in this playbook: missing steps, owners or durations, and branches that lead nowhere. Suggest fixes.")}>
+                      ✦ Find gaps
+                    </button>
+                  </div>
+                  {multi.size > 1 && (
+                    <form className="canvas-bar multi" onSubmit={(e) => {
+                      e.preventDefault();
+                      const list = [...multi].map((id) => `@step ${num[id]} (${pathway.steps.find((s) => s.id === id)?.title})`).join(", ");
+                      ask(`${list}: ${multiAsk.trim() || "Review these steps together and suggest improvements."}`);
+                      setMultiAsk("");
+                      setMulti(new Set());
+                    }}>
+                      <span>{multi.size} steps selected</span>
+                      <input value={multiAsk} onChange={(e) => setMultiAsk(e.target.value)} placeholder="✦ Ask AI about them…" />
+                      <button type="submit" className="primary">Ask</button>
+                      <button type="button" className="link" onClick={() => setMulti(new Set())}>Clear</button>
+                    </form>
+                  )}
+                  {multi.size <= 1 && here.length > 0 && (
+                    <div className="canvas-bar">
+                      <span>✦ {here.length} suggested change{here.length > 1 ? "s" : ""} from the assistant</span>
+                      <button type="button" onClick={() => discardAll(here)}>Discard all</button>
+                      <button type="button" className="primary" onClick={() => acceptAll(here)}>Accept all</button>
+                    </div>
+                  )}
                   <div className="side-panel">
                     <div className="side-tabs" role="tablist">
                       <button type="button" role="tab" aria-selected={panel === "step"} onClick={() => setPanel("step")}>Step</button>
                       <button type="button" role="tab" aria-selected={panel === "agent"} onClick={() => setPanel("agent")}>
-                        ✦ Agent{agentBusy && <span className="pl-spin" />}
+                        ✦ Assistant{agentBusy && <span className="pl-spin" />}
+                        {pending.length > 0 && <span className="pb-pending">{pending.length}</span>}
                       </button>
                     </div>
-                    {panel === "step" && (selStep ? (
+                    {panel === "step" && (selPreview ? (
                       <StepInspector
-                        s={selStep} n={selRemoved ? selStep.n : pathway.steps.indexOf(selStep) + 1} steps={pathway.steps}
-                        mark={marks?.[selStep.id]} removed={selRemoved} editable={!viewing} sources={data.filled_by}
-                        onChange={(fields) => stepEdits.patch(selStep.id, fields)}
-                        onDelete={() => stepEdits.remove(selStep.id)}
-                        onAddAfter={() => stepEdits.addAfter(selStep.id)}
-                        onSelect={selectStep}
+                        s={selDraft || selPreview}
+                        n={isSuggested(selPreview.id) && !selDraft ? "✦ suggested" : num[selPreview.id] || selPreview.n}
+                        steps={selDraft ? draftPathway.steps : pathway.steps}
+                        removed={!pathway.steps.includes(selPreview)}
+                        editable={!!selDraft && !isSuggested(selPreview.id)}
+                        sources={data.filled_by} slots={slots}
+                        onChange={(fields) => stepEdits.patch(selPreview.id, fields)}
+                        onDelete={() => stepEdits.remove(selPreview.id)}
+                        onAddAfter={() => stepEdits.addAfter(selPreview.id)}
+                        onSelect={(id) => onSelect(id)}
                         onClose={() => stepEdits.setSelected(null)}
                       />
                     ) : (
                       <div className="si-empty">
-                        <b>Click a step to {viewing ? "see it" : "edit it"}</b>
+                        <b>Click a step to edit it</b>
                         <p className="assess">
                           Each step has an activity, a description, what it depends on, a primary and a secondary owner,
                           and a potential duration.
                         </p>
-                        {viewing ? (
-                          <p className="assess">This is the agent's proposal. Add it to your draft to edit it, or switch to your draft.</p>
-                        ) : (
-                          <>
-                            <p className="assess">
-                              To link steps, drag from the dot under a step to the step that waits on it. Click a line to
-                              remove the link. Or ask the agent to make the change.
-                            </p>
-                            <button type="button" onClick={() => stepEdits.addAfter(null)}>+ Add step</button>
-                          </>
-                        )}
+                        <p className="assess">
+                          Drag from the dot under a step to the step that waits on it; click a line to remove the link.
+                          Shift-click several steps to ask the assistant about them together.
+                        </p>
+                        <button type="button" onClick={() => stepEdits.addAfter(null)} disabled={!draftPathway}>+ Add step</button>
                       </div>
                     ))}
-                    <PlaybookAgent
-                      hidden={panel !== "agent"} chat={chat} setChat={setChat}
-                      draft={draft} proposal={proposal} selectedKey={selectedKey}
-                      onProposal={onProposal} onBusy={setAgentBusy}
+                    <AssistantPanel
+                      ref={assistant} hidden={panel !== "agent"} chat={chat} setChat={setChat} mode={mode} setMode={setMode}
+                      draft={draft} working={preview} playbook={pathway} version={data.version}
+                      others={preview.pathways.filter((p) => p.key !== selectedKey)}
+                      pending={pending} gaps={gaps}
+                      onResult={(out, sentDraft) => addSuggestions(out.target, out.reasons || {}, sentDraft)}
+                      onAccept={accept} onReject={reject} onShow={show}
+                      onAcceptAll={() => acceptAll(pending)} onDiscardAll={() => discardAll(pending)}
+                      onBusy={setAgentBusy}
                     />
                   </div>
                 </div>
                 {stepError && <div className="banner err" style={{ marginTop: ".6rem" }}>{stepError}</div>}
 
                 <div className="btn-row">
-                  <button onClick={() => stepEdits.addAfter(null)} disabled={viewing}>+ Add step</button>
+                  <button onClick={() => stepEdits.addAfter(null)} disabled={!draftPathway}>+ Add step</button>
                   <span className="spacer" />
-                  <button onClick={removePathway} disabled={viewing}>Delete playbook</button>
+                  <button onClick={removePathway} disabled={!draftPathway}>Delete playbook</button>
                 </div>
 
                 <h4 className="recs-head">Recommendation types in this playbook</h4>
@@ -411,14 +616,15 @@ export default function PathwaysView() {
                   {recsFor(pathway.key).map((label) => (
                     <li key={label}>
                       <span>{label}</span>
-                      <select value={pathway.key} disabled={viewing} onChange={(e) => mapRec(label, e.target.value)} title="Move to another playbook">
-                        {shown.pathways.map((p) => <option key={p.key} value={p.key}>{p.name || p.key}</option>)}
+                      <select value={pathway.key} disabled={!draft.rec_types[label] || draft.rec_types[label] !== pathway.key}
+                              onChange={(e) => mapRec(label, e.target.value)} title="Move to another playbook">
+                        {preview.pathways.map((p) => <option key={p.key} value={p.key}>{p.name || p.key}</option>)}
                         <option value="">No playbook</option>
                       </select>
                     </li>
                   ))}
                 </ul>
-                {unmapped.length > 0 && !viewing && (
+                {unmapped.length > 0 && draftPathway && (
                   <select value="" onChange={(e) => e.target.value && mapRec(e.target.value, pathway.key)}>
                     <option value="">+ Add an unmapped recommendation type…</option>
                     {unmapped.map((l) => <option key={l} value={l}>{l}</option>)}
@@ -445,7 +651,11 @@ export default function PathwaysView() {
                   <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. SME timelines for parks" />
                 </label>
               </div>
-              {proposal && <div className="assess" style={{ marginTop: ".5rem" }}>Save keeps your draft. The agent's proposal is only saved once you add it to your draft.</div>}
+              {pending.length > 0 && (
+                <div className="assess" style={{ marginTop: ".5rem" }}>
+                  Save keeps what you accepted. The {pending.length} pending suggestion{pending.length > 1 ? "s stay" : " stays"} here until you accept or reject {pending.length > 1 ? "them" : "it"}.
+                </div>
+              )}
               {saveError && <div className="banner err" style={{ marginTop: ".75rem" }}>Save failed — {saveError}</div>}
               {saved && <div className="banner ok" style={{ marginTop: ".75rem" }}>{saved}</div>}
               <div className="btn-row">
@@ -461,6 +671,26 @@ export default function PathwaysView() {
           </div>
         </div>
       </div>
+
+      {dialog && (
+        <NewPlaybookDialog
+          working={preview} labels={allLabels} onClose={() => setDialog(false)}
+          onBlank={addBlank} onCopy={addCopy}
+          onDrafted={(result, recTypes) => {
+            const p = result.playbook;
+            const target = applyOps(draft, pending);
+            target.pathways = [...target.pathways.filter((x) => x.key !== p.key), p];
+            target.rec_types = { ...target.rec_types };
+            for (const l of recTypes) target.rec_types[l] = p.key;
+            const reasons = { [`playbook:${p.key}`]: "Drafted by the assistant" };
+            for (const s of p.steps) if (s.source) reasons[`step:${p.key}:${s.id}`] = `From ${s.source}`;
+            for (const l of recTypes) reasons[`rec:${l}`] = "Chosen when drafting the playbook";
+            addSuggestions(target, reasons);
+            setSelectedKey(p.key);
+            setDialog(false);
+          }}
+        />
+      )}
     </main>
   );
 }

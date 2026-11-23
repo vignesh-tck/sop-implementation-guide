@@ -9,6 +9,8 @@ import { numbers, wouldLoop } from "./graph.js";
 //
 // `sources` (the playbook editor only) adds which agent or lookup fills the
 // step in, folded away: it is set up once per playbook, not per plan.
+// `slots` (the playbook editor only) puts the assistant's inline suggestions
+// under the fields they are for: {top, how, owner, secondary, time}.
 
 // Suggestions for the secondary owner; anything can be typed.
 const SECONDARY = [
@@ -57,7 +59,7 @@ function DependsOn({ s, steps, onSelect }) {
 }
 
 export default function StepInspector({
-  s, n, steps, mark, removed, editable, sources, onChange, onDelete, onAddAfter, onSelect, onClose, children,
+  s, n, steps, mark, removed, editable, sources, slots = {}, onChange, onDelete, onAddAfter, onSelect, onClose, children,
 }) {
   const kind = ACTORS[s.actor] ? s.actor : "other";
 
@@ -70,13 +72,15 @@ export default function StepInspector({
           {onClose && <button type="button" className="si-close" onClick={onClose} aria-label="Close">✕</button>}
         </div>
         <h5 className="si-title">{s.title || <i>Untitled activity</i>}</h5>
-        <Changes mark={removed ? { kind: "removed" } : mark} />
+        {slots.top}
+        {!slots.top && <Changes mark={removed ? { kind: "removed" } : mark} />}
         {s.how && <p className="si-how">{s.how}</p>}
         <dl className="si-facts">
           {!removed && <div><dt>Depends on</dt><dd><DependsOn s={s} steps={steps} onSelect={onSelect} /></dd></div>}
           {s.condition && <div><dt>Only if</dt><dd>{s.condition}</dd></div>}
           <div><dt>Primary owner</dt><dd><ActorChip kind={kind} />{s.owner && <div>{s.owner}</div>}</dd></div>
           {s.secondary_owner && <div><dt>Secondary owner</dt><dd>{s.secondary_owner}</dd></div>}
+          {s.source && <div><dt>Source</dt><dd>{s.source}</dd></div>}
           <div><dt><ClockIcon /> Duration</dt><dd>{s.time || "No set duration"}</dd></div>
         </dl>
         {children}
@@ -99,7 +103,8 @@ export default function StepInspector({
         <span className="spacer" />
         {onClose && <button type="button" className="si-close" onClick={onClose} aria-label="Close">✕</button>}
       </div>
-      <Changes mark={mark} />
+      {slots.top}
+      {!slots.top && <Changes mark={mark} />}
 
       <label className="si-field">
         <span className="si-label"><span className="si-k">1</span>Activity</span>
@@ -109,8 +114,10 @@ export default function StepInspector({
 
       <label className="si-field">
         <span className="si-label"><span className="si-k">2</span>Activity description</span>
-        <textarea rows={3} value={s.how || ""} placeholder="How it gets done, in a sentence or two"
-                  onChange={(e) => onChange({ how: e.target.value })} />
+        {slots.how || (
+          <textarea rows={3} value={s.how || ""} placeholder="How it gets done, in a sentence or two"
+                    onChange={(e) => onChange({ how: e.target.value })} />
+        )}
       </label>
 
       <div className="si-field">
@@ -152,6 +159,7 @@ export default function StepInspector({
         </div>
         <input value={s.owner || ""} placeholder="Who exactly, e.g. Code enforcement" aria-label="Primary owner, exactly"
                onChange={(e) => onChange({ owner: e.target.value })} />
+        {slots.owner}
       </div>
 
       <label className="si-field">
@@ -159,12 +167,15 @@ export default function StepInspector({
         <input value={s.secondary_owner || ""} list="si-secondary" placeholder="e.g. SME reviews the agent's output"
                onChange={(e) => onChange({ secondary_owner: e.target.value })} />
         <datalist id="si-secondary">{SECONDARY.map((v) => <option key={v} value={v} />)}</datalist>
+        {slots.secondary}
       </label>
 
       <label className="si-field">
         <span className="si-label"><span className="si-k">6</span>Potential duration</span>
         <input value={s.time || ""} placeholder="e.g. 2–4 wk, 1–3 mo, Program deadline" onChange={(e) => onChange({ time: e.target.value })} />
+        {slots.time}
       </label>
+      {s.source && <div className="si-source">Source: {s.source}</div>}
 
       {sources && (
         <details className="si-advanced">

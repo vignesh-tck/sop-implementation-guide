@@ -52,7 +52,7 @@ TEMPLATES_PATH = Path(__file__).resolve().parent.parent / "data" / "pathways.jso
 # The step fields a reviewer can set. Anything else in a saved step (attached
 # funding, computed status) is derived on read and never stored.
 STEP_FIELDS = ("id", "title", "how", "actor", "owner", "secondary_owner", "time", "depends_on",
-               "depends_mode", "condition", "filled_by", "note", "edited")
+               "depends_mode", "condition", "filled_by", "source", "note", "edited")
 
 # A template step has no `edited` flag: it is what every plan starts from.
 TEMPLATE_STEP_FIELDS = tuple(f for f in STEP_FIELDS if f != "edited")
@@ -224,6 +224,9 @@ def _references(s: dict, key: str, source: dict, templates: dict, saved: dict | 
     reviewer.
     """
     refs: list[dict] = []
+    # Where the step itself came from, as the playbook recorded it.
+    if s.get("source"):
+        refs.append({"label": s["source"], "url": None, "detail": "Cited in the playbook"})
     if s.get("zoning"):
         refs += s["zoning"]["references"]
     elif s.get("funding"):

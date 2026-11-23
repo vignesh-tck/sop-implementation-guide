@@ -34,6 +34,20 @@ export function useStepEdits(steps, setSteps, { onError, markEdited = true } = {
     setSelected(step.id);
   }
 
+  // A copy goes right after the step, waiting on what it waits on.
+  function duplicate(id) {
+    const src = steps.find((s) => s.id === id);
+    if (!src) return;
+    const copy = { ...src, id: nextId(steps), title: `${src.title} (copy)`, ...flag };
+    setSteps((b) => {
+      const i = b.findIndex((s) => s.id === id);
+      const next = [...b];
+      next.splice(i + 1, 0, copy);
+      return next;
+    });
+    setSelected(copy.id);
+  }
+
   // A removed step's followers take over what it waited on, so the chain stays joined.
   function remove(id) {
     const gone = steps.find((x) => x.id === id);
@@ -65,5 +79,5 @@ export function useStepEdits(steps, setSteps, { onError, markEdited = true } = {
     patch(to, { depends_on: deps, ...(deps.length < 2 ? { depends_mode: "all" } : {}) });
   }
 
-  return { selected, setSelected, patch, addAfter, remove, connect, disconnect };
+  return { selected, setSelected, patch, addAfter, duplicate, remove, connect, disconnect };
 }

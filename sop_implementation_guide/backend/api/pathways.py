@@ -163,17 +163,45 @@ def restore_version(version: int, body: Restore, db: Client = Depends(get_supaba
     return _save(db, current, doc, updated_by, f"Restored {label}")
 
 
-# ── The playbook agent ───────────────────────────────────────────────────────
+# ── The playbook assistant ───────────────────────────────────────────────────
+#
+# Chat turns and playbook drafts can take a minute, longer than a proxy may
+# hold a request open, so they run in background threads: the POST returns a
+# job id and GET /pathways/agent/{job} returns its progress, then its result.
+# Jobs live in memory only. Quick step actions (/assist) are short and answer
+# directly.
+
+class FileRef(BaseModel):
+    name: str
+    url: str
+
 
 class AgentTurn(BaseModel):
     text: str
     # The conversation so far, exactly as the last turn returned it.
     messages: list[dict[str, Any]] = []
-    # The planner's playbooks as open in the editor: {status, pathways, rec_types}.
-    draft: dict[str, Any]
-    # The agent's pending proposal, if any, so a follow-up builds on it.
-    proposal: Optional[dict[str, Any]] = None
+    # The planner's draft with the suggestions still pending applied: {status, pathways, rec_types}.
+    working: dict[str, Any]
     selected: Optional[str] = None
+    mode: str = "propose"   # or "answer"
+    files: list[FileRef] = []
+
+
+class AssistRequest(BaseModel):
+    action: str             # rewrite | estimate | owners
+    working: dict[str, Any]
+    playbook: str
+    step_id: str
+    variant: Optional[str] = None    # shorter | plainer | again
+    previous: Optional[str] = None
+
+
+class DraftRequest(BaseModel):
+    purpose: str
+    working: dict[str, Any]
+    files: list[FileRef] = []
+    rec_types: list[str] = []
+    model_on: Optional[str] = None
 
 
 _JOBS: dict[str, dict] = {}
@@ -181,35 +209,81 @@ _JOBS_LOCK = threading.Lock()
 JOB_TTL = 3600
 
 
-def _run_agent(job: str, body: AgentTurn, sources: dict, labels: list[str]) -> None:
-    from backend.agents import playbook_agent
-
-    try:
-        result = playbook_agent.run_turn(body.messages, body.text, body.draft, body.proposal, body.selected,
-                                         sources, labels)
-        update = {"status": "done", "result": result}
-    except Exception as e:  # noqa: BLE001 — reported in the chat, never lost in a thread
-        log.exception("playbook agent turn failed")
-        update = {"status": "failed", "error": f"{type(e).__name__}: {e}"}
-    with _JOBS_LOCK:
-        _JOBS[job].update(update)
-
-
-@router.post("/agent")
-def agent_start(body: AgentTurn, db: Client = Depends(get_supabase)):
-    """Start one turn of the playbook agent; poll GET /pathways/agent/{job} for the reply."""
-    if not body.text.strip():
-        raise HTTPException(status_code=422, detail="Say what you would like changed.")
-    templates = load_templates(db)
-    labels = sorted(set(BlockRepository(db).distinct_rec_labels()) | set(templates["rec_types"]))
+def _start_job(target, *args) -> str:
     job = uuid.uuid4().hex
     now = time.time()
     with _JOBS_LOCK:
         for k in [k for k, v in _JOBS.items() if now - v["at"] > JOB_TTL]:
             del _JOBS[k]
-        _JOBS[job] = {"status": "running", "at": now}
-    threading.Thread(target=_run_agent, args=(job, body, templates["filled_by"], labels), daemon=True).start()
+        _JOBS[job] = {"status": "running", "at": now, "stop": False}
+
+    def body() -> None:
+        try:
+            update = {"status": "done", "result": target(job, *args)}
+        except Exception as e:  # noqa: BLE001 — reported in the panel, never lost in a thread
+            log.exception("playbook assistant job failed")
+            update = {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+        with _JOBS_LOCK:
+            if job in _JOBS:
+                _JOBS[job].update(update)
+
+    threading.Thread(target=body, daemon=True).start()
+    return job
+
+
+def _context(db: Client) -> tuple[dict, list[str]]:
+    templates = load_templates(db)
+    labels = sorted(set(BlockRepository(db).distinct_rec_labels()) | set(templates["rec_types"]))
+    return templates["filled_by"], labels
+
+
+@router.post("/agent")
+def agent_start(body: AgentTurn, db: Client = Depends(get_supabase)):
+    """Start one chat turn of the playbook assistant; poll GET /pathways/agent/{job} for the reply."""
+    from backend.agents import playbook_agent
+
+    if not body.text.strip():
+        raise HTTPException(status_code=422, detail="Say what you would like changed.")
+    sources, labels = _context(db)
+    job = _start_job(lambda _job: playbook_agent.run_turn(
+        body.messages, body.text, body.working, body.selected, sources, labels,
+        mode="answer" if body.mode == "answer" else "propose", files=[f.model_dump() for f in body.files]))
     return {"job": job}
+
+
+@router.post("/draft")
+def draft_start(body: DraftRequest, db: Client = Depends(get_supabase)):
+    """Start drafting a new playbook; poll GET /pathways/agent/{job} for the outline as it grows."""
+    from backend.agents import playbook_agent
+
+    if not body.purpose.strip():
+        raise HTTPException(status_code=422, detail="Say what the playbook is for.")
+    sources, labels = _context(db)
+    model_on = next((p for p in body.working.get("pathways") or [] if p.get("key") == body.model_on), None)
+
+    def run(job: str) -> dict:
+        def progress(p: dict) -> None:
+            with _JOBS_LOCK:
+                if job in _JOBS:
+                    _JOBS[job]["progress"] = p
+
+        def stopped() -> bool:
+            with _JOBS_LOCK:
+                return bool(_JOBS.get(job, {}).get("stop"))
+
+        return playbook_agent.draft_playbook(body.purpose, [f.model_dump() for f in body.files], body.rec_types,
+                                             model_on, body.working, sources, labels, progress, stopped)
+
+    return {"job": _start_job(run)}
+
+
+@router.post("/agent/{job}/stop")
+def agent_stop(job: str):
+    """Stop a draft where it is; what it has written so far is kept."""
+    with _JOBS_LOCK:
+        if job in _JOBS:
+            _JOBS[job]["stop"] = True
+    return {"ok": True}
 
 
 @router.get("/agent/{job}")
@@ -217,8 +291,19 @@ def agent_poll(job: str):
     with _JOBS_LOCK:
         j = _JOBS.get(job)
         if not j:
-            raise HTTPException(status_code=404, detail="That agent turn is gone (the server restarted). Send it again.")
-        out = {k: v for k, v in j.items() if k != "at"}
+            raise HTTPException(status_code=404, detail="That assistant job is gone (the server restarted). Try again.")
+        out = {k: v for k, v in j.items() if k not in ("at", "stop")}
         if j["status"] != "running":
             del _JOBS[job]
     return out
+
+
+@router.post("/assist")
+def assist(body: AssistRequest):
+    """One quick suggestion for one step: a rewritten description, a duration, or owners."""
+    from backend.agents import playbook_agent
+
+    try:
+        return playbook_agent.assist(body.action, body.working, body.playbook, body.step_id, body.variant, body.previous)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
