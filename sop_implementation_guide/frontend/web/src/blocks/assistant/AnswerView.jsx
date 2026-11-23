@@ -3,19 +3,42 @@ import { num, score100Colour } from "../../api.js";
 
 // One assistant answer: the direct answer, a few lines backing it, at most one
 // chart or list (drawn from numbers the server read from the data, never from
-// the model), what it assumes, next steps, and the data it read.
+// the model), what it assumes, next steps, the data it read, and the numbered
+// references its [1] citations point to (documents the tools returned).
 
 const WEEKS_PER_MONTH = 4.345;
+const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//.test(u) ? u : null);
 
-// "**bold**" inside a line.
-function inline(text) {
-  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? <b key={i}>{part.slice(2, -2)}</b> : <Fragment key={i}>{part}</Fragment>
-  );
+// "**bold**" and "[1]" / "[1, 3]" citations inside a line.
+function inline(text, refs) {
+  return text.split(/(\*\*[^*]+\*\*|\[\d+(?:,\s*\d+)*\])/g).map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) return <b key={i}>{part.slice(2, -2)}</b>;
+    const cite = /^\[(\d+(?:,\s*\d+)*)\]$/.exec(part);
+    if (cite && refs?.length) {
+      const ns = cite[1].split(/,\s*/).map(Number).filter((n) => refs.some((r) => r.n === n));
+      if (ns.length) {
+        return (
+          <sup key={i} className="cite">
+            {ns.map((n, j) => {
+              const r = refs.find((x) => x.n === n);
+              const url = safeUrl(r.url);
+              return (
+                <Fragment key={n}>
+                  {j > 0 && ","}
+                  {url ? <a href={url} target="_blank" rel="noreferrer" title={r.label}>{n}</a> : <span title={r.label}>{n}</span>}
+                </Fragment>
+              );
+            })}
+          </sup>
+        );
+      }
+    }
+    return <Fragment key={i}>{part}</Fragment>;
+  });
 }
 
 // Paragraphs, and "- " lines as bullets.
-export function RichText({ text }) {
+export function RichText({ text, refs }) {
   const blocks = [];
   for (const raw of (text || "").split("\n")) {
     const line = raw.trim();
@@ -30,9 +53,9 @@ export function RichText({ text }) {
     <div className="rich">
       {blocks.map((b, i) =>
         b.type === "ul" ? (
-          <ul key={i}>{b.items.map((t, j) => <li key={j}>{inline(t)}</li>)}</ul>
+          <ul key={i}>{b.items.map((t, j) => <li key={j}>{inline(t, refs)}</li>)}</ul>
         ) : (
-          <p key={i}>{inline(b.text)}</p>
+          <p key={i}>{inline(b.text, refs)}</p>
         )
       )}
     </div>
@@ -143,10 +166,11 @@ function BlockRows({ v, onAction }) {
 
 export default function AnswerView({ answer, onAction }) {
   const v = answer.visual;
+  const refs = answer.references || [];
   return (
     <div className="ans">
-      <div className="ans-headline">{answer.headline}</div>
-      {answer.body && <RichText text={answer.body} />}
+      <div className="ans-headline">{inline(answer.headline || "", refs)}</div>
+      {answer.body && <RichText text={answer.body} refs={refs} />}
       {v?.type === "timeline" && <TimelineChart v={v} />}
       {v?.type === "scores" && <ScoresChart v={v} />}
       {v?.type === "recommendations" && <RecRows v={v} onAction={onAction} />}
@@ -154,7 +178,23 @@ export default function AnswerView({ answer, onAction }) {
       {answer.assumptions?.length > 0 && (
         <div className="ans-assume">
           <div className="eyebrow-sm">What this assumes</div>
-          <ul>{answer.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
+          <ul>{answer.assumptions.map((a, i) => <li key={i}>{inline(a, refs)}</li>)}</ul>
+        </div>
+      )}
+      {refs.length > 0 && (
+        <div className="ans-refs">
+          <div className="eyebrow-sm">References</div>
+          <ol>
+            {refs.map((r) => {
+              const url = safeUrl(r.url);
+              return (
+                <li key={r.n} value={r.n}>
+                  {url ? <a href={url} target="_blank" rel="noreferrer">{r.label}</a> : r.label}
+                  {r.detail && <span className="assess"> · {r.detail}</span>}
+                </li>
+              );
+            })}
+          </ol>
         </div>
       )}
       {answer.actions?.length > 0 && (

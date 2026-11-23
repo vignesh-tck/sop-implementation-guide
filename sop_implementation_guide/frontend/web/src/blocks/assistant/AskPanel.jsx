@@ -79,7 +79,7 @@ function starters(block, blocksCount) {
       ["Lowest scores", "Which blocks score lowest, and what holds them back?"],
       ["Reviews", "Which blocks still need funding or zoning reviews?"],
       ["Biggest lifts", "Where would one recommendation lift the score the most?"],
-      ["Streets", `Which streets have the most Traffic Safety recommendations across the ${blocksCount} blocks?`],
+      ["The data", "How was the zoning data built, and from what sources?"],
     ];
   }
   return [

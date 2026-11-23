@@ -2041,6 +2041,13 @@ section.detail.ask-mode .block-head { margin-bottom: 0; flex-shrink: 0; }
 .ans-actions button { background: var(--surface); }
 .ans-actions button.primary { background: var(--orange); }
 .ans-actions .ans-outline { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 40%, var(--border)); }
+sup.cite { font-size: .68em; font-weight: 700; margin-left: .1em; }
+sup.cite a, sup.cite span { color: var(--orange); text-decoration: none; cursor: pointer; }
+sup.cite a:hover { text-decoration: underline; }
+.ans-refs { margin: .6rem 0; font-size: .8rem; }
+.ans-refs ol { margin: .25rem 0 0; padding-left: 1.3rem; }
+.ans-refs li { margin: .15rem 0; overflow-wrap: anywhere; }
+.ans-refs a { color: var(--navy); }
 .ans-sources { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; font-size: .74rem; color: var(--muted); }
 .ans-sources .src { padding: .1rem .5rem; border-radius: 999px; background: var(--surface-2); color: var(--text); cursor: help; }
 
