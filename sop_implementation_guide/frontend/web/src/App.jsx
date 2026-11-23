@@ -168,8 +168,6 @@ export default function App() {
             Playbooks
           </button>
         </nav>
-        <div className="spacer" />
-        <span className="meta">{API_BASE}</span>
       </header>
 
       {view === "blocks" && <BlocksView />}

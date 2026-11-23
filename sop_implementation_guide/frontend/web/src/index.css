@@ -65,7 +65,6 @@ header .eyebrow {
   font-size: .68rem; color: rgba(255,255,255,.85); letter-spacing: .1em;
   text-transform: uppercase; display: block; margin-bottom: 2px;
 }
-header .meta { color: rgba(255,255,255,.75); font-size: .72rem; }
 .spacer { flex: 1; }
 label { color: var(--muted); font-size: .8rem; }
 input, textarea, button, select {
