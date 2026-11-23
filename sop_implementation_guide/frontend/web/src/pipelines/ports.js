@@ -72,7 +72,7 @@ export function outputView(view, oid = "output") {
   return {
     ...view, output_id: o.id, output_name: o.name, target_label: o.target_label,
     definition: { ...view.definition, schema: o.schema, overrides: o.overrides },
-    last_run: o.last_run, last_records: o.last_records || [], load_map: o.load_map, gate: o.gate,
+    last_run: o.last_run, last_records: o.last_records || [], load_map: o.load_map, write: o.write, gate: o.gate,
     output_locked: o.output_locked, overrides: o.overrides, review_marks: o.review_marks || {},
     design_gaps: o.design_gaps || [], has_defaults: o.has_defaults,
   };

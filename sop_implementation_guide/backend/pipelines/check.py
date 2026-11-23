@@ -150,7 +150,7 @@ def check(kind: str, d: dict) -> dict:
     for s in steps:
         if s["type"] == "sql":
             for t in (s.get("config") or {}).get("tables") or []:
-                if t not in engine.REF_TABLES:
+                if not engine.is_ref(t):
                     joined.setdefault(t, []).append(s["id"])
     for sid, js in joined.items():
         if sid in readers:

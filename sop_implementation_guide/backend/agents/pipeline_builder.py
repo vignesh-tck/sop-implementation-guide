@@ -24,7 +24,7 @@ from typing import Any
 import anthropic
 
 from backend.db.session import get_supabase
-from backend.pipelines import engine, graph, jobs, kinds, outputs, service
+from backend.pipelines import engine, general, graph, jobs, kinds, outputs, service
 from backend.pipelines.engine import PipelineError
 from backend.repositories.pipelines import PipelineMessageRepository, PipelineRepository
 from backend.tools.llm_extractor import _get_client
@@ -167,15 +167,20 @@ OUTPUT_ARG = {"output": {"type": "string", "description": "Which output (output,
 
 def _tools(kind: str) -> list[dict]:
     step_types = list(engine.catalog_for(kind))
-    targets = kinds.spec(kind)["targets"]
-    multi = len(targets) > 1   # a kind whose pipelines can have several outputs gets the output tools
+    spec = kinds.spec(kind)
+    targets = spec["targets"]
+    many = bool(spec.get("many_outputs"))   # several outputs on one target, each written to its own table
+    multi = len(targets) > 1 or many   # a kind whose pipelines can have several outputs gets the output tools
     out_arg = OUTPUT_ARG if multi else {}
-    source_kinds = ["url", "arcgis"] if kind == "zoning" else ["url", "grants_gov"]
+    source_kinds = spec.get("source_kinds") or (["url", "arcgis"] if kind == "zoning" else ["url", "grants_gov"])
+    catalogue = any(t.get("catalogue") for t in targets.values())
     extra = [
         {"name": "add_output",
          "description": "Add an output (an Output node with its own schema) loading into one of: "
                         + "; ".join(f"{t} ({v['label']})" for t, v in targets.items())
-                        + ". Each target takes one output. Then propose its schema with set_schema(output=...).",
+                        + (". Each output is written to a table of its own (set it with set_write)." if many
+                           else ". Each target takes one output.")
+                        + " Then propose its schema with set_schema(output=...).",
          "input_schema": {"type": "object", "properties": {
              "target": {"type": "string", "enum": list(targets)}, "name": {"type": "string"}}, "required": ["target"]}},
         {"name": "update_output",
@@ -202,9 +207,10 @@ def _tools(kind: str) -> list[dict]:
              "required": ["name", "type", "required", "description"]}}, **out_arg},
              "required": ["fields"]}},
         {"name": "add_source",
-         "description": "Add a source and fetch it now. kind url needs url; "
-                        + ("kind arcgis needs an ArcGIS REST service or layer url. " if kind == "zoning"
-                           else "kind grants_gov needs a 2-5 word keyword query. ")
+         "description": "Add a source and fetch it now. kind url needs url"
+                        + (" (a web page, PDF, CSV, JSON or text file). " if source_kinds == ["url"] else "; ")
+                        + ("kind arcgis needs an ArcGIS REST service or layer url. " if "arcgis" in source_kinds
+                           else "kind grants_gov needs a 2-5 word keyword query. " if "grants_gov" in source_kinds else "")
                         + "Once the sources are final it goes into the draft, read by no step until you wire it.",
          "input_schema": {"type": "object", "properties": {
              "kind": {"type": "string", "enum": source_kinds},
@@ -270,12 +276,24 @@ def _tools(kind: str) -> list[dict]:
                                                "table named by its step id."},
              "limit": {"type": "integer", "description": "Rows to return, at most 50 (default 20)."}, **out_arg},
              "required": ["query"]}},
+    ] + ([
         {"name": "set_load_mapping",
          "description": "Set which output field Load writes to each catalogue column: {column: field, or null for "
                         "none}. Columns left out keep their mapping. Resets no step.",
          "input_schema": {"type": "object", "properties": {
              "mapping": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}, **out_arg},
              "required": ["mapping"]}},
+    ] if catalogue else []) + ([
+        {"name": "set_write",
+         "description": "Set where an output is written when the planner publishes: table (gp_ plus lower_snake_case; "
+                        "created on the first publish), mode (merge: rows matched by key are updated, others kept; "
+                        "replace: this pipeline's rows are replaced by the run) and key (the schema fields that "
+                        "identify a row; they must be filled and unique on every record). Give only what changes. "
+                        "Resets no step.",
+         "input_schema": {"type": "object", "properties": {
+             "table": {"type": "string"}, "mode": {"type": "string", "enum": ["merge", "replace"]},
+             "key": {"type": "array", "items": {"type": "string"}}, **out_arg}}},
+    ] if kind == general.KIND else []) + [
         {"name": "set_goal", "description": "Record the planner's goal for this pipeline, in their words.",
          "input_schema": {"type": "object", "properties": {"goal": {"type": "string"}}, "required": ["goal"]}},
         {"name": "rename_pipeline", "description": "Give the pipeline a short descriptive name.",
@@ -327,7 +345,20 @@ def state_snapshot(p: dict) -> dict:
                       "errors": last.get("errors")} if last else None),
         "load_blocked_by": service.gate(p),
         **({"outputs": [_output_snapshot(p, oid) for oid in outputs.ids(d)]} if outputs.multi(d) else {}),
+        **({"write": _write_snapshot(service.write_view(p)),
+            "db_tables": {k[len(engine.DB_PREFIX):]: list(v["columns"]) for k, v in engine.ref_tables(p["kind"]).items()
+                          if k.startswith(engine.DB_PREFIX)}}
+           if p["kind"] == general.KIND else {}),
     }
+
+
+def _write_snapshot(w: dict | None) -> dict | None:
+    """Where a general pipeline's output is written, as the agent reads it."""
+    if not w:
+        return None
+    return {"table": w["table"], "mode": w["mode"], "key": w["key"], "set_by_planner": w["saved"],
+            "table_exists": w["exists"], "new_columns": [c["name"] for c in w["columns"] if c["state"] == "new"],
+            "problems": w["problems"]}
 
 
 def _output_snapshot(p: dict, oid: str) -> dict:
@@ -347,7 +378,8 @@ def _output_snapshot(p: dict, oid: str) -> dict:
             "last_run": ({"at": last.get("at"), "upto": last.get("upto"), "records": cov.get("records"),
                           "required_gaps": {g: cov["fields"][g]["missing"] for g in cov.get("required_gaps", [])},
                           "errors": last.get("errors")} if last else None),
-            "publish_blocked_by": v["gate"]}
+            "publish_blocked_by": v["gate"],
+            **({"write": _write_snapshot(v["write"])} if v.get("write") else {})}
 
 
 def _preview_result(p: dict, summary: dict) -> dict:
@@ -455,6 +487,10 @@ def _run_tool(db, pipeline_id: int, name: str, args: dict) -> tuple[dict, bool]:
         if name == "set_load_mapping":
             m = service.set_load_map(db, pipeline_id, args.get("mapping") or {}, output=args.get("output"))
             return {"columns": {c["column"]: c["field"] for c in m["columns"]}, "unmapped_fields": m["extras"]}, False
+        if name == "set_write":
+            w = service.set_write(db, pipeline_id, args.get("table"), args.get("mode"), args.get("key"),
+                                  output=args.get("output"))
+            return {k: w[k] for k in ("table", "mode", "key")}, False
         if name == "set_goal":
             return {"goal": service.set_goal(db, pipeline_id, args.get("goal") or "")}, False
         if name == "rename_pipeline":
@@ -592,7 +628,8 @@ TOOL_LABELS = {"set_schema": "proposed the schema", "add_source": "added a sourc
                "remove_step": "removed a step", "run_preview": "ran a preview", "rename_pipeline": "renamed the pipeline",
                "set_goal": "recorded the goal", "run_sql": "ran SQL", "connect_steps": "wired steps",
                "disconnect_steps": "unwired steps", "check_pipeline": "checked the draft",
-               "set_load_mapping": "mapped fields for Load"}
+               "set_load_mapping": "mapped fields for Load", "set_write": "set where the output is written",
+               "add_output": "added an output", "update_output": "changed an output", "remove_output": "removed an output"}
 
 
 def _chip(block: dict) -> dict:
@@ -612,6 +649,8 @@ def _chip(block: dict) -> dict:
         "connect_steps": lambda: f"{a.get('from_step')} → {a.get('to_step')}",
         "disconnect_steps": lambda: f"{a.get('from_step')} ✕ {a.get('to_step')}",
         "set_load_mapping": lambda: ", ".join(f"{v or 'nothing'} → {k}" for k, v in (a.get("mapping") or {}).items()),
+        "set_write": lambda: " · ".join(str(x) for x in (a.get("table"), a.get("mode"),
+                                                          " + ".join(a.get("key") or []) or None) if x),
     }.get(block.get("name"), lambda: "")()
     return {"id": block.get("id"), "tool": block.get("name"), "label": TOOL_LABELS.get(block.get("name"), block.get("name")),
             "detail": _short(detail or "", 160)}

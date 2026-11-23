@@ -133,7 +133,8 @@ function StatusCard({ view, state, handlers }) {
 
   const items = [];
   if (state === "published") {
-    items.push(<Check key="b" ok>Blocks stay on the version they were analysed with until they’re re-run</Check>);
+    items.push(<Check key="b" ok>{view.write ? <>Written to <code>{view.write.table}</code> in Supabase</>
+      : "Blocks stay on the version they were analysed with until they’re re-run"}</Check>);
     if (overrides) items.push(<Check key="o" ok>Your {overrides} override{overrides > 1 ? "s are" : " is"} kept and re-applied on every run</Check>);
   } else if (state !== "none") {
     if (state === "blocked") {
@@ -164,6 +165,7 @@ function StatusCard({ view, state, handlers }) {
       <div className="pub-status-note">
         {state === "published" ? "Run again to pick up changes. The next run stops here and waits for your review."
           : state === "blocked" ? "Fix the items above, then run again. Approve unlocks once every check passes."
+          : view.write ? `A run never publishes. Nothing is written to ${view.write.table} until you approve it here.`
           : `A run never publishes. Nothing reaches the ${kind.toLowerCase()} ${view.kind === "zoning" ? "data" : "catalogue"} or the blocks until you approve it here.`}
       </div>
       {state === "ready" && review?.since && <ChangeList review={review} kind={kind} />}
@@ -541,9 +543,34 @@ function ZoningDiff({ diff }) {
   );
 }
 
+// What a general publish would do to each output's table.
+function GeneralDiff({ diff }) {
+  return (
+    <div className="pl-diff">
+      {diff.problems?.length > 0 && (
+        <div className="banner err">Publishing is refused until these are fixed:
+          <ul>{diff.problems.map((p, i) => <li key={i}>{p}</li>)}</ul></div>
+      )}
+      {diff.tables.map((t) => (
+        <div key={t.output}>
+          <div><code>{t.table}</code> ({t.exists ? `${t.rows_now} row(s) now` : "new table"}, {t.mode} by {t.key.join(" + ")}):{" "}
+            <b>{t.added_count}</b> new · <b>{t.changed_count}</b> changed · <b>{t.unchanged}</b> unchanged
+            {t.mode === "replace" ? <> · <b>{t.removed_count}</b> removed</> : null}{t.kept > 0 ? ` · ${t.kept} other row(s) kept` : ""}</div>
+          {t.exists && t.new_columns.length > 0 && <div className="assess">New columns: {t.new_columns.join(", ")}</div>}
+          {t.changed.length > 0 && <div className="assess">Changed: {t.changed.slice(0, 8).map((c) => `${c.key} (${c.fields.join(", ")})`).join("; ")}{t.changed_count > 8 ? " …" : ""}</div>}
+          {t.removed.length > 0 && <div className="assess">Removed: {t.removed.slice(0, 8).join("; ")}{t.removed_count > 8 ? " …" : ""}</div>}
+        </div>
+      ))}
+      <div className="assess">{diff.note}</div>
+    </div>
+  );
+}
+
 function PublishDialog({ view, act, disabled, onClose }) {
   const kind = view.kind_label;
   const zoningKind = view.kind === "zoning";
+  const generalKind = view.kind === "general";
+  const tables = outputList(view).map((o) => (isMulti(view) ? o.write : view.write)?.table).filter(Boolean);
   const slug = (view.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
   const [name, setName] = useState(`${slug || "pipeline"}_v${(view.loads?.length || 0) + 1}`);
   const [by, setBy] = useState(() => pref("pl.publisher", ""));
@@ -569,14 +596,17 @@ function PublishDialog({ view, act, disabled, onClose }) {
           <button className="link" onClick={onClose} aria-label="Close">✕</button></div>
         <div className="pub-dialog-body">
           <div>Publishes <b>{records} records</b>{review ? ` (${changeText(review)})` : ""}{isMulti(view) ? ` from ${outputList(view).map((o) => o.name).join(", ")}` : ""}
-            {" "}into the {kind.toLowerCase()} {zoningKind ? "data in force" : "catalogue"} as a new, numbered version.
-            Blocks stay on the version they were analysed with until they’re re-run.</div>
+            {generalKind ? <> to {tables.map((t, i) => <Fragment key={t}>{i > 0 && ", "}<code>{t}</code></Fragment>)} in Supabase,
+              and keeps a copy as a new, numbered version.</>
+              : <>{" "}into the {kind.toLowerCase()} {zoningKind ? "data in force" : "catalogue"} as a new, numbered version.
+                Blocks stay on the version they were analysed with until they’re re-run.</>}</div>
           <label><span>Version name</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label><span>Approved by</span><input value={by} placeholder="Your name" onChange={(e) => setBy(e.target.value)} /></label>
-          <button className="link" onClick={compare} disabled={disabled}>Compare with the whole {zoningKind ? "zoning data" : "catalogue"} first</button>
+          <button className="link" onClick={compare} disabled={disabled}>Compare with {generalKind ? "what the table holds now" : `the whole ${zoningKind ? "zoning data" : "catalogue"}`} first</button>
           {diffError && <div className="banner err">{diffError}</div>}
           {diff && zoningKind && <ZoningDiff diff={diff} />}
-          {diff && !zoningKind && (
+          {diff && generalKind && <GeneralDiff diff={diff} />}
+          {diff && !zoningKind && !generalKind && (
             <div className="pl-diff">
               <div>Against {diff.base_version ? `${kind} v${diff.base_version.version}` : "an empty catalogue"} ({diff.catalogue_size} programme(s)):{" "}
                 <b>{diff.added.length}</b> new · <b>{diff.changed.length}</b> changed · <b>{diff.unchanged}</b> unchanged</div>

@@ -1132,6 +1132,13 @@ main.view.pl-view {
 .pl-loadmap-table select { max-width: 11rem; font-size: .8rem; }
 .pl-loadmap-table tr.pl-bad td:first-child code { color: var(--red); }
 .pl-req { color: var(--orange); font-size: .72rem; }
+.pl-write { display: flex; flex-direction: column; gap: .45rem; font-size: .82rem; }
+.pl-write-row { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .6rem; }
+.pl-write-row > span:first-child { width: 2.6rem; color: var(--muted); font-weight: 600; }
+.pl-write-row input { flex: 1 1 10rem; min-width: 0; font-family: var(--mono, monospace); font-size: .8rem; }
+.pl-write-row .pl-checks { flex: 1 1 10rem; }
+.pl-rejected { margin-top: .5rem; font-size: .82rem; }
+.pl-rejected li { margin: .2rem 0; }
 .pl-loadmap-wrap { margin-top: .6rem; font-size: .85rem; }
 .pl-loadmap-wrap > summary { cursor: pointer; color: var(--muted); margin-bottom: .4rem; }
 .pl-details .pl-loadmap-table td:last-child { display: none; }

@@ -88,7 +88,7 @@ export default function SourceDialog({ view, act, at, onClose, onAdded }) {
             )}
             {tab === "file" && (
               <label className="pl-form-row"><span className="pl-form-label">Files</span>
-                <input type="file" multiple accept=".txt,.csv,.pdf" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+                <input type="file" multiple accept=".txt,.csv,.pdf,.json,.md" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
                 <span className="assess">.pdf, .csv or .txt; each becomes a source.</span></label>
             )}
             {tab !== "file" && (

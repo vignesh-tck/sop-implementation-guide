@@ -38,7 +38,7 @@ from backend.pipelines.engine import PipelineError
 
 MAIN = "output"
 # What each output keeps for itself; everything else in a definition is shared.
-OWN = ("target", "name", "schema", "output_from", "load_map", "overrides", "record_review")
+OWN = ("target", "name", "schema", "output_from", "load_map", "overrides", "record_review", "write")
 # Never part of an output's view: the draft and proposal are edited whole.
 SHARED_ONLY = ("outputs", "draft", "proposal", "layout")
 

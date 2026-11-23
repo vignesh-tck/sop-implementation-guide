@@ -15,6 +15,9 @@ Zoning has three targets (block zones, use permissions, recommendation
 readings), one output each, and publishes them together as one Zoning version
 (zoning_load.py). Its steps look things up rather than ask a model
 (zoning_steps.py, imported here so they are registered with the engine).
+
+General has a free schema and writes each output to a table of its own
+(general.py, also imported here to register its step and table provider).
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from datetime import datetime, timezone
 
 from supabase import Client
 
-from backend.pipelines import engine, zoning_load, zoning_steps  # noqa: F401 — zoning_steps registers its steps
+from backend.pipelines import engine, general, zoning_load, zoning_steps  # noqa: F401 — they register their steps
 from backend.repositories.datasets import DatasetRecordRepository
 from backend.repositories.funding_programs import _jsonable
 from backend.tools import datasets
@@ -178,6 +181,17 @@ KINDS = {
         "guidance": ZONING_GUIDANCE,
         "intro": ZONING_INTRO,
         "targets": zoning_load.TARGETS,
+    },
+    "general": {
+        "label": "General",
+        "available": True,
+        "guidance": general.GUIDANCE,
+        "intro": general.INTRO,
+        "targets": general.TARGETS,
+        # Several outputs may load into the one target, each its own table; a pipeline may read tables only.
+        "many_outputs": True,
+        "sources_optional": True,
+        "source_kinds": ["url"],
     },
 }
 
@@ -447,6 +461,8 @@ def diff(kind: str, db: Client, pipeline: dict, parts: list[dict]) -> dict:
         return funding_diff(db, {**pipeline, "definition": part["definition"]}, part["records"], part["fields"])
     if kind == "zoning":
         return zoning_load.diff(db, pipeline, _with_columns(kind, parts))
+    if kind == "general":
+        return general.diff(db, pipeline, parts)
     raise ValueError(f"{kind} pipelines cannot be loaded yet")
 
 
@@ -458,4 +474,6 @@ def load(kind: str, db: Client, pipeline: dict, parts: list[dict], name: str | N
                             name, created_by, definition_version)
     if kind == "zoning":
         return zoning_load.load(db, pipeline, _with_columns(kind, parts), name, created_by, definition_version)
+    if kind == "general":
+        return general.load(db, pipeline, parts, name, created_by, definition_version)
     raise ValueError(f"{kind} pipelines cannot be loaded yet")

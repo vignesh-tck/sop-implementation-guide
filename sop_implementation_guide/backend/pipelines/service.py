@@ -17,9 +17,10 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
+from postgrest.exceptions import APIError
 from supabase import Client
 
-from backend.pipelines import engine, graph, jobs, kinds, outputs, zoning_steps
+from backend.pipelines import engine, general, graph, jobs, kinds, outputs, zoning_steps
 from backend.pipelines.engine import PipelineError
 from backend.repositories.pipelines import (
     PipelineMessageRepository,
@@ -432,11 +433,16 @@ def create(db: Client, kind: str, name: str, created_by: str | None) -> dict:
     if len(s["targets"]) > 1:   # a kind with several outputs names the first after what it loads into
         first = next(iter(s["targets"]))
         definition.update(target=first, name=s["targets"][first]["label"])
-    p = PipelineRepository(db).create({
-        "kind": kind, "name": (name or "").strip() or f"New {s['label'].lower()} pipeline",
-        "definition": definition,
-        "state": {}, "created_by": (created_by or "").strip() or None,
-    })
+    try:
+        p = PipelineRepository(db).create({
+            "kind": kind, "name": (name or "").strip() or f"New {s['label'].lower()} pipeline",
+            "definition": definition,
+            "state": {}, "created_by": (created_by or "").strip() or None,
+        })
+    except APIError as e:
+        if kind == general.KIND and getattr(e, "code", None) == "23514":   # the kind check predates general pipelines
+            raise PipelineError(general.MIGRATION) from e
+        raise
     # The opening message is shown, not sent: the model gets the same guidance in its system prompt.
     event(db, p["id"], s["intro"], level="intro")
     return p
@@ -677,7 +683,7 @@ def finalize_sources(db: Client, pipeline_id: int) -> dict:
         raise PipelineError("Approve the target schema first: the fields decide what to look for in the sources."
                             + (" Every output's schema needs approving." if outputs.multi(p["definition"]) else ""))
     sources = p["definition"]["sources"]
-    if not sources:
+    if not sources and not kinds.spec(p["kind"]).get("sources_optional"):
         raise PipelineError("Add at least one source first.")
     meta = p["state"].get("sources") or {}
     bad = [s["id"] for s in sources if (meta.get(s["id"]) or {}).get("error")]
@@ -685,7 +691,8 @@ def finalize_sources(db: Client, pipeline_id: int) -> dict:
         raise PipelineError(f"{', '.join(bad)} could not be read: remove or replace {'it' if len(bad) == 1 else 'them'} first.")
     p["definition"]["sources_status"] = "final"
     _save(db, p)
-    event(db, pipeline_id, f"You marked the {len(sources)} source(s) as final.")
+    event(db, pipeline_id, f"You marked the {len(sources)} source(s) as final." if sources
+          else "You marked the sources final with none: the pipeline reads our tables only.")
     return p["definition"]
 
 
@@ -1146,12 +1153,14 @@ def add_output(db: Client, pipeline_id: int, target: str, name: str | None = Non
     if target not in targets:
         raise PipelineError(f"{target!r} is not something a {kinds.spec(p['kind'])['label'].lower()} output can load into; "
                             f"the targets are {', '.join(targets)}.")
+    many = kinds.spec(p["kind"]).get("many_outputs")
     used = {kinds.target_id(p["kind"], outputs.project(d, oid)) for oid in outputs.ids(d)}
-    if target in used:
+    if target in used and not many:
         raise PipelineError(f"An output already loads into {targets[target]['label']}.")
     _wire_explicitly(d)
     oid = _next_id([{"id": "o1"}] + outputs.extras(d), "o")
-    entry = {"id": oid, "target": target, "name": (name or "").strip() or targets[target]["label"],
+    entry = {"id": oid, "target": target,
+             "name": (name or "").strip() or (f"Output {oid[1:]}" if many else targets[target]["label"]),
              "schema": {"status": None, "fields": []}, "output_from": []}
     d.setdefault("outputs", []).append(entry)
     if d.get("draft") is not None:
@@ -1176,7 +1185,8 @@ def update_output(db: Client, pipeline_id: int, output: str, name: str | None = 
             raise PipelineError(f"{target!r} is not a target; they are {', '.join(targets)}.")
         if (e.get("schema") or {}).get("status") == "approved":
             raise PipelineError("Change what an output loads into before approving its schema.")
-        if any(kinds.target_id(p["kind"], outputs.project(d, o)) == target for o in outputs.ids(d) if o != output):
+        if not kinds.spec(p["kind"]).get("many_outputs") and any(
+                kinds.target_id(p["kind"], outputs.project(d, o)) == target for o in outputs.ids(d) if o != output):
             raise PipelineError(f"An output already loads into {targets[target]['label']}.")
         old = kinds.target_id(p["kind"], outputs.project(d, output))
         if not e.get("name") or e.get("name") == (targets.get(old) or {}).get("label"):
@@ -1445,8 +1455,60 @@ def gate(p: dict, output: str | None = None) -> list[str]:
     po = _out(p, output) if "_scope" not in p else p
     last = po["state"].get("last_run") or {}
     records = last.get("records") if last and not last.get("upto") else None
-    return (engine.load_gate(po["definition"], po["state"], [])
-            + kinds.load_problems(po["kind"], po["definition"], records))
+    spec = kinds.spec(po["kind"])
+    out = (engine.load_gate(po["definition"], po["state"], [], sources_optional=bool(spec.get("sources_optional")))
+           + kinds.load_problems(po["kind"], po["definition"], records))
+    if po["kind"] == general.KIND:
+        out += general.write_problems(_write(po), _fields(po), records, _tables_taken(po))
+    return out
+
+
+# ── Where a general pipeline's output is written ─────────────────────────────
+
+def _scope_of(po: dict) -> tuple[dict, str]:
+    """(the whole pipeline, the output id) of a pipeline or one output's view of it."""
+    return po["_scope"] if "_scope" in po else (po, outputs.MAIN)
+
+
+def _write(po: dict) -> dict:
+    """The write settings in force for one output (general pipelines): table, mode, key."""
+    real, oid = _scope_of(po)
+    return general.resolve_write(po["definition"].get("write"), _fields(po), real, oid,
+                                 outputs.label(real["definition"], oid))
+
+
+def _tables_taken(po: dict) -> list[str]:
+    """The tables the pipeline's other outputs write."""
+    real, oid = _scope_of(po)
+    return [_write(_out(real, o))["table"] for o in outputs.ids(real["definition"]) if o != oid]
+
+
+def set_write(db: Client, pipeline_id: int, table: str | None = None, mode: str | None = None,
+              key: list[str] | None = None, by_user: bool = False, output: str | None = None) -> dict:
+    """
+    Where a general pipeline's output is written: the gp_ table, merge or
+    replace, and the key fields. Read at publish only, so it resets no step.
+    """
+    p = _out(get(db, pipeline_id), output)
+    if p["kind"] != general.KIND:
+        raise PipelineError("Only general pipelines write to a table of their own.")
+    clean = general.clean_write(table, mode, key, _fields(p), _write(p))
+    if clean["table"] in _tables_taken(p):
+        raise PipelineError(f"Another output of this pipeline writes {clean['table']}: give each output its own table.")
+    p["definition"]["write"] = clean
+    _save(db, p)
+    event(db, pipeline_id, f"{_who(by_user)} set where the output{_out_name(p)} is written: {clean['table']} "
+          f"({clean['mode']}, key {' + '.join(clean['key']) or 'none'}).")
+    return _write(p)
+
+
+def write_view(po: dict) -> dict | None:
+    """The Output node's "Writes to" panel (general pipelines), else None."""
+    if po["kind"] != general.KIND:
+        return None
+    last = po["state"].get("last_run") or {}
+    records = last.get("records") if last and not last.get("upto") else None
+    return general.write_view(_write(po), _fields(po), records, _tables_taken(po))
 
 
 def _parts(p: dict) -> list[dict]:
@@ -1456,7 +1518,9 @@ def _parts(p: dict) -> list[dict]:
         po = _out(p, oid)
         last = po["state"].get("last_run") or {}
         parts.append({"output": oid, "target": kinds.target_id(p["kind"], po["definition"]),
-                      "definition": po["definition"], "records": last.get("records") or [], "fields": _fields(po)})
+                      "name": outputs.label(p["definition"], oid),
+                      "definition": po["definition"], "records": last.get("records") or [], "fields": _fields(po),
+                      **({"write": _write(po)} if p["kind"] == general.KIND else {})})
     return parts
 
 
@@ -1502,7 +1566,7 @@ def load(db: Client, pipeline_id: int, name: str | None, created_by: str | None)
                                                 **({"definition_version": def_version} if changed else {})})
     label = f"{kinds.spec(p['kind'])['label']} v{v['version']}" + (f" “{v['name']}”" if v.get("name") else "")
     event(db, pipeline_id, f"You approved the output: published {result['written']} record(s) as {label} (pipeline def v{def_version}). "
-                           "Blocks stay on their analysed version until re-run.", level="ok")
+                           + (result.get("note") or "Blocks stay on their analysed version until re-run."), level="ok")
     return {"written": result["written"], "dataset_version": v, "definition_version": def_version, "diff": diff}
 
 
@@ -1514,7 +1578,7 @@ def reference_rows(db: Client):
 
     def rows(table: str) -> list[dict]:
         if table not in loaded:
-            ref = engine.REF_TABLES[table]
+            ref = engine.ref_spec(table)
             cols = ref["columns"]
             try:
                 if ref.get("rows"):   # data on file that is not a plain table (zoning_steps.ON_FILE)
@@ -1590,7 +1654,7 @@ def _prompts(p: dict) -> dict:
         fields = outputs.step_fields(p["definition"], st["id"])
         if st["type"] in engine.EDITABLE and fields:
             try:
-                out[st["id"]] = engine.prompt_view(st, fields, p["definition"].get("goal") or p["name"])
+                out[st["id"]] = engine.prompt_view(st, fields, p["definition"].get("goal") or p["name"], p["kind"])
             except PipelineError as e:
                 out[st["id"]] = {"error": str(e)}
     return out
@@ -1677,7 +1741,7 @@ def _output_view(p: dict, oid: str) -> dict:
         "last_records": (last or {}).get("records", [])[:engine.PREVIEW_RECORDS],
         "gate": gate(po), "output_locked": output_locked(po), "design_gaps": engine.design_gaps(po["definition"]),
         "overrides": po["definition"].get("overrides"), "review_marks": review_marks(po),
-        "load_map": view_load_map(po), "has_defaults": bool(t["default_fields"]),
+        "load_map": view_load_map(po), "has_defaults": bool(t["default_fields"]), "write": write_view(po),
     }
 
 
@@ -1715,6 +1779,10 @@ def view(db: Client, pipeline_id: int) -> dict[str, Any]:
                        for k, v in engine.ref_tables(p["kind"]).items()},
         "source_tables": _source_tables(p),
         "load_map": view_load_map(main),
+        "write": write_view(main),
+        "has_defaults": bool(kinds.target_spec(p["kind"], main["definition"])["default_fields"]),
+        "many_outputs": bool(s.get("many_outputs")),
+        "sources_optional": bool(s.get("sources_optional")),
         "sql_types": engine.SQL_TYPES,
         "catalog": {k: {"label": v["label"], "description": v["description"], "model": v["model"], "config": v["config"]}
                     for k, v in engine.catalog_for(p["kind"]).items()},

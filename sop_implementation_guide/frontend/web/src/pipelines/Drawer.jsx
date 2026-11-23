@@ -117,7 +117,7 @@ export function AgentTab({ view, act, disabled, compose, context, contextLabel, 
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
           <div className="ws-compose-row">
             <label className={"pl-attach" + (busy || uploading ? " disabled" : "")} title="Upload .pdf, .csv or .txt as a source">
-              <input type="file" multiple accept=".txt,.csv,.pdf" onChange={attach} disabled={busy || uploading} />
+              <input type="file" multiple accept=".txt,.csv,.pdf,.json,.md" onChange={attach} disabled={busy || uploading} />
               {uploading ? "Uploading…" : "Attach"}
             </label>
             <span className="spacer" />

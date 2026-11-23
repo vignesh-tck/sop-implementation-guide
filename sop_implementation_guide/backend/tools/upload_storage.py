@@ -20,7 +20,10 @@ from backend.db.session import get_supabase
 
 BUCKET = "discovery-uploads"
 
-ALLOWED_EXT = {".txt": "text/plain", ".csv": "text/csv", ".pdf": "application/pdf"}
+# JSON and Markdown are stored as plain text, so they are read exactly as written
+# (and quotes from them check against the same text).
+ALLOWED_EXT = {".txt": "text/plain", ".csv": "text/csv", ".pdf": "application/pdf",
+               ".json": "text/plain", ".md": "text/plain"}
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 
@@ -33,7 +36,7 @@ def store(filename: str, content: bytes) -> str:
     """
     ext = Path(filename or "").suffix.lower()
     if ext not in ALLOWED_EXT:
-        raise ValueError(f"unsupported file type {ext or '(none)'} — allowed: .txt, .csv, .pdf")
+        raise ValueError(f"unsupported file type {ext or '(none)'} — allowed: {', '.join(ALLOWED_EXT)}")
     if len(content) > MAX_UPLOAD_BYTES:
         raise ValueError(f"file too large ({len(content)} bytes, max {MAX_UPLOAD_BYTES})")
 

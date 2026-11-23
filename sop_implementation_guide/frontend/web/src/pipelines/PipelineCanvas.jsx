@@ -65,6 +65,7 @@ function stepSummary(s, linked = false) {
     case "geo_tie": return `fills ${c.field || "geo_scope"}`;
     case "sql": return c.tables?.length && !linked ? `joins ${c.tables.join(", ")}` : cut((c.query || "").replace(/\s+/g, " "), 30);
     case "from_table": return `from ${c.table || "?"}`;
+    case "read_table": return `table ${c.table || "?"}`;
     case "spatial_lookup": return `${c.field || "?"} → ${c.writes || "?"}${c.layers?.length ? ` · layer${c.layers.length > 1 ? "s" : ""} ${c.layers.join(", ")}` : ""}`;
     case "use_table": return c.source_id && !linked ? `from ${c.source_id}` : "use tables";
     default: return "";
@@ -216,8 +217,15 @@ function parseRuns(model) {
   return runs;
 }
 
-// "+ Output": add an Output node loading into a target no output uses yet.
+// "+ Output": add an Output node loading into a target no output uses yet,
+// or, for a kind whose outputs each write a table of their own, another one.
 function AddOutput({ view, disabled, send }) {
+  if (view.many_outputs) {
+    return (
+      <button className="pl-toolbar-select" disabled={disabled} title="Add an output with its own schema, written to a table of its own"
+              onClick={() => send("POST", "/outputs", { target: view.targets?.[0]?.id })}>+ Output</button>
+    );
+  }
   const used = new Set(outputList(view).map((o) => o.target));
   const free = (view.targets || []).filter((t) => !used.has(t.id));
   if (!free.length) return null;
@@ -870,7 +878,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
                 title={d.sources_status === "final" ? "Goes into the draft; wire it to an Extract step" : "Fetched and added now"}>+ Source</button>
         <button disabled={disabled || !canDesign} onClick={() => addAt({ connect: true })}
                 title={canDesign ? (inDraft ? `Add a step at the end, feeding ${outName("output")}` : "Opens a draft") : designWhy}>+ Step</button>
-        {(view.targets || []).length > 1 && <AddOutput view={view} disabled={disabled} send={send} />}
+        {((view.targets || []).length > 1 || view.many_outputs) && <AddOutput view={view} disabled={disabled} send={send} />}
         <span className="pl-toolbar-sep" />
         <button title={Object.keys(layout).length ? "Lay the whole pipeline out again, undoing nodes you moved" : "Already laid out: nothing has been moved"}
                 disabled={!Object.keys(layout).length} onClick={tidy}>Tidy</button>

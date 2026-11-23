@@ -36,6 +36,7 @@ function initial(type, fields) {
                                     buffer_m: 25, block_field: fields.find((f) => f.name === "block_id")?.name || first,
                                     ...(fields.some((f) => f.name === "lookup_status") ? { status_field: "lookup_status" } : {}) };
     case "use_table": return {};
+    case "read_table": return { table: "blocks" };
     default: return {};
   }
 }
@@ -433,6 +434,48 @@ function ConfigForm({ type, c, set, fields, sources, refTables, srcTables, sqlTy
           <div className="assess">Fields named like a column are filled: use, use_group, use_category, standards, amended_through, and zone_&lt;code&gt; (zone_tac_c …).</div>
         </>
       );
+    case "read_table": {
+      // Our Supabase tables, as the SQL step names them (db.<table>).
+      const dbTables = Object.fromEntries(Object.entries(refTables || {}).filter(([k]) => k.startsWith("db."))
+        .map(([k, r]) => [k.slice(3), r]));
+      const cols = Object.keys(dbTables[c.table]?.columns || {});
+      const map = c.fields || {};
+      return (
+        <>
+          <Row label="Table" hint="One record per row, read only. Filter or join rows in a SQL step after it.">
+            <select value={c.table || ""} onChange={(e) => set({ ...c, table: e.target.value, fields: null })}>
+              {Object.keys(dbTables).map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </Row>
+          <Row label="Fields from columns" hint="A field named like a column fills itself; pick a column for the others.">
+            <table className="pl-loadmap-table">
+              <tbody>
+                {fields.map((f) => {
+                  const auto = !(f.name in map) && cols.includes(f.name);
+                  return (
+                    <tr key={f.name}>
+                      <td><code>{f.name}</code></td>
+                      <td>
+                        <select value={map[f.name] || (auto ? f.name : "")} aria-label={`Column for ${f.name}`}
+                                onChange={(e) => {
+                                  const next = { ...map };
+                                  if (e.target.value) next[f.name] = e.target.value; else delete next[f.name];
+                                  put("fields", Object.keys(next).length ? next : null);
+                                }}>
+                          <option value="">none</option>
+                          {cols.map((col) => <option key={col} value={col}>{col}</option>)}
+                        </select>
+                        {auto && <span className="tag"> same name</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Row>
+        </>
+      );
+    }
     default:
       return <div className="assess">No settings.</div>;
   }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import LoadMap from "./LoadMap.jsx";
+import WriteTarget from "./WriteTarget.jsx";
 import Schema from "./Schema.jsx";
 import StepPorts, { DraftPorts } from "./StepPorts.jsx";
 import { ancestorsOf, isMulti, nodeOutput, outputAct, outputList, outputView, stepView, stepsModel } from "./ports.js";
@@ -273,7 +274,7 @@ function OutputInspector({ view: whole, act: wholeAct, oid, disabled, model, onC
     <>
       <div className="ins-head">
         <div className="ins-tags"><code className="pl-id">{oid === "output" ? "out" : oid}</code><span className="ins-kind rule">Output</span>
-          {multi && view.target_label && <span className="ins-badge">{`loads into ${view.target_label}`}</span>}</div>
+          {multi && view.target_label && <span className="ins-badge">{view.write ? `writes ${view.write.table}` : `loads into ${view.target_label}`}</span>}</div>
         <button className="link" onClick={onClose} aria-label="Close">✕</button>
       </div>
       <h3 className="ins-title">{multi || (whole.targets || []).length > 1 ? outputList(whole).find((o) => o.id === oid)?.name || "Output" : "Output"}</h3>
@@ -309,6 +310,7 @@ function OutputInspector({ view: whole, act: wholeAct, oid, disabled, model, onC
         <Section title="Publishing">{view.gate?.length ? <ul className="pl-warn-list">{view.gate.map((g, k) => <li key={k}>{g}</li>)}</ul>
           : multi ? "This output is ready for review." : "Ready for review."}</Section>
         {view.load_map && <Section title="Catalogue mapping"><LoadMap view={view} act={act} disabled={disabled} /></Section>}
+        {view.write && <Section title="Writes to"><WriteTarget view={view} act={act} disabled={disabled} /></Section>}
       </div>
       <div className="ins-foot">
         <button disabled={disabled || !(view.definition.steps || []).length} onClick={() => wholeAct("POST", "/run", {})}>Run the whole pipeline</button>

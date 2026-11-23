@@ -98,7 +98,7 @@ def list_pipelines(kind: Optional[str] = None, db: Client = Depends(get_supabase
 
 
 class CreatePipeline(BaseModel):
-    kind: Literal["funding", "zoning"]
+    kind: Literal["funding", "zoning", "general"]
     name: Optional[str] = None
     created_by: Optional[str] = None
 
@@ -480,6 +480,20 @@ def set_load_map(pipeline_id: int, body: LoadMap, output: Optional[str] = None, 
     """How the output's fields map onto the catalogue's columns at Load. Resets no step."""
     _idle(db, pipeline_id)
     _call(lambda: service.set_load_map(db, pipeline_id, body.mapping, by_user=True, output=output))
+    return _view(db, pipeline_id)
+
+
+class WriteTarget(BaseModel):
+    table: Optional[str] = None         # gp_<name>
+    mode: Optional[Literal["merge", "replace"]] = None
+    key: Optional[list[str]] = None     # schema fields
+
+
+@router.put("/{pipeline_id}/write")
+def set_write(pipeline_id: int, body: WriteTarget, output: Optional[str] = None, db: Client = Depends(get_supabase)):
+    """Where a general pipeline's output is written at publish: its gp_ table, mode and key. Resets no step."""
+    _idle(db, pipeline_id)
+    _call(lambda: service.set_write(db, pipeline_id, body.table, body.mode, body.key, by_user=True, output=output))
     return _view(db, pipeline_id)
 
 

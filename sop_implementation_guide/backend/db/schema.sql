@@ -497,7 +497,7 @@ ALTER TABLE zoning_data_versions ADD COLUMN IF NOT EXISTS rules JSONB;
 
 CREATE TABLE IF NOT EXISTS dataset_versions (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    kind          TEXT NOT NULL CHECK (kind IN ('funding', 'zoning')),
+    kind          TEXT NOT NULL CHECK (kind IN ('funding', 'zoning', 'general')),
     version       INT NOT NULL,
     name          TEXT,                -- optional, e.g. "Nov 18 MD + federal"
     note          TEXT,
@@ -593,7 +593,7 @@ ALTER TABLE block_implementation_profiles
 
 CREATE TABLE IF NOT EXISTS pipelines (
     id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    kind                TEXT NOT NULL CHECK (kind IN ('funding', 'zoning')),
+    kind                TEXT NOT NULL CHECK (kind IN ('funding', 'zoning', 'general')),
     name                TEXT NOT NULL,
     -- {schema: {status, fields: [...]}, sources: [...], steps: [...]}
     definition          JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -639,3 +639,124 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline ON pipeline_runs(pipeline_id, id DESC);
+
+
+-- =============================================================
+-- GENERAL PIPELINES  (added Nov 2026)
+--
+-- A general pipeline has a free schema and writes each output into a table of
+-- its own, named gp_<name>, never into the app's tables. It writes only
+-- through gp_publish below, which runs every output of one publish in one
+-- transaction: it creates the table (or adds the columns a new field needs),
+-- optionally deletes this pipeline's earlier rows (mode replace), then
+-- inserts the rows, updating any with the same _key (mode merge).
+--
+-- Run this whole section once in the Supabase SQL editor. It is safe to run
+-- again.
+-- =============================================================
+
+-- Allow the 'general' kind on databases created before it existed. Any CHECK
+-- on kind is replaced, whatever it was named.
+DO $$
+DECLARE c record;
+BEGIN
+    FOR c IN SELECT conrelid::regclass AS tbl, conname FROM pg_constraint
+             WHERE contype = 'c'
+               AND conrelid IN ('pipelines'::regclass, 'dataset_versions'::regclass)
+               AND pg_get_constraintdef(oid) LIKE '%kind%'
+    LOOP
+        EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', c.tbl, c.conname);
+    END LOOP;
+END $$;
+ALTER TABLE pipelines
+    ADD CONSTRAINT pipelines_kind_check CHECK (kind IN ('funding', 'zoning', 'general'));
+ALTER TABLE dataset_versions
+    ADD CONSTRAINT dataset_versions_kind_check CHECK (kind IN ('funding', 'zoning', 'general'));
+
+-- p_writes: [{table, replace, columns: [{name, type}], rows: [{column: value}]}].
+-- Every row carries the same keys, including _key, _pipeline_id, _record_id,
+-- _source_url, _evidence and _published_at.
+-- Returns one {table, created, added_columns, deleted, written} per write.
+CREATE OR REPLACE FUNCTION gp_publish(p_writes JSONB, p_pipeline_id BIGINT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    w JSONB;
+    col JSONB;
+    t TEXT;
+    cols TEXT;
+    sets TEXT;
+    created BOOLEAN;
+    added TEXT[];
+    deleted INT;
+    written INT;
+    result JSONB := '[]'::jsonb;
+BEGIN
+    FOR w IN SELECT * FROM jsonb_array_elements(p_writes) LOOP
+        t := w->>'table';
+        IF t IS NULL OR t !~ '^gp_[a-z][a-z0-9_]{0,50}$' THEN
+            RAISE EXCEPTION 'General pipelines write only to tables named gp_<lower_snake_case>, not %', t;
+        END IF;
+
+        created := to_regclass(format('public.%I', t)) IS NULL;
+        IF created THEN
+            EXECUTE format('CREATE TABLE public.%I (
+                _key          TEXT PRIMARY KEY,
+                _pipeline_id  BIGINT,
+                _record_id    TEXT,
+                _source_url   TEXT,
+                _evidence     JSONB,
+                _published_at TIMESTAMPTZ DEFAULT NOW())', t);
+            -- Read and written by the backend (service role) only, not with the public key.
+            EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+        END IF;
+
+        added := '{}';
+        FOR col IN SELECT * FROM jsonb_array_elements(COALESCE(w->'columns', '[]'::jsonb)) LOOP
+            IF (col->>'name') !~ '^[a-z][a-z0-9_]{0,40}$' THEN
+                RAISE EXCEPTION 'Column name % must be lower_snake_case', col->>'name';
+            END IF;
+            IF (col->>'type') NOT IN ('text', 'double precision', 'date', 'boolean') THEN
+                RAISE EXCEPTION 'Column type % is not one a general pipeline writes', col->>'type';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema = 'public' AND table_name = t AND column_name = col->>'name') THEN
+                EXECUTE format('ALTER TABLE public.%I ADD COLUMN %I %s', t, col->>'name', col->>'type');
+                added := added || (col->>'name');
+            END IF;
+        END LOOP;
+
+        deleted := 0;
+        IF COALESCE((w->>'replace')::boolean, FALSE) THEN
+            EXECUTE format('DELETE FROM public.%I WHERE _pipeline_id = $1', t) USING p_pipeline_id;
+            GET DIAGNOSTICS deleted = ROW_COUNT;
+        END IF;
+
+        written := 0;
+        IF jsonb_array_length(COALESCE(w->'rows', '[]'::jsonb)) > 0 THEN
+            SELECT string_agg(quote_ident(k), ', '),
+                   string_agg(format('%I = EXCLUDED.%I', k, k), ', ') FILTER (WHERE k <> '_key')
+              INTO cols, sets
+              FROM jsonb_object_keys(w->'rows'->0) AS k;
+            EXECUTE format('INSERT INTO public.%I (%s) SELECT %s FROM jsonb_populate_recordset(NULL::public.%I, $1) '
+                           'ON CONFLICT (_key) DO UPDATE SET %s', t, cols, cols, t, sets)
+                USING w->'rows';
+            GET DIAGNOSTICS written = ROW_COUNT;
+        END IF;
+
+        result := result || jsonb_build_object('table', t, 'created', created, 'added_columns', to_jsonb(added),
+                                               'deleted', deleted, 'written', written);
+    END LOOP;
+    -- So the API sees a new table or column at once.
+    NOTIFY pgrst, 'reload schema';
+    RETURN result;
+END;
+$$;
+
+-- The function creates tables, so only the backend's service role may call it.
+REVOKE ALL ON FUNCTION gp_publish(JSONB, BIGINT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gp_publish(JSONB, BIGINT) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION gp_publish(JSONB, BIGINT) TO service_role;

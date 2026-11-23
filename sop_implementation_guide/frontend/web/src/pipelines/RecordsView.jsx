@@ -120,6 +120,16 @@ export default function RecordsView({ view, act, disabled, selected, onSelect, o
             </tbody>
           </table>
         </div>
+        {r.rejected && Object.keys(r.rejected).length > 0 && (
+          <div className="pl-rejected">
+            <div className="assess">Rejected by Extract, which keeps only what the source states word for word:</div>
+            <ul>
+              {Object.entries(r.rejected).map(([name, x]) => (
+                <li key={name}><code>{name}</code> = {short(x.value, 60)} <span className="assess">({x.why}{x.quote ? `; quote: “${short(x.quote, 120)}”` : ""})</span></li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="rv-links">
           {producer && <button className="link" onClick={() => onShowOnCanvas(r.id, open, producer)}>Show {producer} on canvas ↗</button>}
           <button className="link" onClick={() => onAsk(`About record ${r.id} (${recordName(r, fields)}): `)}>Ask the agent about this record</button>

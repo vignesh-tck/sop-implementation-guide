@@ -53,10 +53,11 @@ function DraftBar({ view, act, disabled, onCheck, onAgent, onSelect }) {
       <div className="ws-bar">
         <span className="ws-chip draft">2 · Add sources, then mark them final</span>
         <span className="assess">{!sources.length ? "Use + Source on the canvas, paste URLs to the agent, or attach files."
+            + (view.sources_optional ? " If the pipeline only reads our Supabase tables, mark the sources final with none." : "")
           : unreadable.length ? `${unreadable.join(", ")} could not be read: remove or replace it first.`
           : `${sources.length} source${sources.length > 1 ? "s" : ""}. When they’re complete, the agent looks at each and outlines the steps.`}</span>
-        <button className="primary" disabled={disabled || !sources.length || unreadable.length > 0}
-                onClick={() => act("POST", "/sources/final")}>Sources are final</button>
+        <button className="primary" disabled={disabled || (!sources.length && !view.sources_optional) || unreadable.length > 0}
+                onClick={() => act("POST", "/sources/final")}>{!sources.length && view.sources_optional ? "No sources: tables only" : "Sources are final"}</button>
         {propChip}
       </div>
     );

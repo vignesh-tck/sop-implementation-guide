@@ -208,8 +208,31 @@ def starts(step_type: str) -> bool:
 
 def ref_tables(kind: str | None = None) -> dict[str, dict]:
     """The reference tables a SQL step of this kind may join."""
+    if kind in REF_PROVIDERS:
+        REF_PROVIDERS[kind]()
     return {t: r for t, r in REF_TABLES.items()
             if not r.get("hidden") and (kind is None or kind in r.get("kinds", [kind]))}
+
+
+# Tables read live from the database (a general pipeline's: every Supabase
+# table, general.py) are named "db.<table>" and registered into REF_TABLES by a
+# provider, which refreshes them when asked. In SQL they read as db.<table>.
+DB_PREFIX = "db."
+REF_PROVIDERS: dict[str, Callable[[], None]] = {}
+
+
+def is_ref(t: str) -> bool:
+    """Whether a name in a SQL step's tables is a reference table (else it is a CSV source id)."""
+    return t in REF_TABLES or str(t).startswith(DB_PREFIX)
+
+
+def ref_spec(t: str) -> dict:
+    if t not in REF_TABLES and str(t).startswith(DB_PREFIX):
+        for refresh in REF_PROVIDERS.values():
+            refresh()
+    if t not in REF_TABLES:
+        raise PipelineError(f"There is no table {t[len(DB_PREFIX):] if t.startswith(DB_PREFIX) else t} to read.")
+    return REF_TABLES[t]
 
 
 def catalog_text(kind: str) -> str:
@@ -235,6 +258,9 @@ def validate_fields(fields: list[dict]) -> list[dict]:
         name = (f.get("name") or "").strip()
         if not NAME_RE.match(name):
             raise PipelineError(f"Field name {name!r} must be lower_snake_case.")
+        if name == "id":
+            raise PipelineError("`id` is the record's own id (SQL steps return it): name the field for what it "
+                                "identifies, e.g. block_id or source_id.")
         if name in seen:
             raise PipelineError(f"Field {name!r} appears twice.")
         seen.add(name)
@@ -685,8 +711,65 @@ def _apply_evidence(rec: dict, f: dict, value: Any, quotes: list[str], doc: dict
     return None if check["verified"] else f"{rec['id']}.{f['name']}: quote not found in the source"
 
 
+# ── Extract only ─────────────────────────────────────────────────────────────
+#
+# A kind listed here (general, whose schema and instructions are free) has an
+# Extract step that only extracts. Its prompt (registered by the kind) says the
+# planner's instructions cannot ask for inference or calculation, and a value
+# is kept only when it is in its own quote and the quote is in the source. A
+# value that fails is blanked; the claim is kept on the record under
+# "rejected" for the reviewer. Inference, conversion and judgement are steps
+# of their own (parse, sql, llm_fill), where they are marked as such.
+
+EXTRACT_ONLY: dict[str, str] = {}      # kind -> its extract prompt
+_NUM_RE = re.compile(r"-?\$?\s*\d[\d,]*(?:\.\d+)?\s*(?:%|k|thousand|mm|m|million|b|billion)?\b", re.I)
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{4}/\d{1,2}/\d{1,2}|\d{1,2}/\d{1,2}/\d{2,4}"
+                      r"|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}")
+
+
+def in_quote(f: dict, value: Any, quote: str | None) -> bool:
+    """
+    Whether a value is what its quote says, read literally: text in the quote
+    (case and spacing aside), a number written there (scale words like
+    "million" count, "20%" is 0.2 or 20), a date written there in full. A
+    yes/no field only needs its quote.
+    """
+    if _blank(value):
+        return True
+    if not quote:
+        return False
+    if f["type"] == "boolean":
+        return True
+    q = web_source._norm(quote)
+    if f["type"] in ("number", "money", "percent"):
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return False
+        for m in _NUM_RE.finditer(quote):
+            tok = m.group(0)
+            n = parse_number(tok.replace("-", "").replace("$", ""))
+            if n is None:
+                continue
+            n = -n if tok.lstrip().startswith("-") else n
+            scale = next((s for w, s in _MULT.items() if re.search(rf"\d\s*{w}\b", tok.lower())), 1)
+            cands = {n, n * scale}
+            if "%" in tok or f["type"] == "percent":
+                cands |= {c / 100 for c in cands}
+            if any(abs(c - v) <= 1e-9 * max(1.0, abs(v)) for c in cands):
+                return True
+        return False
+    if f["type"] == "date":
+        want = parse_date(value)
+        return bool(want) and any(parse_date(m.group(0)) == want for m in _DATE_RE.finditer(quote))
+    return web_source._norm(str(value)).strip(" .;:,") in q
+
+
 def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: list[dict],
-             context: str, cache: dict, say: Callable[[str], None] = lambda _m: None) -> tuple[list[dict], list[str]]:
+             context: str, cache: dict, say: Callable[[str], None] = lambda _m: None,
+             kind: str | None = None) -> tuple[list[dict], list[str]]:
+    only = kind in EXTRACT_ONLY
+    prompt = EXTRACT_ONLY[kind] if only else EXTRACT_PROMPT
     ids = step["config"].get("source_ids") or [s["id"] for s in sources]
     readable = [f for f in fields if f.get("extract", True)]
     names = [f["name"] for f in readable]
@@ -700,7 +783,7 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
         "analyst_note": {"type": "string"},
         "confidence": {"type": "number", "description": "0-1."}})
     schema = _obj({"records": {"type": "array", "items": record_schema}})
-    records, warnings, field_warnings = [], [], []
+    records, warnings, field_warnings, rejected = [], [], [], []
     # Every part of every source is read in parallel; records are then assembled in source order.
     plan, jobs = [], {}
     for src in sources:
@@ -710,10 +793,11 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
         parts = _chunks(doc.get("text") or "")
         keys = []
         for i, text in enumerate(parts):
-            key = _hash(["extract2", MODEL, step["config"].get("instructions"), readable, text, context])
+            key = _hash(["extract-only" if only else "extract2", MODEL, step["config"].get("instructions"), readable,
+                         text, context])
             keys.append(key)
             if key not in cache and key not in jobs:
-                jobs[key] = EXTRACT_PROMPT.format(
+                jobs[key] = prompt.format(
                     context=context or "(none given)",
                     instructions=step["config"].get("instructions") or "(no special instructions)",
                     url=doc.get("final_url") or src.get("url"),
@@ -755,6 +839,15 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
                     continue
                 value, warn = _normalise(f, raw.get(f["name"]))
                 w = _apply_evidence(rec, f, value, quotes.get(f["name"], []), doc, step["id"], warn)
+                if only and not _blank(value):
+                    p = rec["prov"].get(f["name"]) or {}
+                    why = ("no quote given" if not p.get("quote") else "its quote is not in the source" if not p.get("verified")
+                           else None if in_quote(f, value, p.get("quote")) else "the value is not what its quote says")
+                    if why:
+                        rec.setdefault("rejected", {})[f["name"]] = {"value": value, "quote": p.get("quote"), "why": why}
+                        _set(rec, f["name"], None, "extracted", step["id"])
+                        rejected.append(f"{rec['id']}.{f['name']} ({why})")
+                        continue
                 if w:
                     field_warnings.append(w)
             records.append(rec)
@@ -765,6 +858,10 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
     if field_warnings:
         warnings.append(f"{len(field_warnings)} value(s) without a confirmed quote: "
                         + "; ".join(field_warnings[:6]) + ("…" if len(field_warnings) > 6 else ""))
+    if rejected:
+        warnings.append(f"{len(rejected)} value(s) rejected and left blank, because Extract only keeps what the source "
+                        "states word for word: " + "; ".join(rejected[:6]) + ("…" if len(rejected) > 6 else "")
+                        + ". Convert or judge values in a step of their own (parse, SQL, model fill).")
     return records, warnings
 
 
@@ -848,8 +945,10 @@ def _url_key(url: str) -> str:
 
 
 def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, context: str,
-              say: Callable[[str], None], source_doc: Callable[[str], dict], dead: dict[str, str]) -> list[str]:
+              say: Callable[[str], None], source_doc: Callable[[str], dict], dead: dict[str, str],
+              only: bool = False) -> list[str]:
     """
+    only: extract only (EXTRACT_ONLY): a value must also be what its quote says.
     source_doc(source_id) gives a source's text as the run already holds it, so
     research follows its links without downloading the source again. dead maps
     linked pages that could not be read to why; they are not retried until a
@@ -1027,7 +1126,8 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
                 value, warn = _normalise(f, raw)
                 if _blank(value) or value == old:
                     continue
-                if not web_source.check_excerpt(v.get("quote"), [doc])["verified"]:
+                if not web_source.check_excerpt(v.get("quote"), [doc])["verified"] or (
+                        only and not in_quote(f, value, v.get("quote"))):
                     discarded += 1
                     continue
                 how = (f"replaced {_short_v(old)!r} with the fuller statement on {page_url}" if not _blank(old)
@@ -1052,7 +1152,8 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
     if conflicts_total:
         warnings.append("Conflicts are listed on each record; the values were not changed. Check them.")
     if discarded:
-        warnings.append(f"{discarded} value(s) discarded because their quote was not found on the page.")
+        warnings.append(f"{discarded} value(s) discarded because their quote was not found on the page"
+                        + (" or the value is not what its quote says." if only else "."))
     if unreadable or skipped:
         listed = "; ".join(f"{u} ({why})" for u, why in {**unreadable, **skipped}.items())
         warnings.append(f"{len(unreadable) + len(skipped)} linked page(s) could not be read. These are links found on "
@@ -1114,7 +1215,7 @@ def _split(text: str) -> dict:
     return {"before": before, "after": after}
 
 
-def prompt_view(step: dict, fields: list[dict], context: str) -> dict | None:
+def prompt_view(step: dict, fields: list[dict], context: str, kind: str | None = None) -> dict | None:
     t, c = step["type"], step.get("config") or {}
     if t not in EDITABLE:
         return None
@@ -1125,7 +1226,10 @@ def prompt_view(step: dict, fields: list[dict], context: str) -> dict | None:
     if t == "extract":
         view["default"] = "(no special instructions)"
         view["prompts"].append({"title": "Read each source (once per part of up to "
-                                         f"{SOURCE_CHARS:,} characters)", **_split(EXTRACT_PROMPT.format(
+                                         f"{SOURCE_CHARS:,} characters)"
+                                         + ("; a value is kept only if it is in its quote and the quote is in the source"
+                                            if kind in EXTRACT_ONLY else ""),
+                                **_split(EXTRACT_ONLY.get(kind, EXTRACT_PROMPT).format(
             context=goal, instructions=_SLOT, url=ph("source URL"), part="",
             text=ph("the source text")))})
     elif t == "research":
@@ -1322,14 +1426,22 @@ def _sql_connect() -> "duckdb.DuckDBPyConnection":
 
 
 def _sql_load(con, name: str, columns: dict[str, str], rows: list[tuple]) -> list[str]:
-    """Create table `name` with typed columns. Values that don't fit the type become NULL, reported."""
+    """
+    Create table `name` with typed columns. Values that don't fit the type
+    become NULL, reported. A dotted name (db.blocks) is a table in a schema.
+    """
     quoted = [f'"{c}"' for c in columns]
     con.execute(f"CREATE TEMP TABLE \"_{name}_text\" ({', '.join(q + ' VARCHAR' for q in quoted)})")
     if rows:
         con.executemany(f"INSERT INTO \"_{name}_text\" VALUES ({', '.join('?' * len(columns))})",
                         [tuple(_sql_text(v) for v in r) for r in rows])
     casts = [q if t == "VARCHAR" else f"TRY_CAST({q} AS {t}) AS {q}" for q, t in zip(quoted, columns.values())]
-    con.execute(f"CREATE TABLE \"{name}\" AS SELECT {', '.join(casts)} FROM \"_{name}_text\"")
+    target = f'"{name}"'
+    if "." in name:
+        schema, table = name.split(".", 1)
+        con.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        target = f'"{schema}"."{table}"'
+    con.execute(f"CREATE TABLE {target} AS SELECT {', '.join(casts)} FROM \"_{name}_text\"")
     notes = []
     for q, (c, t) in zip(quoted, columns.items()):
         if t != "VARCHAR" and rows:
@@ -1341,10 +1453,12 @@ def _sql_load(con, name: str, columns: dict[str, str], rows: list[tuple]) -> lis
 
 
 def _sql_tables(con, fields: list[dict], records: list[dict], refs: dict[str, list[dict]],
-                inputs: dict[str, list[dict]] | None = None, src_tables: dict[str, tuple] | None = None) -> list[str]:
+                inputs: dict[str, list[dict]] | None = None, src_tables: dict[str, tuple] | None = None,
+                ref_cols: dict[str, dict] | None = None) -> list[str]:
     """
     Load `records`, and with several inputs each input as its own table named by
-    its step id; then the reference tables and the CSV sources asked for.
+    its step id; then the reference tables (with ref_cols' columns, else their
+    registered ones) and the CSV sources asked for.
     """
     cols = {"id": "VARCHAR", **{f["name"]: SQL_TYPES[f["type"]] for f in fields}}
 
@@ -1355,7 +1469,7 @@ def _sql_tables(con, fields: list[dict], records: list[dict], refs: dict[str, li
     for sid, recs in (inputs or {}).items():
         _sql_load(con, sid, cols, rows(recs))   # the same values as in records, so no new notes
     for t, ref in refs.items():
-        spec = REF_TABLES[t]["columns"]
+        spec = (ref_cols or {}).get(t) or ref_spec(t)["columns"]
         notes += _sql_load(con, t, spec, [tuple(row.get(c) for c in spec) for row in ref])
     for t, (spec, body, extra) in (src_tables or {}).items():
         notes += _sql_load(con, t, spec, body) + [f"{t}: {n}" for n in extra]
@@ -1390,14 +1504,15 @@ def _sql_check_columns(names: list[str], fields: list[dict]) -> None:
 
 
 @lru_cache(maxsize=256)
-def _sql_describe(query: str, tables: tuple[str, ...], fields_json: str, inputs: tuple[str, ...] = (),
+def _sql_describe(query: str, refs_json: str, fields_json: str, inputs: tuple[str, ...] = (),
                   src_json: str = "{}") -> tuple[tuple[str, str], ...]:
     fields = json.loads(fields_json)
+    refs = json.loads(refs_json)
     src = json.loads(src_json)
     con = _sql_connect()
     try:
-        _sql_tables(con, fields, [], {t: [] for t in tables}, {i: [] for i in inputs},
-                    {t: (cols, [], []) for t, cols in src.items()})
+        _sql_tables(con, fields, [], {t: [] for t in refs}, {i: [] for i in inputs},
+                    {t: (cols, [], []) for t, cols in src.items()}, ref_cols=refs)
         q = _sql_select(con, query)
         try:
             cols = tuple((r[0], r[1]) for r in con.execute("DESCRIBE " + q).fetchall())
@@ -1423,8 +1538,10 @@ def sql_columns(config: dict, fields: list[dict], inputs: list[str] | None = Non
     """The SQL step's result columns and their types, checked against the schema. Raises PipelineError."""
     slim = [{"name": f["name"], "type": f["type"]} for f in fields]
     tables = list(config.get("tables") or ())
-    src = {t: v[0] for t, v in source_tables([t for t in tables if t not in REF_TABLES], sources).items()}
-    return list(_sql_describe(config.get("query") or "", tuple(t for t in tables if t in REF_TABLES), json.dumps(slim),
+    src = {t: v[0] for t, v in source_tables([t for t in tables if not is_ref(t)], sources).items()}
+    # The columns are part of the cache key: a database table can gain columns.
+    refs = {t: ref_spec(t)["columns"] for t in tables if is_ref(t)}
+    return list(_sql_describe(config.get("query") or "", json.dumps(refs), json.dumps(slim),
                               sql_inputs(inputs), json.dumps(src, sort_keys=True)))
 
 
@@ -1432,7 +1549,7 @@ def _sql(step: dict, records: list[dict], fields: list[dict], refs: Callable[[st
          inputs: dict[str, list[dict]] | None = None, src_tables: dict[str, tuple] | None = None) -> tuple[list[dict], list[str]]:
     c, sid = step["config"], step["id"]
     tables = c.get("tables") or []
-    ref_names = [t for t in tables if t in REF_TABLES]
+    ref_names = [t for t in tables if is_ref(t)]
     if ref_names and refs is None:
         raise PipelineError("Reference tables cannot be read here.")
     ref_rows = {t: refs(t) for t in ref_names}
@@ -1506,14 +1623,14 @@ def explore_sql(query: str, tables: list[str] | None, records: list[dict], field
     """
     tables = list(dict.fromkeys(tables or []))
     src_ids = {s["id"] for s in sources or []}
-    bad = [t for t in tables if t not in REF_TABLES and t not in src_ids]
+    bad = [t for t in tables if not is_ref(t) and t not in src_ids]
     if bad:
         raise PipelineError(f"No reference table or source {', '.join(bad)}; reference tables: {', '.join(REF_TABLES)}.")
-    ref_names = [t for t in tables if t in REF_TABLES]
+    ref_names = [t for t in tables if is_ref(t)]
     if ref_names and refs is None:
         raise PipelineError("Reference tables cannot be read here.")
     ref_rows = {t: refs(t) for t in ref_names}
-    src_tables = source_tables([t for t in tables if t not in REF_TABLES], sources)
+    src_tables = source_tables([t for t in tables if not is_ref(t)], sources)
     limit = max(1, min(int(limit or EXPLORE_ROWS), EXPLORE_ROWS))
     con = _sql_connect()
     timer = threading.Timer(SQL_TIMEOUT, con.interrupt)
@@ -1799,8 +1916,11 @@ def design_gaps(definition: dict) -> list[str]:
     return gaps
 
 
-def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list[str]:
-    """Every reason Load is refused right now. Empty list = loadable."""
+def load_gate(definition: dict, state: dict, required_fields: list[str], sources_optional: bool = False) -> list[str]:
+    """
+    Every reason Load is refused right now. Empty list = loadable.
+    sources_optional: the pipeline may read only data on file (a general pipeline reading tables).
+    """
     reasons = []
     schema = definition.get("schema") or {}
     fields = schema.get("fields") or []
@@ -1812,7 +1932,7 @@ def load_gate(definition: dict, state: dict, required_fields: list[str]) -> list
     for req in required_fields:
         if fields and req not in names:
             reasons.append(f"The schema must include `{req}`.")
-    if not definition.get("sources"):
+    if not definition.get("sources") and not sources_optional:
         reasons.append("No sources.")
     elif definition.get("sources_status") != "final":
         reasons.append("The sources are not marked final.")
@@ -1879,7 +1999,7 @@ def step_signatures(definition: dict, context: str = "") -> dict[str, str]:
             step["config"] = {**(s.get("config") or {}), "source_ids": ids}
             step["reads"] = [{k: x.get(k) for k in ("id", "kind", "url", "query")} for x in sources if x["id"] in ids]
         elif s["type"] == "sql":
-            ids = [t for t in (s.get("config") or {}).get("tables") or [] if t not in REF_TABLES]
+            ids = [t for t in (s.get("config") or {}).get("tables") or [] if not is_ref(t)]
             if ids:   # the CSV sources it joins
                 step["reads"] = [{k: x.get(k) for k in ("id", "kind", "url", "query")} for x in sources if x["id"] in ids]
         elif (s.get("config") or {}).get("source_id"):   # a step that reads one source itself
@@ -1929,7 +2049,7 @@ def rerun_record(kind: str, definition: dict, state: dict, step_id: str, record_
         progress(f"Running {step_id} ({step['type']}) for {record_id}")
     if step["type"] == "research":
         warnings = _research(step, [rec], fields, fresh_cache, context, lambda m: progress and progress(m),
-                             lambda sid: fetch_source(by_src[sid]) if sid in by_src else {}, {})
+                             lambda sid: fetch_source(by_src[sid]) if sid in by_src else {}, {}, kind in EXTRACT_ONLY)
     else:
         instr = cfg["instruction"] if step["type"] == "llm_fill" else geo_instruction(cfg)
         warnings = _model_fill(step, [rec], fields, fresh_cache, instr, step["type"])
@@ -2048,17 +2168,17 @@ def run(kind: str, definition: dict, state: dict, upto: str | None = None, fresh
             cfg = validate_step(kind, step["type"], step["config"], fields, step["inputs"], sources)
             step = {**step, "config": cfg}
             if step["type"] == "extract":
-                new, warnings = _extract(step, sources, fetched, fields, context, cache, say)
+                new, warnings = _extract(step, sources, fetched, fields, context, cache, say, kind)
                 records = records + new
             elif step["type"] == "research":
-                warnings = _research(step, records, fields, cache, context, say, source_doc, dead)
+                warnings = _research(step, records, fields, cache, context, say, source_doc, dead, kind in EXTRACT_ONLY)
             elif step["type"] == "llm_fill":
                 warnings = _model_fill(step, records, fields, cache, step["config"]["instruction"], "llm_fill")
             elif step["type"] == "geo_tie":
                 warnings = _model_fill(step, records, fields, cache, geo_instruction(step["config"]), "geo_tie")
             elif step["type"] == "sql":
                 ins = {i: full.get(i, []) for i in step["inputs"]} if sql_inputs(step["inputs"]) else None
-                srcs = source_tables([t for t in cfg.get("tables") or [] if t not in REF_TABLES], sources,
+                srcs = source_tables([t for t in cfg.get("tables") or [] if not is_ref(t)], sources,
                                      lambda s: source_doc(s["id"]))
                 records, warnings = _sql(step, records, fields, refs, ins, srcs)
             elif CATALOG[step["type"]].get("run"):
