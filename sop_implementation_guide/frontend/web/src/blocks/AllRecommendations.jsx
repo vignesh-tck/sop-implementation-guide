@@ -67,8 +67,8 @@ function FeasibilityNote({ f }) {
   const band = BAND[f.band] || {};
   return (
     <> · <span className={"feas-note " + (band.cls || "")} title={`${band.text || f.band}${f.stale ? " · its inputs changed since" : ""}`}>
-      feasibility {f.score}{f.stale ? "*" : ""}
-    </span></>
+      feasibility {f.score}
+    </span>{f.stale && <> · <span className="edited-text">stale, assess again</span></>}</>
   );
 }
 

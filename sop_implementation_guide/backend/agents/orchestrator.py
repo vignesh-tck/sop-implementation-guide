@@ -145,7 +145,9 @@ class OrchestratorAgent:
                 "feasibility_assessment_id": best["id"] if best else None,
             })
 
-        return gold_repo.upsert_profile(profile)
+        row = gold_repo.upsert_profile(profile)
+        from backend.agents.feasibility import profile_stale   # it imports the API, which imports this module
+        return {**row, "feasibility_stale": profile_stale(db, row)} if isinstance(row, dict) else row
 
     @staticmethod
     def _best_assessment(block_id: int, db) -> dict | None | bool:

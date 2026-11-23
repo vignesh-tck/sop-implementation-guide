@@ -308,6 +308,10 @@ function GoldSummary({ profile, title }) {
     <div className="gold-line">
       <span>{title}: feasibility <b>{num(profile.feasibility_score)}</b> / 100 · funding {num(profile.funding_score)} ·
         zoning {num(profile.zoning_score)}</span>{" "}
+      {profile.feasibility_stale?.length > 0 && (
+        <span className="edited-text" title={`${profile.feasibility_stale.join(", ")} changed since the assessment ran`}>
+          · feasibility stale, assess again</span>
+      )}{" "}
       <button type="button" className="link small" onClick={() => setOpen((o) => !o)}>{open ? "Hide profile" : "Show profile"}</button>
       {open && <ProfileCard profile={profile} title="Block implementation profile" />}
     </div>

@@ -2,9 +2,16 @@ import { num } from "../api.js";
 
 export default function ProfileCard({ profile, title }) {
   const actions = profile.top_actions || [];
+  const stale = profile.feasibility_stale || [];
   return (
     <div className="card">
       <h4>{title}</h4>
+      {stale.length > 0 && (
+        <div className="banner warn">
+          The feasibility score is stale: {stale.join(", ")} changed since its assessment ran. It still counts
+          until the recommendation is assessed again and the SME approves it.
+        </div>
+      )}
       <div className="scores">
         <div>
           <div className="big">{num(profile.feasibility_score)}</div>

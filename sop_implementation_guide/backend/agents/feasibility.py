@@ -667,3 +667,23 @@ def summary_for_block(db: Client, ctx: dict) -> dict[int, dict]:
             "ready": not missing_for(ctx, rec),
         }
     return out
+
+
+def profile_stale(db: Client, profile: dict | None) -> list[str]:
+    """
+    Which inputs of the assessment behind a gold profile's feasibility_score have
+    changed since it ran, by name; [] when none, or the score is the formula.
+    Worked out on read, since a funding or zoning run approved after the gold was
+    computed makes it stale without touching the profile row.
+    """
+    aid = (profile or {}).get("feasibility_assessment_id")
+    if not aid or profile.get("feasibility_basis") != "assessed":
+        return []
+    try:
+        a = FeasibilityRepository(db).get(aid)
+        if not a:
+            return []
+        return changed_inputs(a, inputs_for(context(db, profile["block_id"]), a["rec_id"]))
+    except Exception:  # noqa: BLE001 — the profile still loads without the flag
+        log.warning("Could not check whether block %s's feasibility is stale", profile.get("block_id"), exc_info=True)
+        return []

@@ -35,7 +35,8 @@ def get_profile(block_id: int, db: Client = Depends(get_supabase)):
     profile = GoldRepository(db).get_for_block(block_id)
     if not profile:
         raise HTTPException(status_code=404, detail="No profile yet — run /analyze first")
-    return profile
+    from backend.agents.feasibility import profile_stale   # imports this module
+    return {**profile, "feasibility_stale": profile_stale(db, profile)}
 
 
 def _fit_from_signal(signal: dict) -> dict:
