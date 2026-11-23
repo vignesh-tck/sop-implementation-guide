@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.api.assistant import router as assistant_router
 from backend.api.blocks import router as blocks_router
 from backend.api.datasets import router as datasets_router
 from backend.api.pathways import router as pathways_router
@@ -40,6 +41,7 @@ app.include_router(pathways_router)
 app.include_router(zoning_router)
 app.include_router(datasets_router)
 app.include_router(pipelines_router)
+app.include_router(assistant_router)
 
 
 @app.get("/health")

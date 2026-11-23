@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { num } from "../api.js";
 import { estimateText } from "./plan/graph.js";
 
@@ -22,7 +23,43 @@ export function rankRecs(recs) {
   );
 }
 
-export default function AllRecommendations({ recommendations, onSelect }) {
+// Quick questions on one recommendation, sent to the block assistant with that recommendation attached.
+function quickQuestions(r) {
+  const gain = r.predicted_score_increase != null ? `${r.predicted_score_increase >= 0 ? "+" : ""}${num(r.predicted_score_increase, 1)}` : null;
+  return [
+    gain ? `Why ${gain} for this block?` : "Why is this recommended here?",
+    "What does the work involve?",
+    "Who has to act, and how long?",
+    "Can it share a plan with another?",
+  ];
+}
+
+function AskMenu({ rec, onAsk, onClose }) {
+  const ref = useRef(null);
+  const [own, setOwn] = useState("");
+  useEffect(() => {
+    const down = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    const key = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", down);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", down); document.removeEventListener("keydown", key); };
+  }, [onClose]);
+  const ask = (q) => { onAsk(rec, q); onClose(); };
+  return (
+    <div className="ask-menu" ref={ref} role="menu">
+      {quickQuestions(rec).map((q) => (
+        <button type="button" role="menuitem" key={q} onClick={() => ask(q)}>{q}</button>
+      ))}
+      <form onSubmit={(e) => { e.preventDefault(); if (own.trim()) ask(own.trim()); }}>
+        <input autoFocus value={own} onChange={(e) => setOwn(e.target.value)} placeholder="Or ask your own…" />
+      </form>
+    </div>
+  );
+}
+
+export default function AllRecommendations({ recommendations, onSelect, onAsk }) {
+  const [menuFor, setMenuFor] = useState(null);
+  const closeMenu = useCallback(() => setMenuFor(null), []);
   if (!recommendations) return null;
   if (!recommendations.length) return <div className="card assess">No recommendations on this block.</div>;
   const sorted = rankRecs(recommendations);
@@ -48,7 +85,7 @@ export default function AllRecommendations({ recommendations, onSelect }) {
           const z = ZONING_DOT[r.zoning_best] || NOT_CHECKED;
           const down = r.direction === "Decrease";
           return (
-            <li key={r.rec_id}>
+            <li key={r.rec_id} className={onAsk ? "rec-item" : undefined}>
               <button type="button" className="rec-row" onClick={() => onSelect(r.rec_id)}>
                 <span className={"zdot " + z.cls} title={z.text} aria-label={z.text} />
                 <span className={"pill " + (down ? "no" : "yes")}>{down ? "reduce" : "increase"}</span>
@@ -67,6 +104,19 @@ export default function AllRecommendations({ recommendations, onSelect }) {
                 )}
                 <span className="chev" aria-hidden="true">›</span>
               </button>
+              {onAsk && (
+                <button
+                  type="button"
+                  className="rec-ask"
+                  aria-haspopup="menu"
+                  aria-expanded={menuFor === r.rec_id}
+                  title={`Ask about ${r.rec_label}`}
+                  onClick={() => setMenuFor(menuFor === r.rec_id ? null : r.rec_id)}
+                >
+                  Ask
+                </button>
+              )}
+              {menuFor === r.rec_id && <AskMenu rec={r} onAsk={onAsk} onClose={closeMenu} />}
             </li>
           );
         })}

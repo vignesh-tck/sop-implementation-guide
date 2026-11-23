@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { money, num } from "../api.js";
 import AllRecommendations, { rankRecs } from "./AllRecommendations.jsx";
+import AskPanel from "./assistant/AskPanel.jsx";
 import RecommendationView from "./RecommendationView.jsx";
 import { fundingStatus } from "./useBlockFunding.js";
 import { zoningStatus } from "./useBlockZoning.js";
@@ -49,13 +50,15 @@ function ZoningCard({ zs, onOpen }) {
   );
 }
 
-export default function BlockDetail({ block, s, zs, onOpenFunding, onOpenZoning, onRefresh }) {
-  // null = the block's front page; otherwise the recommendation stepped into.
-  const [selectedRecId, setSelectedRecId] = useState(null);
+// The block page has two tabs: its details, and the assistant (AskPanel), which
+// `ask` carries the props for. selectedRecId (null = the block's front page) is
+// held a level up so an assistant answer can open a recommendation.
+export default function BlockDetail({
+  block, s, zs, onOpenFunding, onOpenZoning, onRefresh, selectedRecId, setSelectedRecId, tab, onTab, ask, onAskRec,
+}) {
   // The panel scrolls as one; each move between list and recommendation starts at the top.
   const scrollRef = useRef(null);
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [selectedRecId]);
-  useEffect(() => setSelectedRecId(null), [block?.id]);
 
   if (!block) {
     return (
@@ -65,6 +68,8 @@ export default function BlockDetail({ block, s, zs, onOpenFunding, onOpenZoning,
     );
   }
 
+  const ranked = rankRecs(s.recs);
+  const idx = ranked.findIndex((r) => r.rec_id === selectedRecId);
   const header = (
     <div className="block-head">
       <div className="eyebrow-sm">Block {block.id}</div>
@@ -75,12 +80,26 @@ export default function BlockDetail({ block, s, zs, onOpenFunding, onOpenZoning,
         <span className="chip">Median HH income {money(block.median_hh_income)}</span>
         <span className="chip">Tract {block.tract_geoid || "—"}</span>
       </div>
+      <div className="detail-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab !== "ask"} onClick={() => onTab("details")}>Details</button>
+        <button type="button" role="tab" aria-selected={tab === "ask"} onClick={() => onTab("ask")}>
+          <span className="spark" aria-hidden="true">✧</span> Ask about this block
+        </button>
+      </div>
     </div>
   );
 
+  if (tab === "ask") {
+    return (
+      <section className="detail ask-mode">
+        {header}
+        <AskPanel {...ask} block={block} recs={s.recs} fs={s} zs={zs} onOpenFunding={onOpenFunding} onOpenZoning={onOpenZoning}
+                  contextRec={idx >= 0 ? ranked[idx] : null} />
+      </section>
+    );
+  }
+
   // Stepped into one recommendation: prev/next follow the list's order.
-  const ranked = rankRecs(s.recs);
-  const idx = ranked.findIndex((r) => r.rec_id === selectedRecId);
   if (selectedRecId != null && idx >= 0) {
     return (
       <section className="detail" ref={scrollRef}>
@@ -108,7 +127,7 @@ export default function BlockDetail({ block, s, zs, onOpenFunding, onOpenZoning,
       <FundingCard s={s} onOpen={onOpenFunding} />
       <ZoningCard zs={zs} onOpen={onOpenZoning} />
       {s.loading && !s.recs && <div className="spin">Loading recommendations…</div>}
-      <AllRecommendations recommendations={s.recs} onSelect={setSelectedRecId} />
+      <AllRecommendations recommendations={s.recs} onSelect={setSelectedRecId} onAsk={onAskRec} />
     </section>
   );
 }

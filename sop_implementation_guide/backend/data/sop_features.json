@@ -1,0 +1,1112 @@
+{
+ "adultuse": {
+  "description": "Adult Uses",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "arcades": {
+  "description": "Arcades",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "attrtve": {
+  "description": "Segment attractiveness (design and maintenance)",
+  "values": [
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "awnings": {
+  "description": "Awnings",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "banners": {
+  "description": "Banners",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "barsclub": {
+  "description": "Bars/Night Clubs",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "beach": {
+  "description": "Beach",
+  "values": [
+   "None",
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "benches": {
+  "description": "Benches (not at a bus stop) or chairs",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "bicyclist": {
+  "description": "Number of cyclists",
+  "values": [
+   "Number is entered"
+  ]
+ },
+ "bigbox": {
+  "description": "Big Box Shops (includes super stores or warehouse stores)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "bike mode": {
+  "description": "Percentage of cyclists",
+  "values": [
+   "Calculated at block level"
+  ]
+ },
+ "bikelane": {
+  "description": "Bicycle lanes present",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "bikerack": {
+  "description": "Bike Racks",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "bikeretl": {
+  "description": "Bicycle-Related Retail (bicycle repair shops, etc.)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "bikeshre": {
+  "description": "Bike share present",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "billbrd": {
+  "description": "Billboards",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "bklntype": {
+  "description": "Bike Lane Type",
+  "values": [
+   "Shared Lane/Sharrow",
+   "On Road Painted Line/Reflectors",
+   "On Road Physical Separation",
+   "Off Road"
+  ]
+ },
+ "blnkwall": {
+  "description": "Blank walls",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "buffboll": {
+  "description": "Bollards as buffers",
+  "values": [
+   "No",
+   "One side",
+   "Both sides"
+  ]
+ },
+ "bufffence": {
+  "description": "Fence or Guardrail as buffers",
+  "values": [
+   "No",
+   "One side",
+   "Both sides"
+  ]
+ },
+ "buffpkcr": {
+  "description": "Parked Cars as buffers",
+  "values": [
+   "No",
+   "One side",
+   "Both sides"
+  ]
+ },
+ "buffsttr": {
+  "description": "Street Trees",
+  "values": [
+   "No",
+   "One side",
+   "Both sides"
+  ]
+ },
+ "busstops": {
+  "description": "Bus Stops With Seating",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "cardeal": {
+  "description": "Car Dealership",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "chainstre": {
+  "description": "Regional or National Chain Store",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "chckcash": {
+  "description": "Check Cashing",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "civother": {
+  "description": "Public Building, Other",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "cmother": {
+  "description": "Other type of crosswalk marking",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "coffshop": {
+  "description": "Coffee Shops/Tea Houses",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "college": {
+  "description": "University or College (includes all types of building forms)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "comctlib": {
+  "description": "Community Center or Library",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "condoapt": {
+  "description": "Condo/Apartment Housing",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "cornerst": {
+  "description": "Corner Store/Convenience Store",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "crosing2": {
+  "description": "Crosswalk markings - Intersection 2",
+  "values": [
+   "None",
+   "Some",
+   "All"
+  ]
+ },
+ "croswalk": {
+  "description": "Crosswalk markings - Intersection 1",
+  "values": [
+   "None",
+   "Some",
+   "All"
+  ]
+ },
+ "crsothr2": {
+  "description": "Other crosswalk markings - intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "curbbulb": {
+  "description": "Curb Bulb Out/Curb Extension as traffic calming feature - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "curbbulb2": {
+  "description": "Curb Bulb Out/Curb Extension as traffic calming feature - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "curbcut2": {
+  "description": "Curb cuts - Intersection 2",
+  "values": [
+   "None",
+   "Some",
+   "All"
+  ]
+ },
+ "curbcuts": {
+  "description": "Curb cuts - Intersection 1",
+  "values": [
+   "None",
+   "Some",
+   "All"
+  ]
+ },
+ "dfrdsf2": {
+  "description": "Different Road Surface or Paving as crosswalk markings - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "diffrdsf": {
+  "description": "Different Road Surface or Paving as crosswalk markings - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "dining": {
+  "description": "Outdoor dining areas (e.g. cafes, outdoor tables, and coffee shops or plazas)",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "dogs": {
+  "description": "Loose/unsupervised/barking dogs",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "driveway": {
+  "description": "Driveways",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "drivthru": {
+  "description": "Drive-thrus",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "dumpster": {
+  "description": "Dumpsters",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "farnermk": {
+  "description": "Farmers Market",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "fastfood": {
+  "description": "Fast Food",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "financl": {
+  "description": "Bank/Financial",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "flatslpe": {
+  "description": "Flat or Gentle slope",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "gasserv": {
+  "description": "Gas/Service Station",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "gateaccs": {
+  "description": "Gated community access",
+  "values": [
+   "Accesible",
+   "Somewhat Accessible",
+   "Not Accessible"
+  ]
+ },
+ "gated": {
+  "description": "Gated community presence",
+  "values": [
+   "No",
+   "Segment is inside a gated community",
+   "One side is on the edge of a gated community",
+   "Segment is between two gated communities"
+  ]
+ },
+ "grafitti": {
+  "description": "Grafitti",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "gymfitns": {
+  "description": "Gym/Fitness Center (also includes yoga/pilates studios etc.)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "hardgood": {
+  "description": "\"Hard Good\" Retail Stores (stores that sell things that last a long time, e.g., appliances)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "heatlamp": {
+  "description": "Heat Lamps",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "highschl": {
+  "description": "High School",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "hotelhos": {
+  "description": "Hotel/Hospitality",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "indsothr": {
+  "description": "Industrial, Other",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "insother": {
+  "description": "Institutional, Other",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "kinder": {
+  "description": "Kindergarten",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "libbkstr": {
+  "description": "Libraries/Bookstores",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "lighting": {
+  "description": "Outdoor lighting",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "liquorst": {
+  "description": "Liquor Store",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "litter": {
+  "description": "Litter",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "localstre": {
+  "description": "Local Non-Chain Stores",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "mdhvind": {
+  "description": "Medium or Heavy Industrial (e.g., chemical plants, oil wells, etc)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "median": {
+  "description": "Median",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "medicine": {
+  "description": "Hospital, Medical Facility, Health Clinic",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "midblock": {
+  "description": "Marked midblock crosswalk",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "mlgrcer": {
+  "description": "Medium or Large Grocery Store",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "mntbuild": {
+  "description": "General maintenance of the buildings",
+  "values": [
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "movieth": {
+  "description": "Movie Theater",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "mustheat": {
+  "description": "Museum, Auditorium Concert Hall, Theater",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "numbldgs": {
+  "description": "Number of buildings/streetscape",
+  "values": [
+   "None",
+   "Multiple buildings on both sides",
+   "One or two buildings Multiple Buildings",
+   "One or two buildings on each side"
+  ]
+ },
+ "offices": {
+  "description": "Offices",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "ofseroth": {
+  "description": "Office/Service, Other",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "othrrtail": {
+  "description": "Other Retail Stores that are neither \"soft\" or \"hard\"",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "othrsdwk": {
+  "description": "Sidewalks/greenbelts/trails/paths other than sidewalks along the street",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "parkplay": {
+  "description": "Park/Playground",
+  "values": [
+   "None",
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "parkstrc": {
+  "description": "Parking structure",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pbspothr": {
+  "description": "Other type of public space",
+  "values": [
+   "None",
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "ped mode": {
+  "description": "Percentage of pedestrians",
+  "values": [
+   "Calculated at block level"
+  ]
+ },
+ "pedact2": {
+  "description": "Pedestrian Signal (Activated) - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedactsgn": {
+  "description": "Pedestrian Signal (Activated) - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedauto": {
+  "description": "Pedestrian Signal (Automated) - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedauto2": {
+  "description": "Pedestrian Signal (Automated) - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedcrs2": {
+  "description": "Pedestrian Crossing Sign - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedcrssgn": {
+  "description": "Pedestrian Crossing Sign - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedestrian": {
+  "description": "Number of pedestrians",
+  "values": [
+   "Number is entered"
+  ]
+ },
+ "pedisle": {
+  "description": "Pedestrian island - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedisle2": {
+  "description": "Pedestrian island - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pedstreet": {
+  "description": "Pedestrian/bicycle only street",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "playsprt": {
+  "description": "Playing or Sport Field",
+  "values": [
+   "None",
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "plazasq": {
+  "description": "Plaza/Square/Courtyard",
+  "values": [
+   "None",
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "prctpkng": {
+  "description": "Parking lot coverage",
+  "values": [
+   "None",
+   "Little",
+   "Some/a lot"
+  ]
+ },
+ "prdusprk": {
+  "description": "1st floor parking structure land use",
+  "values": [
+   "\"Not Parking",
+   "Other Uses\"",
+   "Varied",
+   "Parking"
+  ]
+ },
+ "primschl": {
+  "description": "Primary School",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "prmntbldgh": {
+  "description": "Building stories",
+  "values": [
+   "1 story",
+   "2-3 stories",
+   "4-8 stories",
+   "9-12 stories",
+   "13-39 stories",
+   "40+ stories",
+   "N/A"
+  ]
+ },
+ "pubart": {
+  "description": "Public art",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pubcivic": {
+  "description": "Post Office, Police Station Courthouse, Department of Motor Vehicles",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "pubgardn": {
+  "description": "Public Garden",
+  "values": [
+   "None",
+   "Unattractive",
+   "Neutral",
+   "Attractive"
+  ]
+ },
+ "pubrestr": {
+  "description": "Public restrooms",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "recoher": {
+  "description": "Recreational, Other",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "religion": {
+  "description": "Religious Institution (Church, Temple, Mosque, etc.)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "restarnt": {
+  "description": "Restaurants",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "restaurant": {
+  "description": "Restaurants - Non Fast Food",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "rumblesp": {
+  "description": "Rumble Strips or Bumps as traffic calming feature",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "schother": {
+  "description": "School, Other",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "scndschl": {
+  "description": "Secondary School",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "sdwkcndt": {
+  "description": "Sidewalk condition",
+  "values": [
+   "Moderate/Good",
+   "Poor",
+   "Under Repair"
+  ]
+ },
+ "sdwkcomp": {
+  "description": "Sidewalk completion",
+  "values": [
+   "Incomplete on both sides",
+   "Complete on one side",
+   "Complete on both sides"
+  ]
+ },
+ "sdwkpave": {
+  "description": "Special sidewalk paving",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "sdwkshde": {
+  "description": "Sidewalk shade",
+  "values": [
+   "Less than 25%",
+   "25-50%",
+   "More than 50%"
+  ]
+ },
+ "service": {
+  "description": "Service Facilities (including insurance offices, funeral homes, dry cleaning)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "servicestation": {
+  "description": "Car service station",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "sfhatach": {
+  "description": "Single Family Home/Duplex Attached",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "sfhdtach": {
+  "description": "Single Family Home - Detached",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "shopmall": {
+  "description": "Shopping Mall",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "sidewalk": {
+  "description": "Sidewalk presense",
+  "values": [
+   "0",
+   "1",
+   "2"
+  ]
+ },
+ "sizeparkimi1": {
+  "description": "Average parking lot size",
+  "values": [
+   "None",
+   "Small",
+   "Medium",
+   "Large",
+   "Extra Large"
+  ]
+ },
+ "smlgrcer": {
+  "description": "Small Grocery Store",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "softgood": {
+  "description": "\"Soft Good\" Retail Stores (These sell things that last a short time, e.g., clothing)",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "spdbump": {
+  "description": "Speed bump/speed hump/raised crosswalk or dips (that are intended to slow down traffic).",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "speedlim": {
+  "description": "Posted speed limit",
+  "values": [
+   "Number is entered"
+  ]
+ },
+ "splmtpst": {
+  "description": "Speed limit sign presence",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "stopsgn2": {
+  "description": "Stop Sign - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "stopsign": {
+  "description": "Stop Sign - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "streetdir": {
+  "description": "One/Two Way street",
+  "values": [
+   "One Way",
+   "Two Way"
+  ]
+ },
+ "strpmall": {
+  "description": "Strip Mall",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "strttree": {
+  "description": "Street Trees",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "stvendor": {
+  "description": "Street vendors or stalls",
+  "values": [
+   "None",
+   "Few",
+   "Some/a lot"
+  ]
+ },
+ "surfpkng": {
+  "description": "Surface parking lot",
+  "values": [
+   "No",
+   "One side",
+   "Both sides"
+  ]
+ },
+ "swptcoth": {
+  "description": "Other kind of sidewalk protection",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "townhome": {
+  "description": "Town Homes/Row Houses",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "trafcrcl": {
+  "description": "Traffic Circle/Roundabout as traffic calming feature",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "traffsig": {
+  "description": "Traffic Signal - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "trafsgn2": {
+  "description": "Traffic Signal - intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "trcmpark": {
+  "description": "Angled/On street parking",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "undevlnd": {
+  "description": "Undeveloped Land",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "vehicle": {
+  "description": "Number of vehicles",
+  "values": [
+   "Number is entered"
+  ]
+ },
+ "vehicle mode": {
+  "description": "Percentage of vehicles (not parked)",
+  "values": [
+   "Calculated at block level"
+  ]
+ },
+ "vehlanes": {
+  "description": "Vehicle lanes",
+  "values": [
+   "Number is entered"
+  ]
+ },
+ "vermixus": {
+  "description": "Mixed use",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "whitline": {
+  "description": "White Painted Lines as crosswalk markings - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "whtline2": {
+  "description": "White Painted Lines as crosswalk markings - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "zebra2": {
+  "description": "Zebra Striping as crosswalk markings - Intersection 2",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ },
+ "zebrastp": {
+  "description": "Zebra Striping as crosswalk markings - Intersection 1",
+  "values": [
+   "No",
+   "Yes"
+  ]
+ }
+}

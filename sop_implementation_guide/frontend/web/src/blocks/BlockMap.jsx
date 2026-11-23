@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { MapContainer, TileLayer, GeoJSON, useMap } from "react-leaflet";
+import { useEffect, useMemo, useState } from "react";
+import { MapContainer, TileLayer, GeoJSON, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import { score100Colour } from "../api.js";
 
@@ -47,7 +47,58 @@ function FlyToSelection({ feature }) {
   return null;
 }
 
-export default function BlockMap({ blocks, selectedId, profiles, onSelect }) {
+// ── The assistant's answer on the map ─────────────────────────────────────────
+
+function linePoints(geometry) {
+  if (geometry?.type === "LineString") return geometry.coordinates;
+  if (geometry?.type === "MultiLineString") return geometry.coordinates.flat();
+  return [];
+}
+
+// n points spread evenly along a block's line, as [lat, lng].
+function pointsAlong(geometry, n) {
+  const pts = linePoints(geometry).map(([x, y]) => [y, x]);
+  if (pts.length < 2) return pts.length ? Array(n).fill(pts[0]) : [];
+  const seg = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]));
+  const total = seg.reduce((a, b) => a + b, 0);
+  return Array.from({ length: n }, (_, k) => {
+    let left = (total * (k + 1)) / (n + 1);
+    for (let i = 0; i < seg.length; i++) {
+      if (left <= seg[i] || i === seg.length - 1) {
+        const t = seg[i] ? Math.min(1, left / seg[i]) : 0;
+        return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t];
+      }
+      left -= seg[i];
+    }
+    return pts[pts.length - 1];
+  });
+}
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Labels alternate sides of the street so neighbours don't overlap.
+const pinIcon = (label, side) =>
+  L.divIcon({ className: "ans-pin-wrap", iconSize: [0, 0], html: `<span class="ans-pin ${side}"><i></i>${esc(label)}</span>` });
+
+function FitAnswer({ features }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!features.length) return;
+    const bounds = L.geoJSON({ type: "FeatureCollection", features }).getBounds();
+    if (bounds.isValid()) {
+      map.flyToBounds(bounds, { paddingTopLeft: PANEL_CLEARANCE.topLeft, paddingBottomRight: PANEL_CLEARANCE.bottomRight, maxZoom: 16, duration: 0.6 });
+    }
+  }, [features, map]);
+  return null;
+}
+
+export default function BlockMap({ blocks, selectedId, profiles, onSelect, answer, onClearAnswer, onAskStreet }) {
+  // The street last clicked, for the "Ask about this street" popup.
+  const [pointed, setPointed] = useState(null);
+  const point = (feature, e) => {
+    onSelect(feature.properties.id);
+    if (onAskStreet) setPointed({ id: feature.properties.id, name: feature.properties.street_name, latlng: e.latlng, at: Date.now() });
+  };
   // Keyed by id so each block's color recomputes only when its own score changes,
   // not on every render of the whole collection.
   const features = useMemo(
@@ -67,6 +118,14 @@ export default function BlockMap({ blocks, selectedId, profiles, onSelect }) {
     () => features.find((f) => f.id === selectedId) || null,
     [features, selectedId]
   );
+
+  const highlighted = useMemo(
+    () => features.filter((f) => answer?.block_ids?.includes(f.id)),
+    [features, answer]
+  );
+  const answerFeature = answer?.recs?.length ? features.find((f) => f.id === answer.block_id) : null;
+  const pins = answerFeature ? pointsAlong(answerFeature.geometry, answer.recs.length) : [];
+  const showingAnswer = highlighted.length > 0 || pins.length > 0;
 
   const scoreFor = (id) => profiles[id]?.feasibility_score ?? blocks.find((b) => b.id === id)?.sop_index_norm;
 
@@ -105,9 +164,30 @@ export default function BlockMap({ blocks, selectedId, profiles, onSelect }) {
             style={style}
             onEachFeature={(feature, layer) => {
               layer.bindTooltip(feature.properties.street_name || `#${feature.properties.id}`);
-              layer.on("click", () => onSelect(feature.properties.id));
+              layer.on("click", (e) => point(feature, e));
             }}
           />
+        )}
+        {/* Blocks an across-blocks answer named: a white casing under a navy line, with the block number. */}
+        {highlighted.length > 0 && (
+          <>
+            <FitAnswer features={highlighted} />
+            <GeoJSON
+              key={"ans-halo:" + answer.block_ids.join(",")}
+              data={{ type: "FeatureCollection", features: highlighted }}
+              style={{ color: "#ffffff", weight: 10, opacity: 0.9 }}
+              interactive={false}
+            />
+            <GeoJSON
+              key={"ans:" + answer.block_ids.join(",")}
+              data={{ type: "FeatureCollection", features: highlighted }}
+              style={{ color: "var(--navy)", weight: 5, opacity: 1 }}
+              onEachFeature={(feature, layer) => {
+                layer.bindTooltip(`#${feature.properties.id}`, { permanent: true, direction: "center", className: "ans-block-label" });
+                layer.on("click", (e) => point(feature, e));
+              }}
+            />
+          </>
         )}
         {/* A separate top layer for the selection: a white casing underneath a
             pulsing accent line, plus an always-open label — three independent
@@ -131,12 +211,36 @@ export default function BlockMap({ blocks, selectedId, profiles, onSelect }) {
                   direction: "top",
                   className: "block-label",
                 });
-                layer.on("click", () => onSelect(feature.properties.id));
+                layer.on("click", (e) => point(feature, e));
               }}
             />
           </>
         )}
+        {/* The recommendations a block answer is about, labelled along its street. */}
+        {pins.map((p, i) => (
+          <Marker key={`pin:${answer.block_id}:${answer.recs[i].rec_id}`} position={p} icon={pinIcon(answer.recs[i].label, i % 2 ? "r" : "l")} interactive={false} />
+        ))}
+        {pointed && (
+          <Popup key={pointed.at} position={pointed.latlng} className="street-pop" closeButton={false}>
+            <div className="street-pop-name">{pointed.name || `Block ${pointed.id}`}</div>
+            <button type="button" className="primary" onClick={() => { onAskStreet(pointed.id, null); setPointed(null); }}>
+              ✧ Ask about this street
+            </button>
+            <button type="button" onClick={() => {
+              onAskStreet(pointed.id, "Which recommendations touch the street itself, and which are about the buildings or land beside it?");
+              setPointed(null);
+            }}>
+              Which recommendations touch it?
+            </button>
+          </Popup>
+        )}
       </MapContainer>
+      {showingAnswer && (
+        <div className="map-answer-bar">
+          <span className="spark" aria-hidden="true">✧</span> Showing the assistant's answer on the map
+          <button type="button" className="link" onClick={onClearAnswer}>Clear</button>
+        </div>
+      )}
       <div className="map-legend">
         <span>
           <span className="swatch" style={{ background: "var(--teal)" }} />
