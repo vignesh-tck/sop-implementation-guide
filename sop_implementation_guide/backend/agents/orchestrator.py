@@ -95,7 +95,7 @@ class OrchestratorAgent:
         zoning_score, zoning_detail, zoning_signal_ids = self.zoning_agent.score_block(block_id, db)
         zoning_placeholder = zoning_score is None
         if zoning_placeholder:
-            # Not looked up, or nothing on the block is scorable (legacy zones only).
+            # Not reviewed, or nothing on the block was settled on a scorable outcome.
             zoning_score = 50.0
         # Placeholder until PolicyAgent is implemented
         policy_score = 50.0
@@ -235,13 +235,17 @@ class OrchestratorAgent:
             soonest = min(s["deadline"] for s in dated)
             parts.append(f"Nearest application deadline is {soonest}.")
         parts.append(f"Funding sub-score: {funding_score:.0f}/100.")
-        if not zoning_detail.get("looked_up"):
+        open_ = zoning_detail.get("not_checked") or 0
+        open_text = f" {open_} recommendation(s) left open in the zoning review are not counted." if open_ else ""
+        if not zoning_detail.get("reviewed"):
+            parts.append("Zoning not reviewed yet: no approved Block Zoning run (placeholder 50).")
+        elif not zoning_detail.get("looked_up"):
             parts.append("Zoning not looked up yet (placeholder 50).")
         elif zoning_placeholder:
-            parts.append("Zoning could not be scored: no recommendation here resolves to a zone the use "
-                         "tables cover (placeholder 50).")
+            parts.append("Zoning could not be scored: no recommendation here was settled by right, by special "
+                         f"exception or as prohibited (placeholder 50).{open_text}")
         else:
             parts.append(f"Zoning sub-score: {zoning_score:.0f}/100 across "
-                         f"{zoning_detail['scored']} recommendation(s) checked against the use tables.")
+                         f"{zoning_detail['scored']} recommendation(s) in the approved zoning review.{open_text}")
         parts.append("Policy analysis pending.")
         return " ".join(parts)

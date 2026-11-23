@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { call, deadlineLabel, money, num, scoreColour } from "../api.js";
-import { Cites, Outcome, References, SmeQuestions, ZoningFinding, zoningAnswer } from "../zoning/ZoningParts.jsx";
+import { Cites, OUTCOME, Outcome, References, SmeQuestions, ZoningFinding, zoningAnswer } from "../zoning/ZoningParts.jsx";
 import PlanCanvas from "./plan/PlanCanvas.jsx";
 import StepInspector from "./plan/StepInspector.jsx";
 import { ACTORS, ActorChip, ActorLegend } from "./plan/actors.jsx";
@@ -31,6 +31,12 @@ function writePref(key, value) {
   try { localStorage.setItem(key, value); } catch { /* a per-viewer convenience only */ }
 }
 
+// A zoning step with no finding to show: the block was never looked up, or has
+// no approved zoning review.
+const noZoning = (s) => s.input_status === "missing" || s.input_status === "not_reviewed";
+// The badge for an approved zoning finding: its outcome, or n/a where zoning does not decide it.
+const zoningMark = (z) => (z.review?.outcome === "not_applicable" ? "not_applicable" : z.best || "unknown");
+
 // Whether a step is waiting on the SME: a lookup that left questions open, or a
 // source that isn't built yet. Once the reviewer edits or approves, it isn't.
 export function needsSme(s, plan) {
@@ -42,7 +48,7 @@ export function needsSme(s, plan) {
 // What a step's card shows in its corner: the one thing worth seeing at a glance.
 const badgeFor = (plan) => (s) => ({
   sme: needsSme(s, plan),
-  zoning: s.zoning && s.input_status !== "missing" ? s.zoning.best || "unknown" : null,
+  zoning: s.zoning && !noZoning(s) ? zoningMark(s.zoning) : null,
   funding: s.funding && s.input_status === "attached" ? s.funding.length : null,
 });
 
@@ -90,7 +96,7 @@ const VERDICT_CLASS = { by_right: "ok", special_exception: "cond", prohibited: "
 // The zoning verdict, coloured by outcome.
 function Verdict({ z }) {
   const a = zoningAnswer(z);
-  const cls = z.status === "missing" ? "none" : VERDICT_CLASS[z.best] || "none";
+  const cls = z.status === "missing" || z.status === "not_reviewed" ? "none" : VERDICT_CLASS[z.best] || "none";
   const mark = { ok: "✓", cond: "!", no: "✕", none: "?" }[cls];
   return (
     <div className={"verdict " + cls}>
@@ -119,12 +125,35 @@ function FactRows({ z }) {
   );
 }
 
-function ZoningStepBody({ s, onJump }) {
+// Who approved the finding and how: shown under the verdict, so a reader knows it was reviewed.
+function ReviewLine({ r }) {
+  if (!r) return null;
+  const date = (r.at || "").slice(0, 10);
+  const how = r.action === "open" ? "Left open in the zoning review"
+    : r.action === "set" && r.outcome !== r.proposed ? `Set to “${OUTCOME[r.outcome]?.text || r.outcome}” in the zoning review`
+    : r.auto ? "Settled in the zoning review, nothing to ask" : "Accepted as proposed in the zoning review";
+  return (
+    <div className="zreview-line">
+      {how} by {r.by}{date && `, ${date}`} · run #{r.analysis_id}, Zoning v{r.dataset_version}
+      {r.note && <> · “{r.note}”</>}
+    </div>
+  );
+}
+
+function ZoningStepBody({ s, onJump, onZoning }) {
   const z = s.zoning;
   // The full text opens with the questions, because the explanation behind a
   // question (how we read the recommendation, what we checked) lives in it and
   // has to come before the question, not after.
   const [more, setMore] = useState(z.questions.length > 0);
+  if (z.status === "not_reviewed") {
+    return (
+      <>
+        <Verdict z={z} />
+        {onZoning && <button type="button" className="link" onClick={onZoning}>Open the block's zoning review</button>}
+      </>
+    );
+  }
   if (s.zoning_detail === "summary") {
     return (
       <>
@@ -139,10 +168,11 @@ function ZoningStepBody({ s, onJump }) {
   return (
     <>
       <Verdict z={z} />
+      <ReviewLine r={z.review} />
       <FactRows z={z} />
       {more ? (
         <>
-          <ZoningFinding z={z} hideSummary hideQuestions omit={["found", "ordinance", "meaning"]} />
+          <ZoningFinding z={z} hideSummary hideQuestions omit={["found", "ordinance", "meaning", "review"]} />
           {z.questions.length > 0 && <SmeQuestions items={z.questions} />}
           <div className="zoning-h refs-h">Sources</div>
           <References refs={s.references} />
@@ -168,8 +198,8 @@ function StepSources({ refs }) {
   );
 }
 
-function StepBody({ s, plan, onJump, onFunding }) {
-  if (s.zoning) return <ZoningStepBody s={s} onJump={onJump} />;
+function StepBody({ s, plan, onJump, onFunding, onZoning }) {
+  if (s.zoning) return <ZoningStepBody s={s} onJump={onJump} onZoning={onZoning} />;
   const waiting = needsSme(s, plan);
   return (
     <>
@@ -197,7 +227,7 @@ function StepMarker({ s, plan, mark }) {
   if (mark?.kind === "new") return <span className="pc-flag new">New</span>;
   if (mark?.kind === "changed") return <span className="pc-flag changed">Changed</span>;
   if (needsSme(s, plan)) return <span className="tag derived">Needs SME</span>;
-  if (s.zoning && s.input_status !== "missing") return <Outcome outcome={s.zoning.best} />;
+  if (s.zoning && !noZoning(s)) return <Outcome outcome={zoningMark(s.zoning)} />;
   if (s.funding && s.input_status === "attached") return <span className="tag ok">{s.funding.length} funding</span>;
   return null;
 }
@@ -216,7 +246,7 @@ function Estimate({ est, editing }) {
 
 const when = (t) => (t || "").slice(0, 10);
 
-export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
+export default function PlanView({ plan, blockId, recId, onSaved, onFunding, onZoning }) {
   const [view, setView] = useState(() => readPref(VIEW_KEY, "canvas"));
   const [showing, setShowing] = useState(plan.draft ? "draft" : "approved");
   const [editing, setEditing] = useState(false);
@@ -362,7 +392,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
       onSelect={setSelected}
       onClose={() => setSelected(null)}
     >
-      {!editing && !selRemoved && <StepBody s={selStep} plan={planLike} onJump={jump} onFunding={onFunding} />}
+      {!editing && !selRemoved && <StepBody s={selStep} plan={planLike} onJump={jump} onFunding={onFunding} onZoning={onZoning} />}
     </StepInspector>
   );
 
@@ -505,7 +535,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
                 {isOpen && (
                   <div className="ps-body">
                     {s.how && <p className="si-how">{s.how}</p>}
-                    <StepBody s={s} plan={planLike} onJump={jump} onFunding={onFunding} />
+                    <StepBody s={s} plan={planLike} onJump={jump} onFunding={onFunding} onZoning={onZoning} />
                   </div>
                 )}
               </li>

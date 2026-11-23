@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from postgrest.types import ReturnMethod
 from postgrest.exceptions import APIError
 from supabase import Client
 
@@ -113,6 +114,9 @@ class BlockAnalysisRepository(_DatasetRepository):
 
     SUMMARY = ("id, block_id, kind, dataset_version_id, dataset_version, name, note, status, "
                "thread_id, result, error, pinned, created_by, created_at, completed_at")
+    # A zoning run's result holds every finding with its narrative and references; lists read only its
+    # counts (result.summary, null on runs made before zoning reviews), returned as `result`.
+    LIGHT = SUMMARY.replace("result,", "result:result->summary,")
 
     def __init__(self, client: Client):
         super().__init__(client, "block_analyses")
@@ -135,8 +139,10 @@ class BlockAnalysisRepository(_DatasetRepository):
         )
         return result.data if result else None
 
-    def list_for_block(self, block_id: int, kind: str | None = None, limit: int = 50) -> list[dict]:
-        q = self._db.table(self._table).select(self.SUMMARY).eq("block_id", block_id)
+    def list_for_block(self, block_id: int, kind: str | None = None, limit: int = 50,
+                       light: bool = False) -> list[dict]:
+        """light: `result` is only result.summary (see LIGHT)."""
+        q = self._db.table(self._table).select(self.LIGHT if light else self.SUMMARY).eq("block_id", block_id)
         if kind:
             q = q.eq("kind", kind)
         return self._run(q.order("created_at", desc=True).limit(limit)).data or []
@@ -161,6 +167,14 @@ class BlockAnalysisRepository(_DatasetRepository):
             self._run(
                 self._db.table(self._table).update({"pinned": False})
                 .in_("block_id", block_ids).eq("kind", kind).eq("pinned", True)
+            )
+
+    def discard_in_review(self, block_ids: list[int], kind: str) -> None:
+        """Discard the blocks' runs of this kind still awaiting review (a new run replaces them)."""
+        if block_ids:
+            self._run(
+                self._db.table(self._table).update({"status": "discarded"}, returning=ReturnMethod.minimal)
+                .in_("block_id", block_ids).eq("kind", kind).eq("status", "in_review")
             )
 
     def pin(self, analysis: dict) -> None:

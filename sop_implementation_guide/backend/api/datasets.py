@@ -10,10 +10,13 @@ one block, a list, or every block, against any version; the newest run is
 pinned to the block (plans, signals and gold read the pinned one), and any
 earlier run can be pinned again.
 
-Block Zoning is a lookup, so a run completes in the request. Block Funding
-pauses for the reviewer, so each block's run returns a thread to review
-(GET /threads/{id}/review) and only an approved run is pinned. A batch of
-funding runs goes in the background; their analyses show progress.
+Both kinds are approved by the SME before anything reads them, and only an
+approved run is pinned. Block Zoning is a lookup, so a run is made in the
+request and waits in_review with its findings stored in the run
+(GET /analyses/{id}; approve with POST /analyses/{id}/review). Block Funding
+pauses its graph for the reviewer, so each block's run returns a thread to
+review (GET /threads/{id}/review). A batch of funding runs goes in the
+background; their analyses show progress.
 """
 
 import logging
@@ -26,7 +29,7 @@ from supabase import Client
 
 from backend.agents.deps import get_orchestrator
 from backend.agents.orchestrator import OrchestratorAgent
-from backend.agents.zoning import ZoningAgent
+from backend.agents.zoning import ReviewError, ZoningAgent
 from backend.db.session import get_supabase
 from backend.repositories.datasets import (
     BlockAnalysisRepository,
@@ -134,7 +137,8 @@ def list_block_analyses(
     reviews live in memory, so a restart loses them; such a run can only be
     discarded and re-run).
     """
-    rows = _guard(lambda: BlockAnalysisRepository(db).list_for_block(block_id, kind))
+    # A zoning run's full result (every finding) is read one run at a time, from GET /analyses/{id}.
+    rows = _guard(lambda: BlockAnalysisRepository(db).list_for_block(block_id, kind, light=kind == "zoning"))
     for a in rows:
         if a["kind"] == "funding" and a["status"] in ("running", "in_review") and a.get("thread_id"):
             a["review_live"] = bool(orchestrator.get_funding_review(a["thread_id"]))
@@ -194,6 +198,41 @@ def run_analyses(
             "next_step": "GET /blocks/{id}/analyses?kind=funding, then review each thread"}
 
 
+@router.get("/analyses/{analysis_id}")
+def get_analysis(analysis_id: int, db: Client = Depends(get_supabase)):
+    """One run in full. For a zoning run, result.findings holds each finding with its proposal and decision."""
+    a = _guard(lambda: BlockAnalysisRepository(db).get(analysis_id))
+    if not a:
+        raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found")
+    return a
+
+
+class ZoningDecision(BaseModel):
+    key: str
+    action: Literal["accept", "set", "open"]
+    outcome: Optional[str] = None
+    note: Optional[str] = None
+
+
+class ZoningReview(BaseModel):
+    decisions: list[ZoningDecision] = []
+    approved_by: str
+    note: Optional[str] = None
+
+
+@router.post("/analyses/{analysis_id}/review")
+def approve_zoning_review(analysis_id: int, body: ZoningReview, db: Client = Depends(get_supabase)):
+    """
+    Approve a Block Zoning run: apply the SME's decisions, complete the run and make it the block's current
+    zoning. Findings the SME did not decide stay as proposed (pre-accepted) or open (flagged).
+    """
+    try:
+        return _guard(lambda: ZoningAgent().approve(
+            db, analysis_id, [d.model_dump() for d in body.decisions], body.approved_by, body.note))
+    except ReviewError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 @router.post("/analyses/{analysis_id}/discard")
 def discard_analysis(analysis_id: int, db: Client = Depends(get_supabase)):
     """
@@ -221,6 +260,6 @@ def pin_analysis(analysis_id: int, db: Client = Depends(get_supabase)):
     if a["status"] != "complete":
         raise HTTPException(status_code=422, detail=(
             f"Analysis {analysis_id} is {a['status']}; only a complete analysis can be pinned "
-            "(a funding run completes when its review is approved)."))
+            "(a run completes when its review is approved)."))
     repo.pin(a)
     return repo.get(analysis_id)

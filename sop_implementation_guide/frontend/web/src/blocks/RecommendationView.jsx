@@ -23,9 +23,14 @@ const TILE_CLASS = { by_right: "ok", special_exception: "cond", prohibited: "no"
 
 function ZoningTile({ z, onClick }) {
   let value = "Not looked up", sub = "Run the zoning lookup", cls = "none";
-  if (z && z.status !== "missing") {
-    value = z.best ? OUTCOME[z.best].text : "Not resolved";
-    sub = z.zones.map((f) => f.zone).join(", ") || "No zone found";
+  if (z?.status === "not_reviewed") {
+    value = "Not reviewed";
+    sub = "Needs an approved zoning review";
+  } else if (z && z.status !== "missing") {
+    const na = z.review?.outcome === "not_applicable";
+    value = na ? OUTCOME.not_applicable.text : z.best ? OUTCOME[z.best].text : "Not resolved";
+    sub = [z.review?.action === "set" && "set by SME", z.review?.action === "open" && "left open",
+           z.zones.map((f) => f.zone).join(", ") || "No zone found"].filter(Boolean).join(" · ");
     cls = TILE_CLASS[z.best] || "none";
   }
   return (
@@ -82,7 +87,7 @@ function AllSources({ plan }) {
 }
 
 export default function RecommendationView({
-  blockId, recId, refreshKey, position, total, onBack, onPrev, onNext, onChanged, onOpenFunding,
+  blockId, recId, refreshKey, position, total, onBack, onPrev, onNext, onChanged, onOpenFunding, onOpenZoning,
 }) {
   const [plan, setPlan] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -160,6 +165,7 @@ export default function RecommendationView({
               recId={recId}
               onSaved={(p) => { setPlan(p); onChanged?.(); }}
               onFunding={onOpenFunding}
+              onZoning={onOpenZoning}
             />
           )}
 
@@ -168,7 +174,12 @@ export default function RecommendationView({
           )}
 
           {tab === "zoning" && (
-            plan.zoning ? (
+            plan.zoning?.status === "not_reviewed" ? (
+              <p className="assess">
+                {plan.zoning.narrative[0]?.text}{" "}
+                <button type="button" className="link" onClick={onOpenZoning}>Open the block's zoning review</button>
+              </p>
+            ) : plan.zoning ? (
               <div className="tab-body">
                 <ZoningFinding z={plan.zoning} hideSummary />
                 <div className="zoning-h refs-h">Sources</div>

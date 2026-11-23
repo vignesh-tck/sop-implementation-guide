@@ -55,7 +55,12 @@ SHORT = {
     "prohibited": "prohibited",
     "legacy": "legacy zone, needs SME",
     "unknown": "needs SME",
+    "not_applicable": "zoning does not decide it",
 }
+# The outcomes an SME can settle a finding on in a Block Zoning review: the
+# three the use tables give, or "zoning does not decide this".
+NOT_APPLICABLE = "not_applicable"
+REVIEW_OUTCOMES = ("by_right", "special_exception", "prohibited", NOT_APPLICABLE)
 
 
 @lru_cache(maxsize=1)
@@ -355,6 +360,7 @@ def _zone_sentence(f: dict, mode: str, refs: _Refs) -> tuple[str, list[int]]:
 
 # Narrative sections, in reading order: the answer comes before the background.
 SECTIONS = {
+    "review": "SME review",
     "found": "What we found",
     "ordinance": "What the ordinance says",
     "meaning": "What it means for the plan",

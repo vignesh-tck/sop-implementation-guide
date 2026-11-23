@@ -3,14 +3,16 @@ import { money, num } from "../api.js";
 import AllRecommendations, { rankRecs } from "./AllRecommendations.jsx";
 import RecommendationView from "./RecommendationView.jsx";
 import { fundingStatus } from "./useBlockFunding.js";
+import { zoningStatus } from "./useBlockZoning.js";
 
 // A block in two levels. The front page is block-level only: its facts, where
-// its funding stands, and its recommendations. Picking a recommendation replaces
+// its funding and zoning reviews stand, and its recommendations. Picking a recommendation replaces
 // that page with the recommendation's own view (RecommendationView), with a way
 // back, so the list and a plan never compete for the same scroll.
 //
-// The block's data and its funding run live in useBlockFunding, a level up; the
-// funding review itself opens over the map (FundingWorkspace).
+// The block's data and its funding and zoning runs live in useBlockFunding and
+// useBlockZoning, a level up; the reviews themselves open over the map
+// (FundingWorkspace, ZoningWorkspace).
 
 function FundingCard({ s, onOpen }) {
   const st = fundingStatus(s);
@@ -29,7 +31,25 @@ function FundingCard({ s, onOpen }) {
   );
 }
 
-export default function BlockDetail({ block, s, onOpenFunding, onRefresh }) {
+function ZoningCard({ zs, onOpen }) {
+  const st = zoningStatus(zs);
+  const cur = (zs?.analyses || []).find((a) => a.pinned && a.result);
+  return (
+    <button type="button" className="funding-card" onClick={onOpen}>
+      <span className="fc-label">Block zoning</span>
+      <span className={"status-chip " + { none: "idle", running: "run", review: "prop", done: "ok" }[st.key]}>{st.text}</span>
+      {cur?.dataset_version != null && (
+        <span className="assess" title="The Zoning version this block's approved zoning review was made against">
+          Zoning v{cur.dataset_version}
+        </span>
+      )}
+      <span className="spacer" />
+      <span className="fc-go">{st.key === "none" ? "Run review" : "Open review"} →</span>
+    </button>
+  );
+}
+
+export default function BlockDetail({ block, s, zs, onOpenFunding, onOpenZoning, onRefresh }) {
   // null = the block's front page; otherwise the recommendation stepped into.
   const [selectedRecId, setSelectedRecId] = useState(null);
   // The panel scrolls as one; each move between list and recommendation starts at the top.
@@ -68,13 +88,14 @@ export default function BlockDetail({ block, s, onOpenFunding, onRefresh }) {
         <RecommendationView
           blockId={block.id}
           recId={selectedRecId}
-          refreshKey={s.version}
+          refreshKey={`${s.version}-${zs?.version ?? 0}`}
           position={idx + 1}
           total={ranked.length}
           onBack={() => setSelectedRecId(null)}
           onPrev={idx > 0 ? () => setSelectedRecId(ranked[idx - 1].rec_id) : null}
           onNext={idx < ranked.length - 1 ? () => setSelectedRecId(ranked[idx + 1].rec_id) : null}
           onOpenFunding={onOpenFunding}
+          onOpenZoning={onOpenZoning}
           onChanged={onRefresh}
         />
       </section>
@@ -85,6 +106,7 @@ export default function BlockDetail({ block, s, onOpenFunding, onRefresh }) {
     <section className="detail" ref={scrollRef}>
       {header}
       <FundingCard s={s} onOpen={onOpenFunding} />
+      <ZoningCard zs={zs} onOpen={onOpenZoning} />
       {s.loading && !s.recs && <div className="spin">Loading recommendations…</div>}
       <AllRecommendations recommendations={s.recs} onSelect={setSelectedRecId} />
     </section>

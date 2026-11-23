@@ -14,8 +14,9 @@ Steps, each skipped when already done, so it is safe to re-run:
      gets an "Imported" funding analysis on Funding v1, pinned. Those signals
      were approved before versions existed, against whatever the catalogue
      held at the time; v1 is the closest snapshot, and the note says so.
-  4. Every block with no pinned zoning analysis is analysed on Zoning v1 and
-     pinned.
+  4. Every block with no pinned zoning analysis is analysed on Zoning v1. Each
+     run awaits the SME's approval in the block's Block Zoning review; it is
+     pinned when approved.
 """
 
 import argparse
@@ -113,10 +114,10 @@ def main() -> int:
     if not todo:
         log.info("Zoning: every block already has a pinned analysis")
     elif dry:
-        log.info("Zoning: would analyse %d block(s) on v1 and pin", len(todo))
+        log.info("Zoning: would analyse %d block(s) on v1, each to await SME approval", len(todo))
     else:
         out = ZoningAgent().analyze(db, todo, zoning_v["version"], name="Initial", created_by="seed")
-        log.info("Zoning: analysed and pinned %d block(s) on Zoning v%s",
+        log.info("Zoning: analysed %d block(s) on Zoning v%s; each awaits SME approval",
                  len(out["analyses"]), out["dataset_version"]["version"])
 
     log.info("Done%s.", " (dry run, nothing written)" if dry else "")

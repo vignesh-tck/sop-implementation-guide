@@ -83,6 +83,7 @@ export const OUTCOME = {
   prohibited: { short: "X", text: "Prohibited" },
   legacy: { short: "LCD", text: "Legacy zone: set by approved plans" },
   unknown: { short: "?", text: "Not resolved" },
+  not_applicable: { short: "n/a", text: "Zoning does not decide it" },
 };
 
 export function Outcome({ outcome }) {

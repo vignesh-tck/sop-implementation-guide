@@ -3,8 +3,9 @@ Implementation plans — the steps to get one recommendation done.
 
 Select a recommendation, get its plan: the pathway template for that kind of
 change, with any approved funding for that exact recommendation attached to the
-funding step and the block's zoning finding attached to the zoning steps. See
-backend/tools/pathways.py for how a plan is assembled.
+funding step and its approved zoning finding (from the block's approved Block
+Zoning run) attached to the zoning steps. See backend/tools/pathways.py for how
+a plan is assembled.
 
 A reviewer (an SME) edits the steps and saves them as a draft. A draft changes
 nothing anyone else reads until someone approves it; then its steps become the
@@ -20,14 +21,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from supabase import Client
 
-from backend.agents.zoning import ZoningAgent, analysis_label
+from backend.agents.zoning import ZoningAgent, analysis_label, best_by_rec
 from backend.api.blocks import _fit_from_signal
 from backend.db.session import get_supabase
 from backend.repositories.datasets import BlockAnalysisRepository, DatasetTablesMissing
 from backend.repositories.funding import FundingRepository
 from backend.repositories.plans import PlanRepository, PlanRevisionRepository, PlanTableMissing, RevisionTableMissing
 from backend.repositories.recommendations import BlockRepository
-from backend.tools import zoning
 from backend.tools.pathways import build_plan, clean_step, clean_steps, load_templates, pathway_for
 from backend.tools.plan_graph import diff_steps, estimate, upgrade_steps
 
@@ -138,8 +138,7 @@ def _plan_response(db: Client, block: dict, rec: dict) -> dict:
 
     templates = load_templates(db)
     funding = _funding_for(db, block_id, rec["id"])
-    with ZoningAgent().scope(block_id, db) as (zoning_rows, tie):
-        finding = zoning.assess({**rec, "block_id": block_id}, zoning_rows, block)
+    finding, tie = ZoningAgent().finding_for(block_id, rec["id"], db)
     plan = build_plan(rec, funding, saved, templates, zoning=finding, block=block)
 
     draft = None
@@ -195,15 +194,11 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
 
     templates = load_templates(db)
     rows = []
-    with ZoningAgent().scope(block_id, db) as (zoning_rows, tie):
-        lookup = zoning.block_lookup(zoning_rows)
-        zoning_best_by_rec = {}
-        for rec in block.get("recommendations", []):
-            mapping = zoning.mapping_for(rec.get("rec_label"))
-            zoning_best_by_rec[rec.get("id")] = (
-                zoning.best_outcome([zoning.zone_finding(c, mapping) for c in lookup["zones"]])
-                if lookup and mapping else None
-            )
+    pinned, items = ZoningAgent().approved(block_id, db)
+    zoning_best_by_rec = best_by_rec(items)
+    tie = {"analysis": analysis_label(pinned) if items is not None else None,
+           "dataset_version": pinned.get("dataset_version") if items is not None else None,
+           "basis": "approved" if items is not None else "not_reviewed"}
     for rec in block.get("recommendations", []):
         pathway = pathway_for(rec.get("rec_label"), templates)
         plan = saved.get(rec.get("id")) or {}

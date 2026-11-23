@@ -5,6 +5,8 @@ import BlockMap from "./blocks/BlockMap.jsx";
 import BlockDetail from "./blocks/BlockDetail.jsx";
 import FundingWorkspace from "./blocks/FundingWorkspace.jsx";
 import useBlockFunding, { fundingStatus } from "./blocks/useBlockFunding.js";
+import useBlockZoning, { zoningStatus } from "./blocks/useBlockZoning.js";
+import ZoningWorkspace from "./blocks/ZoningWorkspace.jsx";
 import PathwaysView from "./pathways/PathwaysView.jsx";
 import PipelinesView from "./pipelines/PipelinesView.jsx";
 
@@ -27,23 +29,30 @@ function BlocksView() {
   const funding = useBlockFunding({
     onProfileComputed: (id, profile) => setProfiles((prev) => ({ ...prev, [id]: profile })),
   });
-  // The funding review takes the map's place in the middle; closing it brings the map back.
-  const [fundingOpen, setFundingOpen] = useState(false);
+  // Approving zoning changes the block's list (its zoning dots), which the funding hook loads.
+  const zoningReview = useBlockZoning({ onChanged: (id) => funding.refresh(id) });
+  // A review takes the map's place in the middle: null (the map), "funding" or "zoning".
+  const [workspace, setWorkspace] = useState(null);
 
   useEffect(() => {
-    setFundingOpen(false);
-    if (selectedId != null) funding.load(selectedId);
-  }, [selectedId, funding.load]);
+    setWorkspace(null);
+    if (selectedId != null) {
+      funding.load(selectedId);
+      zoningReview.refresh(selectedId);
+    }
+  }, [selectedId, funding.load, zoningReview.refresh]);
 
   useEffect(() => {
-    if (!fundingOpen) return;
-    const onKey = (e) => { if (e.key === "Escape") setFundingOpen(false); };
+    if (!workspace) return;
+    const onKey = (e) => { if (e.key === "Escape") setWorkspace(null); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fundingOpen]);
+  }, [workspace]);
 
   const selected = blocks.find((b) => b.id === selectedId) || null;
   const fs = funding.get(selectedId);
+  const zs = zoningReview.get(selectedId);
+  const chipCls = (key) => ({ none: "idle", running: "run", review: "prop", done: "ok" }[key]);
 
   if (loadError) {
     return (
@@ -93,29 +102,32 @@ function BlocksView() {
           <BlockDetail
             block={selected}
             s={fs}
-            onOpenFunding={() => setFundingOpen(true)}
+            zs={zs}
+            onOpenFunding={() => setWorkspace("funding")}
+            onOpenZoning={() => setWorkspace("zoning")}
             onRefresh={() => funding.refresh(selected.id)}
           />
         </div>
       )}
 
-      {selected && fundingOpen && (
+      {selected && workspace && (
         <div className={"panel workspace" + (panelOpen ? "" : " no-list")}>
           <div className="ws-tabs" role="tablist">
-            <button type="button" role="tab" aria-selected="false" onClick={() => setFundingOpen(false)}>Map</button>
-            <button type="button" role="tab" aria-selected="true">
+            <button type="button" role="tab" aria-selected="false" onClick={() => setWorkspace(null)}>Map</button>
+            <button type="button" role="tab" aria-selected={workspace === "funding"} onClick={() => setWorkspace("funding")}>
               Funding review{" "}
-              <span className={"status-chip " + { none: "idle", running: "run", review: "prop", done: "ok" }[fundingStatus(fs).key]}>
-                {fundingStatus(fs).text}
-              </span>
+              <span className={"status-chip " + chipCls(fundingStatus(fs).key)}>{fundingStatus(fs).text}</span>
+            </button>
+            <button type="button" role="tab" aria-selected={workspace === "zoning"} onClick={() => setWorkspace("zoning")}>
+              Zoning review{" "}
+              <span className={"status-chip " + chipCls(zoningStatus(zs).key)}>{zoningStatus(zs).text}</span>
             </button>
           </div>
-          <FundingWorkspace
-            block={selected}
-            s={fs}
-            actions={funding}
-            onClose={() => setFundingOpen(false)}
-          />
+          {workspace === "funding" ? (
+            <FundingWorkspace block={selected} s={fs} actions={funding} onClose={() => setWorkspace(null)} />
+          ) : (
+            <ZoningWorkspace block={selected} s={zs} actions={zoningReview} onClose={() => setWorkspace(null)} />
+          )}
         </div>
       )}
     </main>
