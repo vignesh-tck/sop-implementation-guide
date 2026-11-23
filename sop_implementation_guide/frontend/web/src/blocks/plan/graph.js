@@ -4,8 +4,9 @@
 // and the time estimate; this side only needs it for drawing.
 
 export const DIFF_FIELDS = [
-  ["title", "Task"], ["how", "How"], ["actor", "Who"], ["owner", "Owner"],
-  ["time", "Time"], ["after", "After"], ["condition", "Only if"],
+  ["title", "Activity"], ["how", "Description"], ["after", "Depends on"], ["condition", "Only if"],
+  ["actor", "Primary owner"], ["owner", "Primary owner, exactly"], ["secondary_owner", "Secondary owner"],
+  ["time", "Duration"],
 ];
 
 export const numbers = (steps) => Object.fromEntries(steps.map((s, i) => [s.id, i + 1]));

@@ -5,9 +5,8 @@ import { Cites, Outcome, References, SmeQuestions, ZoningFinding, zoningAnswer }
 import PlanCanvas from "./plan/PlanCanvas.jsx";
 import StepInspector from "./plan/StepInspector.jsx";
 import { ACTORS, ActorChip, ActorLegend } from "./plan/actors.jsx";
-import {
-  afterText, changeSummary, diffSteps, estimateText, marksFrom, nextId, numbers, topoOrder, wouldLoop,
-} from "./plan/graph.js";
+import { afterText, changeSummary, diffSteps, estimateText, marksFrom, numbers } from "./plan/graph.js";
+import { useStepEdits } from "./plan/useStepEdits.js";
 
 // The implementation plan for one recommendation: a flowchart of its steps
 // (who does each, how, how long, what it waits on), or the same steps as a
@@ -222,7 +221,6 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
   const [showing, setShowing] = useState(plan.draft ? "draft" : "approved");
   const [editing, setEditing] = useState(false);
   const [buf, setBuf] = useState([]);
-  const [selected, setSelected] = useState(null);
   const [name, setName] = useState(() => readPref(NAME_KEY, ""));
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -230,6 +228,8 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
   const [promoted, setPromoted] = useState(null);
   const [full, setFull] = useState(false);
   const [open, setOpen] = useState(new Set([1]));
+  const edits = useStepEdits(buf, setBuf, { onError: setError });
+  const { selected, setSelected } = edits;
 
   // A fresh plan (another recommendation, or a save) resets the view.
   useEffect(() => {
@@ -238,7 +238,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
     setError(null);
     setPromoted(null);
     setShowing(plan.draft ? "draft" : "approved");
-  }, [plan]);
+  }, [plan]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => writePref(VIEW_KEY, view), [view]);
   useEffect(() => writePref(NAME_KEY, name), [name]);
@@ -279,56 +279,6 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
     setError(null);
     setView("canvas");
     setEditing(true);
-  }
-
-  function patch(id, fields) {
-    setBuf((b) => {
-      const next = b.map((s) => (s.id === id ? { ...s, ...fields, edited: true } : s));
-      return "depends_on" in fields ? topoOrder(next) : next;
-    });
-  }
-
-  function addAfter(id) {
-    const i = id ? buf.findIndex((s) => s.id === id) : buf.length - 1;
-    const prev = buf[i];
-    const step = {
-      id: nextId(buf), title: "", how: "", actor: prev?.actor || "city", owner: "", time: "",
-      depends_on: prev ? [prev.id] : [], depends_mode: "all", filled_by: "template", edited: true,
-    };
-    const next = [...buf];
-    next.splice(i + 1, 0, step);
-    setBuf(next);
-    setSelected(step.id);
-  }
-
-  // A removed step's followers take over what it waited on, so the chain stays joined.
-  function removeStep(id) {
-    const s = buf.find((x) => x.id === id);
-    if (!window.confirm(`Remove step ${num[id]}${s?.title ? ` ("${s.title}")` : ""}? Steps after it will wait on what it waited on.`)) return;
-    setBuf((b) => topoOrder(b.filter((x) => x.id !== id).map((x) => {
-      if (!(x.depends_on || []).includes(id)) return x;
-      const deps = [...new Set([...(x.depends_on || []).filter((d) => d !== id), ...(s.depends_on || [])])];
-      return { ...x, depends_on: deps, edited: true };
-    })));
-    setSelected(null);
-  }
-
-  function connect(from, to) {
-    const target = buf.find((s) => s.id === to);
-    if (!target || (target.depends_on || []).includes(from)) return;
-    if (wouldLoop(buf, from, to)) {
-      setError(`Step ${num[from]} already waits on step ${num[to]}, so step ${num[to]} can't wait on it.`);
-      return;
-    }
-    setError(null);
-    patch(to, { depends_on: [...(target.depends_on || []), from] });
-  }
-
-  function disconnect(from, to) {
-    const target = buf.find((s) => s.id === to);
-    if (!target || !window.confirm(`Step ${num[to]} no longer waits on step ${num[from]}?`)) return;
-    const deps = (target.depends_on || []).filter((d) => d !== from);
-    patch(to, { depends_on: deps, ...(deps.length < 2 ? { depends_mode: "all" } : {}) });
   }
 
   // ── saving ──
@@ -406,9 +356,9 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
     <StepInspector
       s={selStep} n={selRemoved ? selStep.n : num[selStep.id]} steps={steps}
       mark={marks[selStep.id]} removed={selRemoved} editable={editing}
-      onChange={(fields) => patch(selStep.id, fields)}
-      onDelete={() => removeStep(selStep.id)}
-      onAddAfter={() => addAfter(selStep.id)}
+      onChange={(fields) => edits.patch(selStep.id, fields)}
+      onDelete={() => edits.remove(selStep.id)}
+      onAddAfter={() => edits.addAfter(selStep.id)}
       onSelect={setSelected}
       onClose={() => setSelected(null)}
     >
@@ -416,11 +366,12 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
     </StepInspector>
   );
 
+  // Full screen has room for the step beside the canvas; the panel, only over it.
   const canvas = (fill) => (
-    <div className={"plan-canvas-wrap" + (selStep ? " has-inspector" : "") + (editing ? " editing" : "")}>
+    <div className={"plan-canvas-wrap" + (selStep ? " has-inspector" : "") + (editing ? " editing" : "") + (fill ? " side" : "")}>
       <PlanCanvas
         steps={steps} marks={marks} removed={removed} selectedId={selected} onSelect={setSelected}
-        editable={editing} onConnect={connect} onDisconnect={disconnect} badge={badge} fill={fill}
+        editable={editing} onConnect={edits.connect} onDisconnect={edits.disconnect} badge={badge} fill={fill}
       />
       {inspector}
     </div>
@@ -430,7 +381,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
     <div className="plan-toolbar">
       <ActorLegend steps={steps} />
       <span className="spacer" />
-      {editing && <button type="button" className="pl-bar-btn" onClick={() => addAfter(selected)}>+ Step</button>}
+      {editing && <button type="button" className="pl-bar-btn" onClick={() => edits.addAfter(selected)}>+ Step</button>}
       {!editing && (
         <span className="seg" role="group" aria-label="Show the plan as">
           <button type="button" aria-pressed={view === "canvas"} onClick={() => setView("canvas")}>Canvas</button>
@@ -522,7 +473,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
                   <b>{rec.rec_label}</b><span className="kv"> · {plan.pathway.name}{draftView ? " · draft" : editing ? " · editing" : ""}</span>
                   <span className="spacer" />
                   <ActorLegend steps={steps} />
-                  {editing && <button type="button" className="pl-bar-btn" onClick={() => addAfter(selected)}>+ Step</button>}
+                  {editing && <button type="button" className="pl-bar-btn" onClick={() => edits.addAfter(selected)}>+ Step</button>}
                   <button type="button" className="pl-bar-btn" onClick={() => setFull(false)}>Exit full screen</button>
                 </div>
                 {canvas(true)}

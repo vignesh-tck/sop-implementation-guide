@@ -7,10 +7,11 @@ A step carries:
                 step never breaks another step's reference to it
   title         what has to happen
   how           how it is done, in a sentence or two
-  actor         who does it, as a kind: agent (this system: the zoning lookup or
-                the funding agent), city, builder (property owner, developer or
-                contractor), other (state, county, boards, anyone else)
-  owner         who exactly, in words ("Code enforcement", "MD SHA")
+  actor         the primary owner, as a kind: agent (this system: the zoning
+                lookup or the funding agent), city, builder (property owner,
+                developer or contractor), other (state, county, boards, anyone else)
+  owner         the primary owner exactly, in words ("Code enforcement", "MD SHA")
+  secondary_owner  who else answers for it, e.g. the SME who reviews an agent's output
   time          how long, in words ("1–3 mo", "Program deadline")
   depends_on    ids of the steps it waits on
   depends_mode  'all' (waits for every one) or 'any' (the first one done)
@@ -40,8 +41,9 @@ _LIVE_AGENT_SOURCES = ("zoning", "funding")
 
 # How a step's diff is described, field by field.
 DIFF_FIELDS = (
-    ("title", "Task"), ("how", "How"), ("actor", "Who"), ("owner", "Owner"),
-    ("time", "Time"), ("after", "After"), ("condition", "Only if"),
+    ("title", "Activity"), ("how", "Description"), ("after", "Depends on"), ("condition", "Only if"),
+    ("actor", "Primary owner"), ("owner", "Primary owner, exactly"), ("secondary_owner", "Secondary owner"),
+    ("time", "Duration"),
 )
 
 ACTOR_LABEL = {"agent": "Agent", "city": "City", "builder": "Builder", "other": "Other"}

@@ -7,7 +7,7 @@ import { ACTORS, ActorIcon, ClockIcon } from "./actors.jsx";
 import { numbers } from "./graph.js";
 
 // An implementation plan as a flowchart, top to bottom: one card per step
-// (who, what, how, how long), with a line from each step to the steps that
+// (primary owner, activity, description, duration, secondary owner), with a line from each step to the steps that
 // wait on it. A step that only happens in some cases hangs off a dashed,
 // labelled line ("Code violation"), so the branches of a plan read at a glance.
 //
@@ -53,7 +53,11 @@ function StepNode({ data }) {
       {s.how && <div className="pc-how">{s.how}</div>}
       <div className="pc-foot">
         <span className="pc-time"><ClockIcon />{s.time || "No set time"}</span>
-        {s.owner && <span className="pc-owner" title={s.owner}>{s.owner}</span>}
+        {(s.owner || s.secondary_owner) && (
+          <span className="pc-owner" title={[s.owner, s.secondary_owner && `Secondary: ${s.secondary_owner}`].filter(Boolean).join(" · ")}>
+            {s.owner}{s.secondary_owner && <span className="pc-second"> + {s.secondary_owner.replace(/ reviews.*$/i, "")}</span>}
+          </span>
+        )}
       </div>
       <Handle type="source" position={Position.Bottom} className="pc-handle" isConnectable={editable && !removed} />
     </div>

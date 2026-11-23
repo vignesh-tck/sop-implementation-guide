@@ -1514,10 +1514,29 @@ button.actor-chip.on { border-color: var(--actor); background: color-mix(in srgb
 .seg button[aria-pressed="true"] { background: var(--orange); color: #fff; }
 button.danger { color: var(--red); }
 
-.plan-canvas-wrap { position: relative; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); overflow: hidden; }
+/* The canvas and the step panel share one grid cell: the panel floats over the
+   canvas's right side and stays in view (sticky) while a tall plan scrolls.
+   .side puts the panel in a column of its own, where there is room. */
+.plan-canvas-wrap {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.plan-canvas-wrap > .pc-flow { grid-area: 1 / 1; border-radius: 8px; overflow: hidden; }
+.plan-canvas-wrap > .step-inspector { grid-area: 1 / 1; justify-self: end; position: sticky; top: .5rem; margin: .5rem; }
+.plan-canvas-wrap.side { grid-template-columns: minmax(0, 1fr) 23rem; }
+.plan-canvas-wrap.side > .step-inspector {
+  grid-area: 1 / 2; justify-self: stretch; width: auto; margin: .5rem .5rem .5rem 0; max-height: calc(100vh - 6rem);
+}
+@media (max-width: 900px) {
+  .plan-canvas-wrap.side { grid-template-columns: minmax(0, 1fr); }
+  .plan-canvas-wrap.side > .step-inspector { grid-area: 1 / 1; justify-self: end; width: min(21rem, calc(100% - 1rem)); margin: .5rem; }
+  .plan-canvas-wrap.side > .si-empty { display: none; }
+}
+.si-empty p { margin: .4rem 0; }
+.si-empty button { margin-top: .4rem; }
 .plan-canvas-wrap.editing { border-color: var(--orange); }
 .pc-flow { position: relative; width: 100%; min-height: 12rem; }
-.plan-canvas-wrap.has-inspector .pc-flow { min-height: 32rem; }
+.plan-canvas-wrap.has-inspector:not(.side) .pc-flow { min-height: 32rem; }
 .audit-body .pc-flow, .pathway-canvas .pc-flow { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-top: .5rem; overflow: hidden; }
 .plan-canvas-placeholder { padding: .75rem; border: 1px dashed var(--border); border-radius: 8px; }
 
@@ -1544,6 +1563,7 @@ button.danger { color: var(--red); }
 .pc-foot { display: flex; align-items: center; gap: .45rem; margin-top: auto; font-size: .7rem; color: var(--muted); min-width: 0; }
 .pc-time { display: inline-flex; align-items: center; gap: .2rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 58%; }
 .pc-owner { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pc-second { color: var(--orange); font-weight: 600; }
 .pc-flag {
   font-size: .6rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
   padding: .04rem .32rem; border-radius: 3px; border: 1px solid currentColor;
@@ -1562,7 +1582,7 @@ button.danger { color: var(--red); }
 .plan-canvas-wrap.editing .pc-edge:hover path.react-flow__edge-path { stroke: var(--red); }
 
 .step-inspector {
-  position: absolute; top: .5rem; right: .5rem; z-index: 5; width: min(21rem, calc(100% - 1rem)); max-height: calc(100% - 1rem);
+  z-index: 5; width: min(21rem, calc(100% - 1rem)); max-height: calc(100vh - 2rem);
   overflow: auto; box-sizing: border-box; padding: .6rem .75rem; font-size: .84rem;
   background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--actor); border-radius: 8px; box-shadow: var(--shadow);
 }
@@ -1582,7 +1602,19 @@ button.danger { color: var(--red); }
 .si-change ul, .audit-changes ul { margin: .25rem 0 0; padding-left: 1rem; }
 .step-inspector del, .audit-changes del { color: var(--red); }
 .step-inspector ins, .audit-changes ins { color: var(--teal); text-decoration: none; }
-.si-field { display: flex; flex-direction: column; gap: .2rem; margin-bottom: .55rem; font-size: .74rem; font-weight: 600; color: var(--muted); }
+.si-field { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .7rem; font-size: .74rem; font-weight: 600; color: var(--muted); }
+.si-label { display: flex; align-items: center; gap: .35rem; color: var(--text); font-size: .78rem; }
+.si-k {
+  display: inline-flex; align-items: center; justify-content: center; width: 1.05rem; height: 1.05rem; border-radius: 50%;
+  background: var(--orange); color: #fff; font-size: .62rem; font-weight: 700;
+}
+.si-hint { font-weight: 400; }
+.si-step { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.si-cond { margin-top: .3rem; }
+.si-advanced { margin: .2rem 0 .4rem; font-size: .78rem; }
+.si-advanced > summary { cursor: pointer; color: var(--muted); }
+.si-advanced select { margin-top: .35rem; width: 100%; font-size: .8rem; }
+.si-facts dd .actor-chip { margin-bottom: .15rem; }
 .si-field textarea, .si-field input { width: 100%; box-sizing: border-box; font-size: .84rem; font-weight: 400; color: var(--text); resize: vertical; }
 .si-row { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
 .si-deps { max-height: 10rem; overflow: auto; border: 1px solid var(--border); border-radius: 5px; padding: .25rem; background: var(--bg); }
@@ -1595,9 +1627,9 @@ button.danger { color: var(--red); }
 
 .plan-full { position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
 .plan-full-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .5rem .9rem; border-bottom: 1px solid var(--border); background: var(--surface); }
-.plan-full .plan-canvas-wrap { flex: 1; min-height: 0; border: none; border-radius: 0; }
-.plan-full .pc-flow { min-height: 0; }
-.plan-full .step-inspector { width: min(24rem, calc(100% - 1rem)); }
+.plan-full .plan-canvas-wrap { flex: 1; min-height: 0; border: none; border-radius: 0; grid-template-rows: minmax(0, 1fr); }
+.plan-full .pc-flow { min-height: 0; height: 100%; }
+.plan-full .plan-canvas-wrap > .step-inspector { max-height: calc(100% - 1rem); }
 
 .plan-step.removed { opacity: .6; border-style: dashed; }
 .plan-step.removed .ps-title { text-decoration: line-through; }

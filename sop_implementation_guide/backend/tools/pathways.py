@@ -51,8 +51,8 @@ TEMPLATES_PATH = Path(__file__).resolve().parent.parent / "data" / "pathways.jso
 
 # The step fields a reviewer can set. Anything else in a saved step (attached
 # funding, computed status) is derived on read and never stored.
-STEP_FIELDS = ("id", "title", "how", "actor", "owner", "time", "depends_on", "depends_mode",
-               "condition", "filled_by", "note", "edited")
+STEP_FIELDS = ("id", "title", "how", "actor", "owner", "secondary_owner", "time", "depends_on",
+               "depends_mode", "condition", "filled_by", "note", "edited")
 
 # A template step has no `edited` flag: it is what every plan starts from.
 TEMPLATE_STEP_FIELDS = tuple(f for f in STEP_FIELDS if f != "edited")
