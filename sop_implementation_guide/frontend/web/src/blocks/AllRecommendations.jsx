@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { num } from "../api.js";
+import { BAND } from "./FeasibilityView.jsx";
 import { estimateText } from "./plan/graph.js";
 
 // The block's recommendations, from GET /blocks/{id}/plans, ranked by predicted
@@ -57,6 +58,20 @@ function AskMenu({ rec, onAsk, onClose }) {
   );
 }
 
+// The recommendation's feasibility in its row: the approved score, or that one is being assessed or reviewed.
+function FeasibilityNote({ f }) {
+  if (!f) return null;
+  if (f.status === "running") return <> · <span className="assess">assessing feasibility…</span></>;
+  if (f.status === "in_review") return <> · <span className="edited-text">feasibility awaiting review</span></>;
+  if (f.score == null) return null;
+  const band = BAND[f.band] || {};
+  return (
+    <> · <span className={"feas-note " + (band.cls || "")} title={`${band.text || f.band}${f.stale ? " · its inputs changed since" : ""}`}>
+      feasibility {f.score}{f.stale ? "*" : ""}
+    </span></>
+  );
+}
+
 export default function AllRecommendations({ recommendations, onSelect, onAsk }) {
   const [menuFor, setMenuFor] = useState(null);
   const closeMenu = useCallback(() => setMenuFor(null), []);
@@ -97,6 +112,7 @@ export default function AllRecommendations({ recommendations, onSelect, onAsk })
                     {r.plan_status === "final" && <> · <span className="ok-text">plan approved</span></>}
                     {r.draft_pending && <> · <span className="edited-text" title={`Draft by ${r.draft_by}`}>draft waiting</span></>}
                     {estimateText(r.estimate) && <> · ~{estimateText(r.estimate)}</>}
+                    <FeasibilityNote f={r.feasibility} />
                   </span>
                 </span>
                 {r.predicted_score_increase != null && (

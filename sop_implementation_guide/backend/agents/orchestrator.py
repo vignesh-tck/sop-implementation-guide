@@ -16,6 +16,7 @@ from backend.agents.zoning import ZoningAgent
 from backend.agents.policy import PolicyAgent
 from backend.db.session import get_supabase
 from backend.repositories.datasets import BlockAnalysisRepository
+from backend.repositories.feasibility import FeasibilityRepository, FeasibilityTableMissing
 from backend.repositories.funding import FundingRepository
 from backend.repositories.gold import GoldRepository
 
@@ -103,11 +104,16 @@ class OrchestratorAgent:
         feasibility = gold_repo.compute_feasibility_score(
             funding_score, zoning_score, policy_score
         )
+        # Once the SME has approved a feasibility assessment of any recommendation,
+        # the block is as feasible as its best one; the formula is the fallback.
+        best = self._best_assessment(block_id, db)
+        if best:
+            feasibility = float(best["score"])
 
         top_actions = self._derive_actions(funding_signals)
         narrative = self._build_narrative(
             block_id, funding_signals, funding_score, feasibility,
-            zoning_score, zoning_detail, zoning_placeholder,
+            zoning_score, zoning_detail, zoning_placeholder, best,
         )
         tied = []
         if funding_analysis and funding_analysis.get("dataset_version") is not None:
@@ -132,8 +138,24 @@ class OrchestratorAgent:
             "funding_analysis_id": funding_analysis["id"] if funding_analysis else None,
             "zoning_analysis_id": (zoning_detail.get("analysis") or {}).get("id"),
         }
+        if best is not False:   # the feasibility table (and these columns) exist
+            profile.update({
+                "feasibility_basis": "assessed" if best else "formula",
+                "feasibility_rec_id": best["rec_id"] if best else None,
+                "feasibility_assessment_id": best["id"] if best else None,
+            })
 
         return gold_repo.upsert_profile(profile)
+
+    @staticmethod
+    def _best_assessment(block_id: int, db) -> dict | None | bool:
+        """The block's highest-scoring current (approved) feasibility assessment; None if none; False if no table."""
+        try:
+            rows = FeasibilityRepository(db).current_for_block(block_id)
+        except FeasibilityTableMissing:
+            return False
+        rows = [r for r in rows if r.get("score") is not None]
+        return max(rows, key=lambda r: r["score"]) if rows else None
 
     @staticmethod
     def _best_per_program(signals: list[dict]) -> list[dict]:
@@ -211,6 +233,7 @@ class OrchestratorAgent:
         zoning_score: float,
         zoning_detail: dict,
         zoning_placeholder: bool,
+        best: dict | None | bool = None,
     ) -> str:
         programs = self._best_per_program(signals)
         covered = {s.get("rec_label") for s in signals if s.get("rec_label")}
@@ -220,7 +243,12 @@ class OrchestratorAgent:
         ranked = sorted(signals, key=lambda s: s.get("relevance_score") or 0, reverse=True)
         top = ranked[0] if ranked else None
 
-        parts = [f"Block {block_id} has a feasibility score of {feasibility:.0f}/100."]
+        if best:
+            parts = [f"Block {block_id} has a feasibility score of {feasibility:.0f}/100: its best recommendation, "
+                     f"{best.get('rec_label')}, as assessed and approved by {best.get('approved_by') or 'the SME'}."]
+        else:
+            parts = [f"Block {block_id} has a feasibility score of {feasibility:.0f}/100, from the weighted funding, "
+                     "zoning and policy sub-scores (no recommendation's feasibility has been assessed and approved yet)."]
         if top:
             headline = f"{len(programs)} funding program(s) matched to "
             headline += f"{len(covered)} recommendation(s); strongest fit: "

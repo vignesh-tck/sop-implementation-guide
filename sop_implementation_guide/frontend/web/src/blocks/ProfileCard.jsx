@@ -9,6 +9,9 @@ export default function ProfileCard({ profile, title }) {
         <div>
           <div className="big">{num(profile.feasibility_score)}</div>
           <div className="kv">feasibility / 100</div>
+          <div className="kv">
+            {profile.feasibility_basis === "assessed" ? "its best approved recommendation" : "weighted sub-scores"}
+          </div>
         </div>
         <div className="kv">
           funding <b>{num(profile.funding_score)}</b>

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { money, num } from "../api.js";
+import { useEffect, useRef, useState } from "react";
+import { call, money, num } from "../api.js";
 import AllRecommendations, { rankRecs } from "./AllRecommendations.jsx";
 import AskPanel from "./assistant/AskPanel.jsx";
 import RecommendationView from "./RecommendationView.jsx";
@@ -50,11 +50,55 @@ function ZoningCard({ zs, onOpen }) {
   );
 }
 
+// Feasibility across the block: how many recommendations are assessed, the best score (the block's), and a
+// way to assess every recommendation that is ready. Runs go in the background; the list is re-read until done.
+function FeasibilityCard({ blockId, recs, onRefresh }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const list = (recs || []).map((r) => ({ ...r, f: r.feasibility || {} }));
+  const scored = list.filter((r) => r.f.score != null);
+  const best = scored.reduce((b, r) => (b == null || r.f.score > b.f.score ? r : b), null);
+  const running = list.filter((r) => r.f.status === "running").length;
+  const review = list.filter((r) => r.f.status === "in_review").length;
+  const ready = list.filter((r) => r.f.ready && r.f.score == null && !["running", "in_review"].includes(r.f.status)).length;
+
+  useEffect(() => {
+    if (!running) return undefined;
+    const t = setTimeout(onRefresh, 5000);
+    return () => clearTimeout(t);
+  }, [running, recs, onRefresh]);
+
+  if (!list.some((r) => r.f.ready || r.f.score != null || r.f.status)) return null;
+
+  async function assessAll() {
+    setBusy(true); setError(null);
+    try { await call("POST", `/blocks/${blockId}/feasibility`, {}); onRefresh(); }
+    catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+  const st = running ? { cls: "run", text: `Assessing ${running}` } : review ? { cls: "prop", text: `${review} awaiting review` }
+    : scored.length ? { cls: "ok", text: `${scored.length} assessed` } : { cls: "idle", text: "Not assessed" };
+  return (
+    <div className="funding-card feas-card">
+      <span className="fc-label">Feasibility</span>
+      <span className={"status-chip " + st.cls}>{st.text}</span>
+      {best && <span className="assess" title="The block's feasibility score is its best approved recommendation">
+        best {best.f.score} · {best.rec_label}</span>}
+      <span className="spacer" />
+      {ready > 0 && (
+        <button type="button" className="link fc-go" onClick={assessAll} disabled={busy || running > 0}>
+          {busy ? "Starting…" : `Assess ${ready} ready`} →
+        </button>
+      )}
+      {error && <div className="banner err" style={{ width: "100%", margin: ".4rem 0 0" }}>{error}</div>}
+    </div>
+  );
+}
+
 // The block page has two tabs: its details, and the assistant (AskPanel), which
 // `ask` carries the props for. selectedRecId (null = the block's front page) is
 // held a level up so an assistant answer can open a recommendation.
 export default function BlockDetail({
-  block, s, zs, onOpenFunding, onOpenZoning, onRefresh, selectedRecId, setSelectedRecId, tab, onTab, ask, onAskRec,
+  block, s, zs, onOpenFunding, onOpenZoning, onRefresh, onProfile, selectedRecId, setSelectedRecId, tab, onTab, ask, onAskRec,
 }) {
   // The panel scrolls as one; each move between list and recommendation starts at the top.
   const scrollRef = useRef(null);
@@ -116,6 +160,7 @@ export default function BlockDetail({
           onOpenFunding={onOpenFunding}
           onOpenZoning={onOpenZoning}
           onChanged={onRefresh}
+          onProfile={onProfile}
         />
       </section>
     );
@@ -126,6 +171,7 @@ export default function BlockDetail({
       {header}
       <FundingCard s={s} onOpen={onOpenFunding} />
       <ZoningCard zs={zs} onOpen={onOpenZoning} />
+      <FeasibilityCard blockId={block.id} recs={s.recs} onRefresh={onRefresh} />
       {s.loading && !s.recs && <div className="spin">Loading recommendations…</div>}
       <AllRecommendations recommendations={s.recs} onSelect={setSelectedRecId} onAsk={onAskRec} />
     </section>

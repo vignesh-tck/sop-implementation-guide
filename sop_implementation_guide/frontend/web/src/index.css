@@ -465,7 +465,8 @@ button.ghost { background: var(--surface); font-size: .8rem; color: var(--orange
 .rec-gain-big b { font-size: 1.2rem; color: var(--orange); font-variant-numeric: tabular-nums; }
 .rec-gain-big span { font-size: .7rem; color: var(--muted); }
 
-.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; margin: .8rem 0 .9rem; }
+/* Four tiles (zoning, funding, plan, feasibility) as two rows: one row of four is too narrow in the 520px panel. */
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; margin: .8rem 0 .9rem; }
 .tile {
   display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; text-align: left;
   padding: .5rem .6rem; border-radius: 6px; border: 1px solid transparent; font-weight: 400;
@@ -2109,3 +2110,46 @@ sup.cite a:hover { text-decoration: underline; }
   background: var(--surface); box-shadow: var(--shadow); font-size: .82rem;
 }
 @media (max-width: 1000px) { .map-answer-bar { left: 16px; right: 16px; bottom: 64px; } }
+
+/* Feasibility (blocks/FeasibilityView.jsx) */
+.feas-card { flex-wrap: wrap; }
+.feas-card button.link { background: none; border: none; padding: 0; }
+.feas-note.ok { color: var(--teal); }
+.feas-note.cond { color: var(--amber); }
+.feas-note.no { color: var(--red); }
+.feas-ready ul { list-style: none; margin: .3rem 0 .9rem; padding: 0; }
+.feas-ready li { display: flex; gap: .5rem; margin: .3rem 0; line-height: 1.4; }
+.feas-ready li.done > span:first-child { color: var(--teal); }
+.feas-ready li.todo > span:first-child { color: var(--muted); }
+.feas { margin-bottom: 1rem; }
+.feas p { margin: .3rem 0 .7rem; line-height: 1.45; }
+.feas-head { display: flex; gap: .9rem; align-items: center; margin: .2rem 0 .9rem; }
+.feas-score {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; flex: none;
+  width: 4.4rem; height: 4.4rem; border-radius: 50%; border: 3px solid var(--border); background: var(--surface-2);
+}
+.feas-score b { font-size: 1.5rem; line-height: 1; }
+.feas-score span { font-size: .66rem; color: var(--muted); }
+.feas-score.ok { border-color: var(--teal); color: var(--teal); }
+.feas-score.cond { border-color: var(--amber); color: var(--amber); }
+.feas-score.no { border-color: var(--red); color: var(--red); }
+.feas-band { font-weight: 700; font-size: .95rem; margin-bottom: .15rem; }
+.feas-band.ok { color: var(--teal); }
+.feas-band.cond { color: var(--amber); }
+.feas-band.no { color: var(--red); }
+.feas-money { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: .7rem .8rem; margin-bottom: .9rem; }
+.feas-money-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+.feas-money p { margin: .5rem 0 0; }
+.feas-bar { position: relative; height: .55rem; border-radius: 99px; background: var(--border); overflow: hidden; margin: .6rem 0 .2rem; }
+.feas-bar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; }
+.feas-bar .best { background: color-mix(in srgb, var(--teal) 40%, transparent); }
+.feas-bar .worst { background: var(--teal); }
+.feas-factors { list-style: none; margin: .3rem 0 .8rem; padding: 0; }
+.feas-factors li { display: flex; gap: .5rem; align-items: baseline; margin: .35rem 0; line-height: 1.4; }
+.feas-factors .status-chip { flex: none; min-width: 4.6rem; text-align: center; }
+.feas-list { margin: .2rem 0 .8rem; padding-left: 1.2rem; }
+.feas-list li { margin: .2rem 0; line-height: 1.4; }
+.feas-review { flex-direction: column; align-items: stretch; gap: .6rem; }
+.feas-review .plan-edit-row { margin-top: 0; }
+.feas-review .btn-row { margin-top: 0; }
+.feas-review .seg { align-self: flex-start; }

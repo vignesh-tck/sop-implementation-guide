@@ -803,3 +803,64 @@ $$;
 REVOKE ALL ON FUNCTION gp_publish(JSONB, BIGINT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gp_publish(JSONB, BIGINT) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION gp_publish(JSONB, BIGINT) TO service_role;
+
+
+-- =============================================================
+-- FEASIBILITY ASSESSMENTS  (added Nov 23 2026)
+--
+-- An LLM judgement, per (block, recommendation), of how likely the
+-- recommendation is to get done: whether the approved funding covers what it
+-- would cost, and how its zoning path, plan length and outside parties weigh.
+-- A recommendation is assessed only once its implementation plan is approved
+-- and the block has an approved funding analysis and an approved zoning run.
+--
+-- An assessment waits in_review until the SME accepts the score or sets
+-- another (with a note); only then does it become current. At most one is
+-- current per recommendation, and the block's gold feasibility_score is the
+-- best current one. `inputs` records the plan revision and the funding and
+-- zoning runs it read, so an assessment whose inputs have since changed shows
+-- as stale instead of quietly going out of date.
+--
+-- Run this section once in the Supabase SQL editor. It is safe to run again.
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS feasibility_assessments (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    block_id        BIGINT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+    rec_id          BIGINT NOT NULL REFERENCES block_recommendations(id) ON DELETE CASCADE,
+    rec_label       TEXT,
+    status          TEXT NOT NULL DEFAULT 'running'
+                    CHECK (status IN ('running', 'in_review', 'approved', 'failed', 'discarded')),
+    -- {plan_revision, funding_analysis_id, funding_version, zoning_analysis_id, zoning_version}
+    inputs          JSONB NOT NULL,
+    -- What the model read: {facts, references: [{id, label, url, detail}]}
+    evidence        JSONB,
+    -- The model's assessment: {score, headline, cost_estimate, factors, ...}
+    proposed        JSONB,
+    proposed_score  INT,
+    -- The score in force once approved: the proposed one, or the SME's.
+    score           INT CHECK (score BETWEEN 0 AND 100),
+    band            TEXT,
+    -- {action: accept | set, score, cost_low, cost_high, note, by, at}
+    decision        JSONB,
+    current         BOOLEAN NOT NULL DEFAULT FALSE,
+    model           TEXT,
+    error           TEXT,
+    created_by      TEXT,
+    approved_by     TEXT,
+    approved_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    completed_at    TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_feasibility_block ON feasibility_assessments(block_id, rec_id, created_at DESC);
+-- At most one current assessment per recommendation.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feasibility_current ON feasibility_assessments(block_id, rec_id) WHERE current;
+
+-- Where the gold feasibility_score came from: 'assessed' (the best current
+-- assessment, named here) or 'formula' (the weighted funding/zoning/policy mix,
+-- for a block with no approved assessment).
+ALTER TABLE block_implementation_profiles
+    ADD COLUMN IF NOT EXISTS feasibility_basis         TEXT,
+    ADD COLUMN IF NOT EXISTS feasibility_rec_id        BIGINT,
+    ADD COLUMN IF NOT EXISTS feasibility_assessment_id BIGINT;

@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from supabase import Client
 
+from backend.agents import feasibility
 from backend.agents.zoning import ZoningAgent, analysis_label, best_by_rec
 from backend.api.blocks import _fit_from_signal
 from backend.db.session import get_supabase
@@ -199,6 +200,10 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
     tie = {"analysis": analysis_label(pinned) if items is not None else None,
            "dataset_version": pinned.get("dataset_version") if items is not None else None,
            "basis": "approved" if items is not None else "not_reviewed"}
+    try:
+        feas = feasibility.summary_for_block(db, feasibility.context(db, block_id))
+    except Exception:  # noqa: BLE001 — the list must load even if feasibility cannot be read
+        feas = {}
     for rec in block.get("recommendations", []):
         pathway = pathway_for(rec.get("rec_label"), templates)
         plan = saved.get(rec.get("id")) or {}
@@ -225,6 +230,8 @@ def list_plans(block_id: int, db: Client = Depends(get_supabase)):
             # Best zoning outcome on the block (by_right / special_exception /
             # prohibited), or None when unmapped, unresolved or not looked up.
             "zoning_best": zoning_best,
+            # {score, band, status, stale, ready}: the approved feasibility score, if any, and whether it can be assessed.
+            "feasibility": feas.get(rec.get("id")),
         })
     return {"block_id": block_id, "storage_ready": storage_ready,
             "analyses": _analyses(db, block_id, tie), "recommendations": rows}

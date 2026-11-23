@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { call, money, num } from "../api.js";
 import { OUTCOME, References, ZoningFinding } from "../zoning/ZoningParts.jsx";
+import FeasibilityView, { FeasibilityTile, useFeasibility } from "./FeasibilityView.jsx";
 import PlanView, { FundingList } from "./PlanView.jsx";
 import PlanAudit from "./plan/PlanAudit.jsx";
 import { estimateText } from "./plan/graph.js";
@@ -16,6 +17,7 @@ const TABS = [
   ["audit", "Audit"],
   ["zoning", "Zoning"],
   ["funding", "Funding"],
+  ["feasibility", "Feasibility"],
   ["sources", "Sources"],
 ];
 
@@ -87,11 +89,13 @@ function AllSources({ plan }) {
 }
 
 export default function RecommendationView({
-  blockId, recId, refreshKey, position, total, onBack, onPrev, onNext, onChanged, onOpenFunding, onOpenZoning,
+  blockId, recId, refreshKey, position, total, onBack, onPrev, onNext, onChanged, onOpenFunding, onOpenZoning, onProfile,
 }) {
   const [plan, setPlan] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [tab, setTab] = useState("plan");
+  // Re-read when the plan is approved too: that can make the recommendation ready to assess.
+  const feas = useFeasibility(blockId, recId, `${refreshKey}-${plan?.revision ?? ""}`);
 
   useEffect(() => {
     setPlan(null);
@@ -150,6 +154,7 @@ export default function RecommendationView({
             <ZoningTile z={plan.zoning} onClick={() => setTab("zoning")} />
             <FundingTile funding={plan.funding} onClick={() => setTab("funding")} />
             <PlanTile plan={plan} onClick={() => setTab("plan")} />
+            <FeasibilityTile f={feas.data} onClick={() => setTab("feasibility")} />
           </div>
 
           <div className="rec-tabs" role="tablist">
@@ -202,6 +207,18 @@ export default function RecommendationView({
                 </p>
               )}
             </div>
+          )}
+
+          {tab === "feasibility" && (
+            <FeasibilityView
+              blockId={blockId}
+              recId={recId}
+              f={feas.data}
+              error={feas.error}
+              reload={feas.reload}
+              onOpenInput={(k) => (k === "plan" ? setTab("plan") : k === "funding" ? onOpenFunding?.() : onOpenZoning?.())}
+              onApproved={(profile) => { onProfile?.(profile); onChanged?.(); }}
+            />
           )}
 
           {tab === "sources" && (

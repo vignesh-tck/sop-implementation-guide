@@ -179,6 +179,7 @@ function BlocksView() {
             onOpenFunding={() => setWorkspace("funding")}
             onOpenZoning={() => setWorkspace("zoning")}
             onRefresh={() => funding.refresh(selected.id)}
+            onProfile={(p) => setProfiles((prev) => ({ ...prev, [selected.id]: p }))}
             selectedRecId={recId}
             setSelectedRecId={setRecId}
             tab={tab}
