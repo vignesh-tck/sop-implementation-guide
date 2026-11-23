@@ -153,7 +153,7 @@ export default function App() {
             Pipeline development
           </button>
           <button className="tab" aria-selected={view === "pathways"} onClick={() => setView("pathways")}>
-            Pathways
+            Playbooks
           </button>
         </nav>
         <div className="spacer" />

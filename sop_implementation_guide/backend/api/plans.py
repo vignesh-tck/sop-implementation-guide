@@ -162,7 +162,7 @@ def save_plan(block_id: int, rec_id: int, body: PlanUpdate, db: Client = Depends
     if not pathway:
         raise HTTPException(
             status_code=422,
-            detail=f"'{rec.get('rec_label')}' is not mapped to a pathway. Map it in the Pathways tab.",
+            detail=f"'{rec.get('rec_label')}' is not in a playbook, so it has no implementation plan. Add it to one in the Playbooks tab.",
         )
     reviewer = (body.reviewed_by or "").strip() or None
     if body.status == "final" and not reviewer:

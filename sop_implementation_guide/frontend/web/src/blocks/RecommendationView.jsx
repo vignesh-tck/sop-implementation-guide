@@ -10,7 +10,7 @@ import PlanView, { FundingList } from "./PlanView.jsx";
 // without going back.
 
 const TABS = [
-  ["plan", "Plan"],
+  ["plan", "Implementation plan"],
   ["zoning", "Zoning"],
   ["funding", "Funding"],
   ["sources", "Sources"],
@@ -51,7 +51,7 @@ function PlanTile({ plan, onClick }) {
   const cls = plan.status === "final" ? "ok" : plan.status === "draft" ? "edited" : "none";
   return (
     <button type="button" className={"tile " + cls} onClick={onClick}>
-      <span className="tile-k">Plan</span>
+      <span className="tile-k">Implementation plan</span>
       <span className="tile-v">{plan.template_version || "—"}</span>
       <span className="tile-s">{PLAN_STATUS[plan.status] || plan.status}{plan.reviewed_by ? ` · ${plan.reviewed_by}` : ""}</span>
     </button>
@@ -72,7 +72,7 @@ function AllSources({ plan }) {
   const refs = [...seen.values()].map((r) => ({
     ...r, detail: [r.detail, `step${r.steps.length > 1 ? "s" : ""} ${r.steps.join(", ")}`].filter(Boolean).join(" · "),
   }));
-  if (!refs.length) return <p className="assess">This plan cites no sources yet.</p>;
+  if (!refs.length) return <p className="assess">This implementation plan cites no sources yet.</p>;
   return <References refs={refs} />;
 }
 

@@ -402,7 +402,7 @@ CREATE INDEX IF NOT EXISTS idx_plans_block_id ON implementation_plans(block_id);
 -- ---------------------------------------------------------------
 -- PATHWAY TEMPLATES  (added Nov 2026)
 --
--- The pathway templates as edited in the app's Pathways tab. Every save is a
+-- The pathway templates as edited in the app's Playbooks tab. Every save is a
 -- new row; the highest version is the one in force, and older rows are the
 -- history a reviewer can restore from. With no rows (or no table), the app
 -- falls back to backend/data/pathways.json, which is version v0.

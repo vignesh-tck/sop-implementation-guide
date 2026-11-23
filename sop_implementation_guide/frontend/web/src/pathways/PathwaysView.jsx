@@ -55,8 +55,8 @@ export default function PathwaysView() {
     try { localStorage.setItem(REVIEWER_KEY, reviewer); } catch { /* per-viewer convenience only */ }
   }, [reviewer]);
 
-  if (loadError) return <main className="view"><div className="pathways-wrap"><div className="banner err">Could not load pathways — {loadError}</div></div></main>;
-  if (!data || !draft) return <main className="view"><div className="pathways-wrap"><div className="card spin">Loading pathways…</div></div></main>;
+  if (loadError) return <main className="view"><div className="pathways-wrap"><div className="banner err">Could not load playbooks — {loadError}</div></div></main>;
+  if (!data || !draft) return <main className="view"><div className="pathways-wrap"><div className="card spin">Loading playbooks…</div></div></main>;
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(editable(data));
   const pathway = draft.pathways.find((p) => p.key === selectedKey) || null;
@@ -113,7 +113,7 @@ export default function PathwaysView() {
 
   function removePathway() {
     const n = recsFor(selectedKey).length;
-    const msg = `Delete the "${pathway.name}" pathway?` + (n ? ` Its ${n} recommendation type(s) will become unmapped.` : "");
+    const msg = `Delete the "${pathway.name}" playbook?` + (n ? ` Its ${n} recommendation type(s) will become unmapped.` : "");
     if (!window.confirm(msg)) return;
     edit((d) => ({
       ...d,
@@ -140,7 +140,7 @@ export default function PathwaysView() {
 
   const save = () => run(
     () => call("PUT", "/pathways", { ...draft, updated_by: reviewer, note, base_version: data.version }),
-    "Saved. Plans nobody has saved yet now follow this version.",
+    "Saved. Implementation plans nobody has saved yet now follow this version.",
   );
 
   const restore = (v) => {
@@ -156,9 +156,9 @@ export default function PathwaysView() {
       <div className="pathways-wrap">
         <div className="pathways-top">
           <div>
-            <h3>Implementation pathways</h3>
+            <h3>Playbooks</h3>
             <div className="sub">
-              The templates every plan starts from. {data.version}
+              The templates every implementation plan starts from, one playbook per kind of recommendation. {data.version}
               {data.source === "app" ? `, saved by ${data.updated_by} on ${data.updated}` : ", from backend/data/pathways.json"}.
             </div>
           </div>
@@ -172,14 +172,14 @@ export default function PathwaysView() {
         )}
         {unmapped.length > 0 && (
           <div className="banner warn">
-            {unmapped.length} recommendation type(s) have no pathway, so they get no plan: {unmapped.join(", ")}.
-            Add them to a pathway below.
+            {unmapped.length} recommendation type(s) have no playbook, so they get no implementation plan: {unmapped.join(", ")}.
+            Add them to a playbook below.
           </div>
         )}
 
         <div className="pathways-grid">
           <aside className="card pathway-list">
-            <h4>Pathways</h4>
+            <h4>Playbooks</h4>
             <ul>
               {draft.pathways.map((p) => (
                 <li key={p.key} aria-selected={p.key === selectedKey} onClick={() => setSelectedKey(p.key)}>
@@ -189,7 +189,7 @@ export default function PathwaysView() {
               ))}
             </ul>
             <div className="pathway-new">
-              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New pathway name"
+              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New playbook name"
                 onKeyDown={(e) => e.key === "Enter" && addPathway()} />
               <button onClick={addPathway} disabled={!newName.trim()}>Add</button>
             </div>
@@ -212,10 +212,10 @@ export default function PathwaysView() {
 
           <div>
             {!pathway ? (
-              <div className="card empty">No pathway selected.</div>
+              <div className="card empty">No playbook selected.</div>
             ) : (
               <div className="card">
-                <h4>Pathway <code className="assess">{pathway.key}</code></h4>
+                <h4>Playbook <code className="assess">{pathway.key}</code></h4>
                 <div className="pathway-fields">
                   <label>Name<input value={pathway.name} onChange={(e) => changePathway("name", e.target.value)} /></label>
                   <label>Who does the work<input value={pathway.who} onChange={(e) => changePathway("who", e.target.value)} /></label>
@@ -264,17 +264,17 @@ export default function PathwaysView() {
                 <div className="btn-row">
                   <button onClick={() => changeSteps((st) => [...st, { ...NEW_STEP }])}>+ Add step</button>
                   <span className="spacer" />
-                  <button onClick={removePathway}>Delete pathway</button>
+                  <button onClick={removePathway}>Delete playbook</button>
                 </div>
 
-                <h4 className="recs-head">Recommendation types on this pathway</h4>
+                <h4 className="recs-head">Recommendation types in this playbook</h4>
                 <ul className="pathway-recs">
                   {recsFor(pathway.key).map((label) => (
                     <li key={label}>
                       <span>{label}</span>
-                      <select value={pathway.key} onChange={(e) => mapRec(label, e.target.value)} title="Move to another pathway">
+                      <select value={pathway.key} onChange={(e) => mapRec(label, e.target.value)} title="Move to another playbook">
                         {draft.pathways.map((p) => <option key={p.key} value={p.key}>{p.name || p.key}</option>)}
-                        <option value="">No pathway</option>
+                        <option value="">No playbook</option>
                       </select>
                     </li>
                   ))}
@@ -292,7 +292,7 @@ export default function PathwaysView() {
               <h4>Save</h4>
               <div className="plan-edit-row">
                 <label className="grow">
-                  Template status, shown on every plan
+                  Template status, shown on every implementation plan
                   <input value={draft.status} onChange={(e) => edit((d) => ({ ...d, status: e.target.value }))} />
                 </label>
               </div>

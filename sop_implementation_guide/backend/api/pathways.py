@@ -1,7 +1,7 @@
 """
 Pathway templates — the editable steps every implementation plan starts from.
 
-The Pathways tab reads and saves these. A save never overwrites: it adds a new
+The Playbooks tab reads and saves these. A save never overwrites: it adds a new
 version to pathway_templates, so a bad edit can be undone by restoring an older
 version (version 0 is backend/data/pathways.json). See backend/tools/pathways.py
 for how the templates in force are chosen.
@@ -125,7 +125,7 @@ def save_pathway_steps(key: str, body: StepsUpdate, db: Client = Depends(get_sup
     updated_by = _reviewer(body.updated_by)
     current = load_templates(db)
     if not any(p["key"] == key for p in current["pathways"]):
-        raise HTTPException(status_code=404, detail=f"No pathway '{key}'")
+        raise HTTPException(status_code=404, detail=f"No playbook '{key}'")
     pathways = [{**p, "steps": body.steps} if p["key"] == key else p for p in current["pathways"]]
     doc = {"status": current.get("status"), "pathways": pathways, "rec_types": current["rec_types"]}
     return _save(db, current, doc, updated_by, body.note)

@@ -253,7 +253,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
   if (!plan.pathway) {
     return (
       <div className="banner warn">
-        This recommendation type is not mapped to a pathway yet. Add it to one in the Pathways tab.
+        This recommendation type is not in a playbook yet, so it has no implementation plan. Add it to one in the Playbooks tab.
       </div>
     );
   }
@@ -313,11 +313,11 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
     }
   }
 
-  // A finalised plan's steps become the pathway's template, so the next block
+  // A finalised plan's steps become the playbook's template, so the next block
   // starts from what the SME settled on rather than the draft guess.
   async function promote() {
-    const msg = `Make these ${plan.steps.length} steps the template for every "${plan.pathway.name}" plan? ` +
-      "Plans already saved keep their own steps.";
+    const msg = `Make these ${plan.steps.length} steps the template for every "${plan.pathway.name}" implementation plan? ` +
+      "Implementation plans already saved keep their own steps.";
     if (!window.confirm(msg)) return;
     setSaveError(null);
     try {
@@ -336,7 +336,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
   return (
     <div className="plan">
       <div className="plan-who kv">
-        <b>{plan.pathway.name}</b> · {plan.pathway.who} · {plan.pathway.branch}
+        Playbook: <b>{plan.pathway.name}</b> · {plan.pathway.who} · {plan.pathway.branch}
       </div>
 
       {!plan.storage_ready && (
@@ -429,7 +429,7 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
           <div className="btn-row">
             <button onClick={() => save("draft")} disabled={saving || !plan.storage_ready}>Save draft</button>
             <button className="primary" onClick={() => save("final")} disabled={saving || !plan.storage_ready || !reviewer.trim()}>
-              {saving ? "Saving…" : "Finalize plan"}
+              {saving ? "Saving…" : "Finalize implementation plan"}
             </button>
             <button onClick={() => setEditing(false)} disabled={saving}>Cancel</button>
           </div>
@@ -437,11 +437,11 @@ export default function PlanView({ plan, blockId, recId, onSaved, onFunding }) {
       ) : (
         <div className="btn-row">
           <button className="primary" onClick={startEdit}>
-            {plan.status === "template" ? "Review and edit" : "Edit plan"}
+            {plan.status === "template" ? "Review and edit" : "Edit implementation plan"}
           </button>
           {plan.status === "final" && !promoted && (
-            <button onClick={promote} title="Every plan on this pathway that nobody has saved yet will start from these steps">
-              Use as pathway template
+            <button onClick={promote} title="Every implementation plan from this playbook that nobody has saved yet will start from these steps">
+              Use as playbook template
             </button>
           )}
           {plan.notes && <span className="kv">Notes: {plan.notes}</span>}

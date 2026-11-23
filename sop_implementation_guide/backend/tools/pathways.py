@@ -1,11 +1,14 @@
 """
 Implementation pathways — turn one recommendation into an ordered plan of steps.
 
+The app calls a pathway a "playbook" and the plan built from it an
+"implementation plan". The code, API routes and tables keep the name pathway.
+
 The 65 recommendation types collapse into six pathways (building and façade, land
 use, parks, traffic control, streetscape, road and curb), each a template of the
 steps a city follows to get that kind of change done. The templates are data, not
 Python branching. They start as backend/data/pathways.json (version v0) and are
-edited in the app's Pathways tab, which saves each edit as a new version in the
+edited in the app's Playbooks tab, which saves each edit as a new version in the
 pathway_templates table. The latest saved version wins, so the file serves as
 the seed and the fallback. A host's disk gets wiped on redeploy, so edits can't
 be written back to the file. Templates are read on every call, so an edit shows
@@ -128,14 +131,14 @@ def normalize_templates(doc: dict, sources: dict) -> tuple[dict, list[str]]:
     for i, p in enumerate(doc.get("pathways") or [], start=1):
         key = (p.get("key") or "").strip()
         name = (p.get("name") or "").strip()
-        label = name or key or f"pathway {i}"
+        label = name or key or f"playbook {i}"
         if not KEY_PATTERN.match(key):
             errors.append(f"'{label}': the key must be lowercase letters, digits and underscores.")
         elif key in seen:
-            errors.append(f"Two pathways share the key '{key}'.")
+            errors.append(f"Two playbooks share the key '{key}'.")
         seen.add(key)
         if not name:
-            errors.append(f"Pathway {i} ('{key}') needs a name.")
+            errors.append(f"Playbook {i} ('{key}') needs a name.")
         steps = [clean_template_step(s) for s in p.get("steps") or []]
         if not steps:
             errors.append(f"'{label}' has no steps.")
@@ -155,7 +158,7 @@ def normalize_templates(doc: dict, sources: dict) -> tuple[dict, list[str]]:
         if not label or not key:
             continue
         if key not in seen:
-            errors.append(f"'{label}' is mapped to '{key}', which is not a pathway.")
+            errors.append(f"'{label}' is mapped to '{key}', which is not a playbook.")
         rec_types[label] = key
 
     return {
@@ -177,7 +180,7 @@ def clean_step(step: dict) -> dict:
 def _template_ref(templates: dict) -> dict:
     by = f", last edited by {templates['updated_by']}" if templates.get("updated_by") else ""
     return {
-        "label": f"Pathway template {templates.get('version')}",
+        "label": f"Playbook template {templates.get('version')}",
         "url": None,
         "detail": (templates.get("status") or "Draft template") + by,
     }
