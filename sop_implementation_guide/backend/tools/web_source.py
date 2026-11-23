@@ -232,6 +232,26 @@ def check_excerpt(excerpt: Optional[str], sources: list[dict], min_len: int = 24
     return {"verified": False, "missing": best[1] if best else parts, "source_index": best[0] if best else None}
 
 
+def check_quote(quote: Optional[str], sources: list[dict]) -> dict:
+    """
+    Check a field's quote. Unlike a record's excerpt, it may be as short as a
+    heading or a table cell ("LIFE SCIENCES", "V. Life Processes:"), so a
+    quote too short for check_excerpt is looked for whole, as words rather
+    than inside a longer word.
+    """
+    res = check_excerpt(quote, sources, min_len=0)
+    if res.get("reason") != "too short":
+        return res
+    needle = _norm(quote).strip(" .;:,")
+    if not needle:
+        return res
+    pattern = re.compile(rf"(?<!\w){re.escape(needle)}(?!\w)")
+    for i, s in enumerate(sources):
+        if pattern.search(_norm(s.get("text") or "")):
+            return {"verified": True, "missing": [], "source_index": i}
+    return {"verified": False, "missing": [quote], "source_index": None}
+
+
 def search(query: str, max_results: int = 5) -> dict:
     """
     Optional research step: look for additional official sources.

@@ -699,16 +699,19 @@ def _evidence_schema(field_names: list[str]) -> dict:
 def _apply_evidence(rec: dict, f: dict, value: Any, quotes: list[str], doc: dict, step_id: str,
                     note: str | None, source_url: str | None = None) -> str | None:
     """Set a field with its quotes checked against `doc`. Returns a warning when it is unconfirmed."""
-    quote = " ".join(q for q in quotes if q) or None
-    check = web_source.check_excerpt(quote, [doc]) if quote else {"verified": False, "missing": []}
+    quotes = [q for q in quotes if q]
+    quote = " ".join(quotes) or None
+    # Each quote is checked on its own: joined, two headings could read as one sentence the source never wrote.
+    checks = [web_source.check_quote(q, [doc]) for q in quotes]
+    missing = [m for c in checks for m in c["missing"]]
     _set(rec, f["name"], value, "extracted", step_id, note,
-         quote=quote, verified=check["verified"], unmatched=check.get("missing") or None,
+         quote=quote, verified=bool(checks) and not missing, unmatched=missing or None,
          **({"source_url": source_url} if source_url else {}))
     if _blank(value):
         return None
     if not quote:
         return f"{rec['id']}.{f['name']}: no quote given"
-    return None if check["verified"] else f"{rec['id']}.{f['name']}: quote not found in the source"
+    return None if not missing else f"{rec['id']}.{f['name']}: quote not found in the source"
 
 
 # ── Extract only ─────────────────────────────────────────────────────────────
@@ -1126,7 +1129,7 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
                 value, warn = _normalise(f, raw)
                 if _blank(value) or value == old:
                     continue
-                if not web_source.check_excerpt(v.get("quote"), [doc])["verified"] or (
+                if not web_source.check_quote(v.get("quote"), [doc])["verified"] or (
                         only and not in_quote(f, value, v.get("quote"))):
                     discarded += 1
                     continue
@@ -1136,7 +1139,7 @@ def _research(step: dict, records: list[dict], fields: list[dict], cache: dict, 
                      quote=v.get("quote"), verified=True, source_url=page_url)
                 (replaced if not _blank(old) else filled).append(f["name"])
             for c in res.get("conflicts") or []:
-                if c.get("field") in by_name and web_source.check_excerpt(c.get("quote"), [doc])["verified"]:
+                if c.get("field") in by_name and web_source.check_quote(c.get("quote"), [doc])["verified"]:
                     r.setdefault("conflicts", []).append({**c, "url": page_url,
                                                           "current": r["values"].get(c["field"])})
                     conflicts_total += 1
