@@ -124,7 +124,7 @@ export default function BlockMap({ blocks, selectedId, profiles, onSelect }) {
             <GeoJSON
               key={"highlight:" + selectedId}
               data={selectedFeature}
-              style={{ color: "var(--orange)", weight: 6, opacity: 1, className: "block-highlight-pulse" }}
+              style={{ color: "var(--navy)", weight: 6, opacity: 1, className: "block-highlight-pulse" }}
               onEachFeature={(feature, layer) => {
                 layer.bindTooltip(feature.properties.street_name || `#${feature.properties.id}`, {
                   permanent: true,

@@ -1,37 +1,43 @@
-/* Palette ported from solution-architecture.html so the app and the architecture
-   doc read as one system, not a console bolted onto a separate design. */
+/* Palette and type from State of Place's own site (stateofplace.co): coral
+   accent, teal secondary, slate text on a light grey page, Metropolis. The
+   token names predate the rebrand — --orange is the primary accent (coral). */
 :root {
-  --bg: #F4F7FB;
+  --brand: #F27E66;      /* SoP coral, exact — header bar */
+  --bg: #F5F5F5;
   --surface: #FFFFFF;
-  --surface-2: #F0F4FA;
-  --border: #D2DCEB;
-  --text: #1A2B3C;
-  --muted: #5A7A96;
-  --faint: #8FA8BF;
-  --teal: #18B4A5;
-  --orange: #6055C9;     /* primary brand/CTA accent — "app layer" purple */
+  --surface-2: #F0F0EF;
+  --border: #DFE1E3;
+  --text: #3B4754;       /* SoP slate */
+  --muted: #6A7680;
+  --faint: #A0AAB2;
+  --teal: #5A9F90;       /* SoP teal #6AAB9D, a shade deeper so it reads as text */
+  --orange: #EC6F55;     /* primary accent: SoP coral, a shade deeper for text on white */
+  --navy: #3E5779;       /* SoP active-nav navy */
+  --blue: var(--navy);
   --gold: #C99318;
-  --silver: #5A88AD;
-  --amber: #C07A3A;
-  --red: #D1495B;
-  --shadow: 0 1px 3px rgba(20,40,70,.07), 0 4px 14px rgba(20,40,70,.05);
+  --silver: #5F7A9C;
+  --amber: #E8963A;      /* near SoP's light accent #F7B160 */
+  --red: #C93A4B;        /* kept clearly redder than the coral accent */
+  --shadow: 0 1px 3px rgba(59,71,84,.08), 0 4px 14px rgba(59,71,84,.06);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #090F1A;
-    --surface: #131F30;
-    --surface-2: #192A3E;
-    --border: #1F3248;
-    --text: #D8E8F4;
-    --muted: #6A90B0;
-    --faint: #3D5E7A;
-    --teal: #20C5B5;
-    --orange: #8B82E8;
+    --brand: #D9684F;
+    --bg: #1B2129;
+    --surface: #232B35;
+    --surface-2: #2B3440;
+    --border: #36414E;
+    --text: #E6E9EC;
+    --muted: #9AA6B1;
+    --faint: #5E6B78;
+    --teal: #7DBDAF;
+    --orange: #F48C76;
+    --navy: #8FA6C8;
     --gold: #DDA920;
-    --silver: #7AAED4;
-    --amber: #D4924A;
-    --red: #E27687;
+    --silver: #8FA6C8;
+    --amber: #F2AE62;
+    --red: #E46A78;
     --shadow: 0 1px 3px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
   }
 }
@@ -40,24 +46,26 @@
 html, body, #root { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
-  font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 14px/1.5 "Metropolis", -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 #root { display: flex; flex-direction: column; }
 
+/* Coral bar with white type, like the SoP site's header. */
 header {
   display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-  padding: .75rem 1.25rem; background: var(--surface);
-  border-bottom: 1px solid var(--border); box-shadow: var(--shadow);
+  padding: .75rem 1.25rem; background: var(--brand); color: #fff;
+  box-shadow: 0 2px 10px rgba(59,71,84,.18);
   position: sticky; top: 0; z-index: 10;
 }
 header h1 {
-  margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em;
+  margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; color: #fff;
 }
-header h1 span { color: var(--orange); }
+header h1 span { color: rgba(255,255,255,.75); }
 header .eyebrow {
-  font-size: .68rem; color: var(--muted); letter-spacing: .1em;
+  font-size: .68rem; color: rgba(255,255,255,.85); letter-spacing: .1em;
   text-transform: uppercase; display: block; margin-bottom: 2px;
 }
+header .meta { color: rgba(255,255,255,.75); font-size: .72rem; }
 .spacer { flex: 1; }
 label { color: var(--muted); font-size: .8rem; }
 input, textarea, button, select {
@@ -79,6 +87,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .tab:hover { background: var(--surface-2); color: var(--text); }
 .tab[aria-selected="true"] { color: var(--orange); background: color-mix(in srgb, var(--orange) 12%, transparent); }
+/* On the coral header: white tabs, the selected one a white pill (SoP's "Request a Demo" button). */
+header .tab { color: #fff; border-radius: 999px; padding: .35rem .95rem; font-size: .9rem; }
+header .tab:hover { background: rgba(255,255,255,.18); color: #fff; }
+header .tab[aria-selected="true"] { background: #F5F5F5; color: var(--brand); }
 
 main.view { display: block; }
 
@@ -99,10 +111,10 @@ main.view.map-view { position: relative; flex: 1; min-height: 0; overflow: hidde
 @keyframes block-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 .block-highlight-pulse { animation: block-pulse 1.3s ease-in-out infinite; }
 .leaflet-tooltip.block-label {
-  background: var(--orange); color: #fff; border: none; font-weight: 700;
+  background: var(--navy); color: #fff; border: none; font-weight: 700;
   font-size: .72rem; padding: .2rem .55rem; border-radius: 4px; box-shadow: var(--shadow);
 }
-.leaflet-tooltip.block-label::before { border-top-color: var(--orange); }
+.leaflet-tooltip.block-label::before { border-top-color: var(--navy); }
 
 .panel {
   position: absolute; top: 16px; bottom: 16px; z-index: 600;
@@ -751,8 +763,8 @@ main.view.pl-view {
 .pl-evidence blockquote { margin: .2rem 0 0; }
 
 /* Step review: correct, remove and add records before approving a step */
-.tag.manual { border-color: var(--blue, #5b5bd6); color: var(--blue, #5b5bd6); }
-.pl-cell.manual { background: color-mix(in srgb, var(--blue, #5b5bd6) 14%, transparent); }
+.tag.manual { border-color: var(--blue); color: var(--blue); }
+.pl-cell.manual { background: color-mix(in srgb, var(--blue) 14%, transparent); }
 .pl-review { margin-top: .6rem; padding-top: .6rem; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: .45rem; }
 .pl-review-bar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .pl-review-bar input[type="text"], .pl-review-bar > input { flex: 0 1 14rem; min-width: 0; }
@@ -762,7 +774,7 @@ main.view.pl-view {
 .pl-detail-sticky { position: sticky; left: 0; max-width: 44rem; display: flex; flex-direction: column; gap: .4rem; }
 .pl-editor { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .45rem .75rem; }
 .pl-editor label { display: flex; flex-direction: column; gap: .15rem; font-size: .8rem; }
-.pl-editor label.changed input, .pl-editor label.changed select, .pl-editor label.changed textarea { border-color: var(--blue, #5b5bd6); }
+.pl-editor label.changed input, .pl-editor label.changed select, .pl-editor label.changed textarea { border-color: var(--blue); }
 .pl-editor input, .pl-editor select, .pl-editor textarea { width: 100%; box-sizing: border-box; font: inherit; }
 .pl-editor .btn-row { grid-column: 1 / -1; margin-top: .2rem; }
 .pl-new { padding: .5rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); }
@@ -783,12 +795,12 @@ main.view.pl-view {
 .pl-prompt summary { cursor: pointer; font-size: .84rem; }
 .pl-prompt-text { white-space: pre-wrap; word-break: break-word; font-size: .76rem; line-height: 1.45; color: var(--muted);
   max-height: 22rem; overflow: auto; margin: .35rem 0 0; background: var(--surface-2); padding: .5rem; border-radius: 4px; }
-.pl-slot, .pl-slot-key { background: color-mix(in srgb, var(--blue, #5b5bd6) 16%, transparent); color: var(--text, inherit);
+.pl-slot, .pl-slot-key { background: color-mix(in srgb, var(--blue) 16%, transparent); color: var(--text, inherit);
   border-radius: 3px; padding: 0 .2rem; }
-.pl-slot { cursor: text; outline: 1px dashed var(--blue, #5b5bd6); }
+.pl-slot { cursor: text; outline: 1px dashed var(--blue); }
 .pl-slot.ref { cursor: default; outline: none; opacity: .8; }
 .pl-slot-edit { display: block; width: 100%; box-sizing: border-box; font: inherit; color: var(--text, inherit);
-  border: 2px solid var(--blue, #5b5bd6); border-radius: 4px; margin: .2rem 0; }
+  border: 2px solid var(--blue); border-radius: 4px; margin: .2rem 0; }
 .pl-prompt-fields { margin: .3rem 0; padding-left: 1.1rem; font-size: .8rem; }
 .pl-output-head { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: .3rem; }
 
@@ -868,7 +880,7 @@ main.view.pl-view {
   position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: .12rem; text-align: left;
   width: 10.25rem; padding: .45rem .6rem .5rem; border-radius: 8px; font-weight: 400; color: var(--text); font-size: 14px;
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--tone);
-  box-shadow: 0 1px 2px rgba(20,40,70,.06); cursor: pointer; transition: box-shadow .15s, border-color .15s;
+  box-shadow: 0 1px 2px rgba(59,71,84,.06); cursor: pointer; transition: box-shadow .15s, border-color .15s;
 }
 .pl-node:hover { box-shadow: 0 2px 10px color-mix(in srgb, var(--tone) 30%, transparent); }
 .pl-node.ok { --tone: var(--teal); }
@@ -892,7 +904,7 @@ main.view.pl-view {
 /* right-click menu */
 .pl-menu {
   position: absolute; z-index: 30; min-width: 12rem; max-width: 18rem; padding: .25rem;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(20,40,70,.18);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(59,71,84,.18);
 }
 .pl-menu button {
   display: flex; align-items: center; gap: .6rem; width: 100%; padding: .32rem .55rem; text-align: left;
@@ -908,7 +920,7 @@ main.view.pl-view {
 .pl-details {
   position: absolute; top: .5rem; right: .5rem; bottom: .5rem; z-index: 25; width: min(20rem, calc(100% - 1rem));
   display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(20,40,70,.18); font-size: .8rem;
+  box-shadow: 0 6px 24px rgba(59,71,84,.18); font-size: .8rem;
 }
 .pl-details-head { display: flex; align-items: center; padding: .45rem .7rem; border-bottom: 1px solid var(--border); }
 .pl-details-body { flex: 1; overflow: auto; padding: .5rem .7rem; }
@@ -929,7 +941,7 @@ main.view.pl-view {
 }
 .pl-modal {
   width: min(58rem, 100%); max-height: calc(100vh - 2rem); display: flex; flex-direction: column;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 40px rgba(20,40,70,.25);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 40px rgba(59,71,84,.25);
 }
 .pl-modal.narrow { width: min(30rem, 100%); }
 .pl-modal-head { display: flex; align-items: center; padding: .6rem .9rem; border-bottom: 1px solid var(--border); }
@@ -1154,10 +1166,10 @@ button.ws-chip.prop { background: color-mix(in srgb, var(--orange) 12%, var(--su
 /* Several outputs: one tab per output above the records and the review table. */
 .out-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 .6rem; }
 .out-tabs button { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .7rem; font-size: .82rem; border-radius: 999px; }
-.out-tabs button.on { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--accent, #6055C9); font-weight: 650; }
-.out-tabs .n { font-variant-numeric: tabular-nums; color: var(--muted, #6b7a8c); }
-.out-tabs .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--warn, #d9a03f); }
-.out-tabs .dot.ok { background: var(--ok, #18B4A5); }
+.out-tabs button.on { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--orange); font-weight: 650; }
+.out-tabs .n { font-variant-numeric: tabular-nums; color: var(--muted); }
+.out-tabs .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--amber); }
+.out-tabs .dot.ok { background: var(--teal); }
 .pl-trace-chip {
   position: absolute; top: .7rem; right: .7rem; z-index: 6; display: flex; align-items: center; gap: .4rem; font-size: .8rem;
   padding: .3rem .6rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
@@ -1175,7 +1187,7 @@ button.ws-chip.prop { background: color-mix(in srgb, var(--orange) 12%, var(--su
 .pl-node.trace, .pl-rownode.trace, .pl-group.trace { border-color: var(--teal); box-shadow: 0 0 0 2px color-mix(in srgb, var(--teal) 35%, transparent); }
 .pl-wire.prop path.react-flow__edge-path { stroke: var(--orange); stroke-dasharray: 5 4; }
 .pl-wire.lit path.react-flow__edge-path { stroke: var(--orange); stroke-width: 2.2; stroke-dasharray: none; }
-.pl-group { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 1px 2px rgba(20,40,70,.06); }
+.pl-group { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 1px 2px rgba(59,71,84,.06); }
 .pl-group-head { display: flex; align-items: center; gap: .4rem; height: 28px; padding: 0 .55rem; font-size: .8rem; border-bottom: 1px solid var(--border); }
 .pl-group-n { font-size: .68rem; color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, var(--surface)); border-radius: 999px; padding: 0 .4rem; }
 .pl-rownode {
@@ -1876,7 +1888,7 @@ button.ai, .canvas-tools .ai { color: var(--orange); border-color: color-mix(in 
 .pathway-new button { flex: 1; }
 .pathway-history li.current { color: var(--orange); }
 
-.np-backdrop { position: fixed; inset: 0; z-index: 2100; background: rgba(15, 25, 40, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.np-backdrop { position: fixed; inset: 0; z-index: 2100; background: rgba(40, 48, 58, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .np-dialog {
   width: min(64rem, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden;
   background: var(--surface); color: var(--text); border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.3);

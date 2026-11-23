@@ -169,7 +169,7 @@ export default function App() {
           </button>
         </nav>
         <div className="spacer" />
-        <span className="meta" style={{ color: "var(--faint)", fontSize: ".72rem" }}>{API_BASE}</span>
+        <span className="meta">{API_BASE}</span>
       </header>
 
       {view === "blocks" && <BlocksView />}

@@ -82,7 +82,7 @@ function stepStatus(s, out) {
 const STATUS_TEXT = { ok: "approved", pending: "needs approval", bad: "failed", idle: "not set" };
 const DRAFT_TEXT = { new: "new in the draft", changed: "changed in the draft", unchanged: "unchanged" };
 const PROP_TEXT = { new: "Proposed by agent", changed: "Proposed change", removed: "Proposed removal" };
-const TEAL = "#18B4A5", FAINT = "#8FA8BF";
+const TEAL = "#5A9F90", FAINT = "#A0AAB2", ACCENT = "#EC6F55";
 
 // ── Nodes ────────────────────────────────────────────────────────────────────
 
@@ -551,7 +551,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
       es.push({
         id: `${kind}:${source}>${target}`, source, target, data: { kind }, animated: busy, type: "smoothstep", pathOptions: WIRE_PATH,
         className: `pl-wire ${kind}${done ? " done" : ""}${lit ? " lit" : ""}`, deletable: false, reconnectable: false,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: lit ? "#6055C9" : done ? TEAL : FAINT }, ...extra,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: lit ? ACCENT : done ? TEAL : FAINT }, ...extra,
       });
     };
     const wired = { deletable: editable, reconnectable: editable };
@@ -584,7 +584,7 @@ function Flow({ view, sel, onSelect, act, disabled, onAddStep, onAddSource, onEd
         if (has.has(`${a}>${b}`) || inBox(a, b)) return;
         has.add(`${a}>${b}`);
         es.push({ id: `prop:${a}>${b}`, source: a, target: b, data: { kind: "prop" }, className: "pl-wire prop", deletable: false, type: "smoothstep", pathOptions: WIRE_PATH,
-                  reconnectable: false, selectable: false, markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#6055C9" } });
+                  reconnectable: false, selectable: false, markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: ACCENT } });
       };
       const allSrc = prop.allSources.map((x) => x.id);
       for (const x of prop.all) {
