@@ -39,14 +39,20 @@ class FetchError(RuntimeError):
     """The source could not be retrieved."""
 
 
-def fetch(url: str, timeout: float = 30.0, max_text: int = MAX_TEXT) -> dict:
+def is_csv(url: str, ctype: str) -> bool:
+    return "csv" in (ctype or "") or (url or "").lower().split("?")[0].endswith(".csv")
+
+
+def fetch(url: str, timeout: float = 30.0, max_text: int = MAX_TEXT, csv_max_text: int | None = None) -> dict:
     """
     Retrieve one source.
 
     Returns {url, final_url, status, content_type, text, truncated, fetched_at,
     links}. links are the page's outgoing links as [{text, url}] (anchors for
     HTML, URLs printed in the text for PDFs and plain text), so a research step
-    can follow a programme to its own page.
+    can follow a programme to its own page. csv_max_text, when given, is the
+    limit for a CSV instead of max_text: a table is read row by row, not as one
+    passage, so it can be far longer.
     Raises FetchError on transport failure or a non-200 status — a source the user
     pasted that cannot be read is something they need told about, not a silent skip.
     """
@@ -62,6 +68,8 @@ def fetch(url: str, timeout: float = 30.0, max_text: int = MAX_TEXT) -> dict:
         raise FetchError(f"{url} returned HTTP {resp.status_code}")
 
     ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if csv_max_text and is_csv(url, ctype):
+        max_text = csv_max_text
     limit = max(max_text, MAX_TEXT) * 2
     text, links = _to_text(resp, ctype, url, limit)
     truncated = len(text) > max_text

@@ -54,6 +54,7 @@ export default function SourceReader({ pipelineId, source, meta }) {
       <div className="assess pl-reader-meta">
         {(data?.final_url || source.url) && <a href={data?.final_url || source.url} target="_blank" rel="noreferrer">{data?.final_url || source.url}</a>}
         {data && <span>{data.content_type || "text"} · {data.chars.toLocaleString()} chars{data.truncated ? " (truncated: only this much is read)" : ""}
+          {data.shown_chars < data.chars ? ` · the first ${data.shown_chars.toLocaleString()} shown here; runs read it all` : ""}
           {data.fetched_at ? ` · downloaded ${data.fetched_at.slice(0, 16).replace("T", " ")}; runs read this copy` : ""}</span>}
       </div>
       {meta?.error ? <div className="banner err">{meta.error}</div>

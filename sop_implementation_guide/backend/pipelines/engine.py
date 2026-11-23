@@ -56,6 +56,7 @@ SOURCE_CHARS = 12_000        # per extraction call: a long source is read in chu
 MODEL = "claude-opus-5-5"
 EFFORT = "medium"
 FETCH_CHARS = 60_000         # how much of one source is fetched (5 chunks at most)
+CSV_CHARS = 16_000_000       # a CSV is read row by row, so it is fetched whole (uploads stop at 15 MB)
 PREVIEW_RECORDS = 300        # records kept per step output in state; a step can be reviewed only if all fit
 
 
@@ -389,10 +390,10 @@ def fetch_source(src: dict, fresh: bool = False) -> dict:
     """
     key = _source_key(src)
     if not fresh:
-        if key in _SOURCE_CACHE:
+        if key in _SOURCE_CACHE and not _short_csv(_SOURCE_CACHE[key], src):
             return _SOURCE_CACHE[key]
         saved = source_store.load(key)
-        if saved:
+        if saved and not _short_csv(saved, src):
             _SOURCE_CACHE[key] = saved
             return saved
     try:
@@ -404,12 +405,17 @@ def fetch_source(src: dict, fresh: bool = False) -> dict:
         elif src["kind"] in SOURCE_KINDS:
             fetched = SOURCE_KINDS[src["kind"]](src)
         else:
-            fetched = web_source.fetch(src["url"], max_text=FETCH_CHARS)
+            fetched = web_source.fetch(src["url"], max_text=FETCH_CHARS, csv_max_text=CSV_CHARS)
     except Exception as e:  # noqa: BLE001 — every failure is reported to the user
         raise PipelineError(f"Could not read {src.get('label') or src.get('url') or src.get('query')}: {e}") from e
     _SOURCE_CACHE[key] = fetched
     source_store.save(key, fetched)
     return fetched
+
+
+def _short_csv(doc: dict, src: dict) -> bool:
+    """A CSV copy cut off at the page limit (saved before CSVs were fetched whole), so it is downloaded again."""
+    return bool(doc.get("truncated")) and is_csv(doc, src) and len(doc.get("text") or "") <= FETCH_CHARS
 
 
 def source_links(doc: dict) -> list[dict]:
@@ -440,8 +446,48 @@ TABLE_ROWS = 20_000          # rows read from one CSV source
 
 
 def is_csv(doc: dict, src: dict | None = None) -> bool:
-    url = ((src or {}).get("url") or doc.get("final_url") or "").lower().split("?")[0]
-    return "csv" in (doc.get("content_type") or "") or url.endswith(".csv")
+    return web_source.is_csv((src or {}).get("url") or doc.get("final_url") or "", doc.get("content_type") or "")
+
+
+def csv_rows(text: str) -> list[str]:
+    """A CSV's rows as written, each a header or data row; a quoted cell may hold line breaks."""
+    rows, cur, quotes = [], [], 0
+    for line in text.splitlines(keepends=True):
+        cur.append(line)
+        quotes += line.count('"')
+        if quotes % 2 == 0:     # an even count of quotes: the row's quoted cells are all closed
+            row = "".join(cur).rstrip("\r\n")
+            if row.strip(" ,\t"):
+                rows.append(row)
+            cur, quotes = [], 0
+    if cur and "".join(cur).strip():
+        rows.append("".join(cur).rstrip("\r\n"))
+    return rows
+
+
+def csv_parts(text: str, size: int = SOURCE_CHARS) -> tuple[list[tuple[str, int, int]], int]:
+    """
+    A CSV split for Extract: whole rows, each part starting with the header
+    row so the model always knows which column is which. Returns
+    ([(text, first row, last row)], rows dropped past TABLE_ROWS); rows count
+    from 1 after the header.
+    """
+    rows = csv_rows(text)
+    if not rows:
+        return [], 0
+    header, body = rows[0], rows[1:]
+    dropped = max(0, len(body) - TABLE_ROWS)
+    body = body[:TABLE_ROWS]
+    parts, cur, cur_len, first = [], [], len(header), 1
+    for n, row in enumerate(body, 1):
+        if cur and cur_len + len(row) + 1 > size:
+            parts.append(("\n".join([header, *cur]), first, n - 1))
+            cur, cur_len, first = [], len(header), n
+        cur.append(row)
+        cur_len += len(row) + 1
+    if cur or not parts:
+        parts.append(("\n".join([header, *cur]), first, first + len(cur) - 1))
+    return parts, dropped
 
 
 def _column_names(header: list[str]) -> list[str]:
@@ -462,7 +508,7 @@ def source_table(doc: dict) -> tuple[dict[str, str], list[tuple], list[str]]:
     notes = []
     if doc.get("truncated"):
         text = text[:text.rfind("\n")] if "\n" in text else ""   # the last row may be cut off
-        notes.append(f"only its first {FETCH_CHARS:,} characters were fetched, so later rows are missing")
+        notes.append(f"only its first {len(text):,} characters were fetched, so later rows are missing")
     try:
         rows = [r for r in csv.reader(io.StringIO(text)) if any(c.strip() for c in r)]
     except csv.Error as e:
@@ -793,7 +839,15 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
         if src["id"] not in ids or src["id"] not in fetched:
             continue
         doc = fetched[src["id"]]
-        parts = _chunks(doc.get("text") or "")
+        table = is_csv(doc, src)
+        if table:
+            # Whole rows under the header, so every part reads as a table; read past FETCH_CHARS, up to TABLE_ROWS.
+            cuts, dropped = csv_parts(doc.get("text") or "")
+            parts = [c[0] for c in cuts]
+            where = [f" (rows {a:,}-{b:,} of the CSV; the first line is its header row)" for _t, a, b in cuts]
+        else:
+            parts, dropped = _chunks(doc.get("text") or ""), 0
+            where = [f" (part {i + 1} of {len(parts)})" if len(parts) > 1 else "" for i in range(len(parts))]
         keys = []
         for i, text in enumerate(parts):
             key = _hash(["extract-only" if only else "extract2", MODEL, step["config"].get("instructions"), readable,
@@ -804,9 +858,9 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
                     context=context or "(none given)",
                     instructions=step["config"].get("instructions") or "(no special instructions)",
                     url=doc.get("final_url") or src.get("url"),
-                    part=f" (part {i + 1} of {len(parts)})" if len(parts) > 1 else "",
+                    part=where[i],
                     text=text)
-        plan.append((src, doc, parts, keys))
+        plan.append((src, doc, parts, keys, table, dropped))
     if jobs:
         say(f"Extracting {len(jobs)} part(s), {min(len(jobs), PARALLEL)} at a time")
         results = _parallel(lambda prompt: structured_call(prompt, schema, max_tokens=32000, model=MODEL,
@@ -817,16 +871,19 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
         failed = [r for r in results if isinstance(r, Exception)]
         if failed:
             raise failed[0]   # the parts that succeeded stay cached for the next preview
-    for src, doc, parts, keys in plan:
-        raws = [x for key in keys for x in cache[key]]
+    for src, doc, parts, keys, table, dropped in plan:
+        # A CSV record is checked against its own part: the rows it was read from, under the header.
+        raws = [(({"text": text} if table else doc), x) for text, key in zip(parts, keys) for x in cache[key]]
         label = src.get("label") or src["id"]
-        if len(parts) > 1:
+        if len(parts) > 1 and not table:
             warnings.append(f"{label}: read in {len(parts)} parts; an item split across parts may appear twice "
                             "(add a dedupe step).")
         if doc.get("truncated"):
-            warnings.append(f"{label}: longer than {FETCH_CHARS:,} characters; the rest was not read.")
-        for n, raw in enumerate(raws, 1):
-            check = web_source.check_excerpt(raw.get("source_excerpt"), [doc])
+            warnings.append(f"{label}: longer than {len(doc.get('text') or ''):,} characters; the rest was not read.")
+        if dropped:
+            warnings.append(f"{label}: only its first {TABLE_ROWS:,} rows were read; {dropped:,} more were not.")
+        for n, (seen, raw) in enumerate(raws, 1):
+            check = web_source.check_excerpt(raw.get("source_excerpt"), [seen])
             rec = {"id": f"{src['id']}-{n}", "values": {}, "prov": {},
                    "source_id": src["id"], "source_url": doc.get("final_url") or src.get("url"),
                    "excerpt": raw.get("source_excerpt"), "confidence": raw.get("confidence"),
@@ -841,7 +898,7 @@ def _extract(step: dict, sources: list[dict], fetched: dict[str, dict], fields: 
                     _set(rec, f["name"], None, "extracted", step["id"])
                     continue
                 value, warn = _normalise(f, raw.get(f["name"]))
-                w = _apply_evidence(rec, f, value, quotes.get(f["name"], []), doc, step["id"], warn)
+                w = _apply_evidence(rec, f, value, quotes.get(f["name"], []), seen, step["id"], warn)
                 if only and not _blank(value):
                     p = rec["prov"].get(f["name"]) or {}
                     why = ("no quote given" if not p.get("quote") else "its quote is not in the source" if not p.get("verified")

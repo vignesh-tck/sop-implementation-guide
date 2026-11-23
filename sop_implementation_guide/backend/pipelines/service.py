@@ -669,8 +669,13 @@ def source_text(db: Client, pipeline_id: int, source_id: str) -> dict:
     if not src:
         raise LookupError(f"No source {source_id}.")
     fetched = engine.fetch_source(src)   # its saved copy; never downloaded again here
-    return {**src, **engine.source_meta(fetched), "preview": None, "text": fetched.get("text") or "",
-            "links": engine.source_links(fetched)}
+    text = fetched.get("text") or ""
+    # A CSV is fetched whole and can run to megabytes: the reader shows its start.
+    return {**src, **engine.source_meta(fetched), "preview": None, "text": text[:READER_CHARS],
+            "shown_chars": min(len(text), READER_CHARS), "links": engine.source_links(fetched)}
+
+
+READER_CHARS = 300_000
 
 
 def finalize_sources(db: Client, pipeline_id: int) -> dict:
